@@ -1,0 +1,20 @@
+{
+  "name": "picturebook-local",
+  "interface": {
+    "displayName": "Picturebook Local"
+  },
+  "plugins": [
+    {
+      "name": "picturebook-screenwriter",
+      "source": {
+        "source": "local",
+        "path": "./plugins/picturebook-screenwriter"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

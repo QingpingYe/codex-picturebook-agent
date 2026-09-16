@@ -1,0 +1,33 @@
+{
+  "name": "picturebook-screenwriter",
+  "version": "0.1.0",
+  "description": "Picture book screenwriting workshop for Codex: role-switched editorial workflow, text craft methodology, craft benchmark checks, and staging planning.",
+  "author": {
+    "name": "YeQingping"
+  },
+  "repository": "https://github.com/QingpingYe/codex-picturebook-agent.git",
+  "keywords": [
+    "picture book",
+    "screenwriting",
+    "children books",
+    "creative writing"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Picture Book Screenwriter",
+    "shortDescription": "绘本编剧工坊最小版",
+    "longDescription": "A compact Codex adaptation of the picture book screenwriting workshop. It preserves the editorial workflow, text craft methodology, benchmark checks, and staging planning while deferring Feishu sync, image generation, and multi-agent execution.",
+    "developerName": "YeQingping",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "帮我从零开始策划一个绘本故事",
+      "检查这份绘本脚本的工艺指标",
+      "为逐页脚本规划分镜站位"
+    ],
+    "brandColor": "#3B82F6"
+  }
+}
