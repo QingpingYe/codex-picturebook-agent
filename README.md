@@ -1,13 +1,18 @@
 # Picture Book Screenwriter for Codex
 
-A minimal Codex plugin for picture-book screenwriting. It packages an editorial
-workflow with text-craft guidance, craft benchmark checks, and staging planning.
+A minimal Codex plugin for picture-book screenwriting.
 
-This repository contains only the Codex plugin and its local marketplace
-manifest. It does not contain WorkBuddy runtime files, Feishu integration
-configuration, credentials, or generated assets.
+This repository is the active home for the Codex plugin. It packages:
 
-## Add the marketplace
+- Editorial workflow
+- Text craft methodology
+- Craft benchmark checks
+- Staging planner
+
+The original WorkBuddy expert files are kept locally as a reference archive and
+are not part of this repository.
+
+## Add the plugin
 
 In the ChatGPT desktop app plugin marketplace, add:
 
@@ -15,8 +20,7 @@ In the ChatGPT desktop app plugin marketplace, add:
 https://github.com/QingpingYe/codex-picturebook-agent.git
 ```
 
-Use `main` as the Git ref. Leave the sparse path empty if the repository is
-shown as a marketplace source and it is small enough to clone fully.
+Use `main` as the Git ref. For a small repository, leave the sparse path empty.
 
 From Codex CLI, you can also run:
 
@@ -35,10 +39,18 @@ Start a new Codex chat and try:
 
 The plugin supports:
 
-- Editorial workflow: intent routing, briefing gate, role switching, confirmation gate.
-- Text craft: picture-book writing methodology and baselines.
-- Craft benchmark check: quantified self-review of page text.
-- Staging planner: spatial planning for page-by-page storyboards.
+- Intent routing, briefing gate, role switching, confirmation gate
+- Picture-book text craft methodology and baselines
+- Quantified self-review of page text
+- Spatial planning for page-by-page storyboards
+
+## Local development
+
+The WorkBuddy source material is available at:
+
+```text
+E:\picturebook-screenwriter\workbuddy-expert
+```
 
 ## Verify locally
 
