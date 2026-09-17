@@ -115,7 +115,7 @@ class PublisherTests(unittest.TestCase):
         self.cli.docs[entry().doc_token] = dict(current)
         self.cli.update_error = RevisionConflict("changed")
         with self.assertRaises(RevisionConflict):
-            self.publisher.conditional_update(entry(), current, {"source": "r2"})
+            self.publisher.conditional_update(entry(), current, page("# 新规则"), {"source": "r2"})
         self.assertEqual(self.cli.docs["doc-worldview"]["content"], page("# 人工规则"))
 
     def test_partial_success_requires_review_and_does_not_mark_published(self):
@@ -123,14 +123,20 @@ class PublisherTests(unittest.TestCase):
         self.cli.docs[entry().doc_token] = dict(current)
         self.cli.update_result = {"code": 0, "data": {"result": "partial_success", "document": {"revision_id": 2}}, "warnings": ["partial"]}
         with self.assertRaises(NeedsReview):
-            self.publisher.conditional_update(entry(), current, {"source": "r2"})
+            self.publisher.conditional_update(entry(), current, page("# 新规则"), {"source": "r2"})
+
+    def test_conditional_update_writes_merged_page_not_current_page(self):
+        current = {"revision_id": 1, "content": page("# 人工规则")}
+        self.cli.docs[entry().doc_token] = dict(current)
+        self.publisher.conditional_update(entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"})
+        self.assertEqual(self.cli.docs[entry().doc_token]["content"], page("# 人工规则\n\n新资料"))
 
     def test_resource_bearing_page_requires_review(self):
         current = page("# 正文\n\n[资源](https://example.test/a)")
         self.cli.docs[entry().doc_token] = {"revision_id": 1, "content": current}
         current_document = {"revision_id": 1, "content": current}
         with self.assertRaises(NeedsReview):
-            self.publisher.conditional_update(entry(), current_document, {"source": "r2"})
+            self.publisher.conditional_update(entry(), current_document, page("# 新规则"), {"source": "r2"})
 
 
 if __name__ == "__main__":

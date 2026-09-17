@@ -66,6 +66,7 @@ class Publisher:
         self,
         entry: IndexEntry,
         current: Mapping[str, Any],
+        merged_markdown: str,
         source_revisions: Mapping[str, str],
     ) -> IndexEntry:
         content = current.get("content", "")
@@ -76,7 +77,7 @@ class Publisher:
             raise NeedsReview("document contains resources or comments and must be reviewed")
 
         revision = int(current["revision_id"])
-        result = self.cli.update_doc(entry.doc_token, revision, content)
+        result = self.cli.update_doc(entry.doc_token, revision, merged_markdown)
         if result.get("warnings") or result.get("data", {}).get("result") == "partial_success":
             raise NeedsReview("partial or warned update")
 
