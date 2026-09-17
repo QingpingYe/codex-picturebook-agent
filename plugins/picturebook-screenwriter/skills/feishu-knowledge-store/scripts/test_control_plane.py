@@ -101,12 +101,24 @@ class ControlPlaneTests(unittest.TestCase):
         plane = ControlPlane(FakeCli(), control_tokens())
         pages = [
             {"doc_token": "doc-a", "wiki_node_token": "node-a", "revision_id": 2,
-             "metadata": {"key": "s/p/worldview", "source_node_tokens": ["source"], "last_ai_revision_id": 1}},
+             "metadata": {"key": "s/p/worldview", "source_node_tokens": ["source"],
+                          "source_revisions": {"source": "r1"}, "last_ai_revision_id": 1}},
             {"doc_token": "doc-b", "wiki_node_token": "node-b", "revision_id": 2,
-             "metadata": {"key": "s/p/worldview", "source_node_tokens": ["source"], "last_ai_revision_id": 1}},
+             "metadata": {"key": "s/p/worldview", "source_node_tokens": ["source"],
+                          "source_revisions": {"source": "r1"}, "last_ai_revision_id": 1}},
         ]
         with self.assertRaisesRegex(ControlPlaneCorrupt, "duplicate"):
             plane.rebuild_index(pages)
+
+    def test_rebuild_restores_source_revisions_from_page_metadata(self):
+        plane = ControlPlane(FakeCli(), control_tokens())
+        pages = [{
+            "doc_token": "doc-a", "wiki_node_token": "node-a", "revision_id": 2,
+            "metadata": {"key": "s/p/worldview", "source_node_tokens": ["source-a"],
+                         "source_revisions": {"source-a": "r7"}, "last_ai_revision_id": 5},
+        }]
+        index = plane.rebuild_index(pages)
+        self.assertEqual(index["s/p/worldview"].source_revisions, {"source-a": "r7"})
 
 
 if __name__ == "__main__":

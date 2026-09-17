@@ -39,9 +39,16 @@ class LarkCliTests(unittest.TestCase):
     def test_update_uses_current_revision_as_precondition(self):
         runner = FakeRunner(ok({"data": {"document": {"revision_id": 13}}}))
         client = LarkCli(Path("lark-cli"), "user", runner)
-        self.assertEqual(client.update_doc("doccn1", 12, "# 更新"), 13)
+        self.assertEqual(client.update_doc("doccn1", 12, "# 更新"), {"data": {"document": {"revision_id": 13}}})
         self.assertIn("--revision-id", runner.calls[-1])
         self.assertIn("12", runner.calls[-1])
+
+    def test_update_returns_the_full_result_for_warning_inspection(self):
+        payload = {"code": 0, "data": {"result": "partial_success", "document": {"revision_id": 14}},
+                   "warnings": [{"msg": "partial update"}]}
+        runner = FakeRunner(ok(payload))
+        client = LarkCli(Path("lark-cli"), "user", runner)
+        self.assertEqual(client.update_doc("doccn1", 13, "# 更新"), payload)
 
     def test_conflict_response_becomes_revision_conflict(self):
         client = LarkCli(Path("lark-cli"), "user", FakeRunner(revision_conflict()))

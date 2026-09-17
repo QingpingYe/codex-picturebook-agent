@@ -102,14 +102,15 @@ class LarkCli:
             "--revision-id", str(revision_id), "--format", "json",
         )
 
-    def update_doc(self, doc_token: str, revision_id: int, content: str) -> int:
+    def update_doc(self, doc_token: str, revision_id: int, content: str) -> dict[str, Any]:
         result = self._json(
             "docs", "+update", "--as", self.identity, "--doc", doc_token,
             "--command", "overwrite", "--doc-format", "markdown",
             "--revision-id", str(revision_id), "--content", content, "--format", "json",
         )
         try:
-            return int(result["data"]["document"]["revision_id"])
+            int(result["data"]["document"]["revision_id"])
+            return result
         except (KeyError, TypeError, ValueError) as error:
             raise LarkCliError("update response did not include document revision_id") from error
 

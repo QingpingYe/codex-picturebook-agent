@@ -62,11 +62,24 @@ def parse_candidate(markdown: str) -> Candidate:
     key = logical_key(frontmatter)
     if "key" in frontmatter and frontmatter["key"] != key:
         raise PageCodecError("changed keys are not allowed")
+    source_node_tokens = frontmatter.get("source_node_tokens")
+    source_revision_parts = frontmatter.get("source_revision_parts")
+    if not isinstance(source_node_tokens, list) or not isinstance(source_revision_parts, list):
+        raise PageCodecError("source_node_tokens and source_revision_parts must be lists")
+    if len(source_node_tokens) != len(source_revision_parts):
+        raise PageCodecError("source_node_tokens and source_revision_parts must have equal length")
+    if any(not isinstance(token, str) or not token.strip() or not isinstance(revision, str) or not revision.strip()
+           for token, revision in zip(source_node_tokens, source_revision_parts)):
+        raise PageCodecError("source_node_tokens and source_revision_parts must be non-empty text")
+    if len(set(source_node_tokens)) != len(source_node_tokens):
+        raise PageCodecError("source_node_tokens must be unique")
+    source_revisions = dict(zip(source_node_tokens, source_revision_parts))
     metadata = {
         "schema_version": 1,
         "key": key,
         "page_type": frontmatter["page_type"],
-        "source_node_tokens": frontmatter.get("source_node_tokens"),
+        "source_node_tokens": source_node_tokens,
+        "source_revisions": source_revisions,
         "last_ai_revision_id": frontmatter.get("last_ai_revision_id", 0),
     }
     _validate_metadata(metadata)
@@ -107,7 +120,7 @@ def parse_remote_page(markdown: str) -> RemotePage:
 
 
 def _validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    required = {"schema_version", "key", "page_type", "source_node_tokens", "last_ai_revision_id"}
+    required = {"schema_version", "key", "page_type", "source_node_tokens", "source_revisions", "last_ai_revision_id"}
     if set(metadata) != required:
         raise PageCodecError("metadata must contain exactly the required fields")
     if metadata["schema_version"] != 1:
@@ -125,6 +138,14 @@ def _validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         raise PageCodecError("invalid source_node_tokens")
     if len(set(tokens)) != len(tokens):
         raise PageCodecError("invalid source_node_tokens")
+    source_revisions = metadata["source_revisions"]
+    if not isinstance(source_revisions, dict) or not source_revisions:
+        raise PageCodecError("invalid source_revisions")
+    if any(not isinstance(token, str) or not token.strip() or not isinstance(revision, str) or not revision.strip()
+           for token, revision in source_revisions.items()):
+        raise PageCodecError("invalid source_revisions")
+    if set(source_revisions) != set(tokens):
+        raise PageCodecError("source_revisions must match source_node_tokens")
     revision = metadata["last_ai_revision_id"]
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
         raise PageCodecError("invalid last_ai_revision_id")

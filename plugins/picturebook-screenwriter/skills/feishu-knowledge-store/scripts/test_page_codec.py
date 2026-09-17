@@ -14,7 +14,9 @@ class PageCodecTests(unittest.TestCase):
         text = render_remote_page(
             "# 小老鼠世界观\n\n正文。\n",
             {"key": "海外绘本/小老鼠迈尔斯/worldview", "page_type": "worldview",
-             "source_node_tokens": ["K8EXw4Ja2i7mGnk1Tvgc4zcknkd"], "last_ai_revision_id": 12},
+             "source_node_tokens": ["K8EXw4Ja2i7mGnk1Tvgc4zcknkd"],
+             "source_revisions": {"K8EXw4Ja2i7mGnk1Tvgc4zcknkd": "r3"},
+             "last_ai_revision_id": 12},
         )
         page = parse_remote_page(text)
         self.assertEqual(page.body, "# 小老鼠世界观\n\n正文。\n")
@@ -33,6 +35,8 @@ project_id: 小老鼠迈尔斯
 page_type: worldview
 source_node_tokens:
   - source-a
+source_revision_parts:
+  - r11
 last_ai_revision_id: 9
 ---
 # 世界观
@@ -49,20 +53,21 @@ last_ai_revision_id: 9
         with self.assertRaisesRegex(PageCodecError, "source_node_tokens"):
             render_remote_page("# 正文\n", {
                 "key": "s/p/worldview", "page_type": "worldview",
-                "source_node_tokens": ["source", "source"], "last_ai_revision_id": 1,
+                "source_node_tokens": ["source", "source"],
+                "source_revisions": {"source": "r1"}, "last_ai_revision_id": 1,
             })
 
     def test_machine_yaml_in_body_is_preserved(self):
         body = "# 正文\n\n```yaml\nmachine: true\n```\n"
         self.assertEqual(parse_remote_page(render_remote_page(body, {
             "key": "s/p/worldview", "page_type": "worldview",
-            "source_node_tokens": ["source"], "last_ai_revision_id": 1,
+            "source_node_tokens": ["source"], "source_revisions": {"source": "r1"}, "last_ai_revision_id": 1,
         })).body, body)
 
     def test_unknown_resource_indication_is_not_round_trippable(self):
         page = parse_remote_page(render_remote_page("# 正文\n\n[资源](https://example.test/a)\n", {
             "key": "s/p/worldview", "page_type": "worldview",
-            "source_node_tokens": ["source"], "last_ai_revision_id": 1,
+            "source_node_tokens": ["source"], "source_revisions": {"source": "r1"}, "last_ai_revision_id": 1,
         }))
         self.assertTrue(page.has_non_roundtrippable_content)
 
@@ -72,10 +77,28 @@ series_id: s
 project_id: p
 page_type: creation-standards
 source_node_tokens: [source-a, source-b]
+source_revision_parts: [r1, r2]
 ---
 # 标准
 """)
         self.assertEqual(candidate.metadata["source_node_tokens"], ["source-a", "source-b"])
+        self.assertEqual(candidate.metadata["source_revisions"], {"source-a": "r1", "source-b": "r2"})
+
+    def test_source_revision_parts_make_a_recoverable_vector(self):
+        candidate = parse_candidate("""---
+series_id: s
+project_id: p
+page_type: worldview
+source_node_tokens:
+  - source-a
+  - source-b
+source_revision_parts:
+  - r11
+  - r22
+---
+# 正文
+""")
+        self.assertEqual(candidate.metadata["source_revisions"], {"source-a": "r11", "source-b": "r22"})
 
 
 if __name__ == "__main__":

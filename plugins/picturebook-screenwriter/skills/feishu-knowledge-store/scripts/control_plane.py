@@ -93,7 +93,7 @@ class ControlPlane:
                 metadata = page["metadata"]
                 entry = _index_entry({
                     "key": metadata["key"], "doc_token": page["doc_token"], "wiki_node_token": page["wiki_node_token"],
-                    "source_revisions": {token: "unknown" for token in metadata["source_node_tokens"]},
+                    "source_revisions": metadata["source_revisions"],
                     "last_ai_revision_id": metadata["last_ai_revision_id"], "last_seen_revision_id": page["revision_id"],
                     "status": "published",
                 })
