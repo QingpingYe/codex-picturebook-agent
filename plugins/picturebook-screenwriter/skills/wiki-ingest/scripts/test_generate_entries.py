@@ -97,7 +97,7 @@ class TestManifest(unittest.TestCase):
                           project="小老鼠迈尔斯",
                           source_node_tokens=["node-a", "node-b"],
                           source_revision_parts=["17", "28"])
-        manifest = ge.build_manifest(str(self.tmp), {candidate: []})
+        manifest = ge.build_manifest(self.d, {candidate: []})
         entry = manifest["entries"][0]
         self.assertEqual(entry["key"], "海外绘本/小老鼠迈尔斯/worldview")
         self.assertEqual(entry["source_revisions"],
