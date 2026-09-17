@@ -60,6 +60,7 @@ Task-local work bundles only may be created below <workspace>/.picturebook-scree
 - Produces load_config(config_path, workspace, environ) -> KnowledgeConfig.
 - Produces LarkCli(preferred_binary, identity, runner). Its public methods are preflight, get_node, list_nodes, create_doc, fetch_doc, fetch_doc_revision, and update_doc.
 - `preflight()` verifies the configured target root and the configured source root, so every run can prove both the write target and read-only source are reachable.
+- `update_doc` returns the full CLI result, not only the new revision. Any `partial_success`, `warnings`, or non-success result is treated as a failed publish and the page becomes `needs_review`.
 - No later script may call subprocess.run directly.
 
 - [ ] **Step 1: Write the failing config tests.**
@@ -144,16 +145,19 @@ class LarkCliTests(unittest.TestCase):
 
 ~~~python
 class LarkCli:
-    def update_doc(self, doc_token: str, revision_id: int, content: str) -> int:
+    def update_doc(self, doc_token: str, revision_id: int, content: str) -> dict[str, Any]:
         result = self._json(
             "docs", "+update", "--as", self.identity, "--doc", doc_token,
             "--command", "overwrite", "--doc-format", "markdown",
             "--revision-id", str(revision_id), "--content", content, "--format", "json",
         )
-        return int(result["data"]["document"]["revision_id"])
+        return result
 ~~~
 
 Use subprocess.run with UTF-8 decoding and check=False. Parse the final JSON payload, redact token-like values from errors, and distinguish revision conflict, authentication, permission, not-found, rate-limit, and transient failures. preflight runs auth status --json --verify, then wiki +node-get for the configured target root and the configured source root, and makes no mutation.
+
+To prove write access without mutating production content, preflight must report `space_id` from both resolved nodes and fail if the target scope is unavailable in the auth result. Long page content is always passed via stdin or a UTF-8 temp file, never directly on the command line.
+
 
  
 - [ ] **Step 7: Run both test modules.**
@@ -209,6 +213,8 @@ Expected: FAIL because page_codec.py does not exist.
 
 A candidate retains YAML frontmatter only in task-local wiki_staging. Publishing removes it from reader content and appends one final section named 系统元数据（请勿编辑） containing canonical JSON. The logical key is series_id/project_id/page_type. Reject missing/duplicate/final-position violations, invalid page types, changed keys, and invalid source token lists. Preserve all existing machine-data YAML blocks in the reader body.
 
+The system metadata must also contain a `source_revisions` map. Index recovery rebuilds `IndexEntry.source_revisions` from that map rather than replacing it with `unknown`, so incremental sync state survives a corrupted index document.
+
 - [ ] **Step 4: Write failing remote lease tests.**
 
 ~~~python
@@ -229,7 +235,7 @@ def test_bad_index_stops_writes(self):
 
 同步索引 begins with # AI_KB_INDEX_V1 and contains exactly one JSON object. 同步锁 begins with # AI_KB_LOCK_V1 and contains exactly one object with schema_version, run_id, holder, started_at, and expires_at.
 
-Acquire fetches the lock, verifies expiry, and calls update_doc with the fetched revision. On RevisionConflict it refetches once; if the new lock is non-expired it raises LockHeld. Refresh and release verify both run_id and holder. Validate every index entry and token before a publish. A malformed index stops writes; rebuild_index scans published page metadata and rejects duplicate logical keys.
+Acquire fetches the lock, verifies expiry, and calls update_doc with the fetched revision. On RevisionConflict it refetches once; if the new lock is non-expired it raises LockHeld. Refresh and release verify both run_id and holder. Validate every index entry and token before a publish. A malformed index stops writes; rebuild_index scans published page metadata, restores `source_revisions` from that metadata, and rejects duplicate logical keys.
 
 - [ ] **Step 6: Run Task 2 tests.**
 
@@ -361,9 +367,9 @@ Expected: FAIL because publisher.py does not exist.
 
 - [ ] **Step 3: Implement idempotent docx tree and conditional updates.**
 
-Every navigation container is a docx page, because the Wiki CLI creates docx nodes rather than folders. Find children by exact title plus parent token. Create leaf pages with docs +create --parent-token <parent node> --title <title> --doc-format markdown. Fetch and verify final metadata before adding an index record.
+Every navigation container is a docx page, because the Wiki CLI creates docx nodes rather than folders. Initialize the system tree only while holding the remote lease; this prevents two first-run users from creating duplicate system nodes. Find children by exact title plus parent token, and fetch every page of children with a bounded pagination loop rather than relying on the default page size. Create leaf pages with docs +create --parent-token <parent node> --title <title> --doc-format markdown. Fetch and verify final metadata before adding an index record.
 
-conditional_update refuses has_non_roundtrippable_content, then calls update_doc using current.revision_id. It propagates RevisionConflict without a hidden retry. Regenerate navigation from the remote index. Sync log is append-only. Conflict queue records logical key, source links, current document link, Chinese reason, timestamp, and current revision.
+conditional_update refuses has_non_roundtrippable_content, then calls update_doc using current.revision_id. It propagates RevisionConflict without a hidden retry. Any partial success, warning, or non-success result from `docs +update` is treated as a failed publish, not a successful write, and the affected page becomes `needs_review`. Regenerate navigation from the remote index. Sync log is append-only. Conflict queue records logical key, source links, current document link, Chinese reason, timestamp, and current revision.
 
 `has_non_roundtrippable_content` is computed by `page_codec.parse_remote_page`, not guessed from the request. It marks conservative resource and comment indications at [page_codec.py](E:\codex-picturebook-agent\.worktrees\codex-feishu-authoritative-knowledge\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\page_codec.py:152). Any unknown block/markdown marker that cannot be safely round-tripped still produces `needs_review`, never a publish.
 
