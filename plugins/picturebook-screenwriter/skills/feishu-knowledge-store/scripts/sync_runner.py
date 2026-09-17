@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from models import IndexEntry
+from config import load_config
 from runner_status import BootstrapState, RunStatus
 
 
@@ -48,7 +49,9 @@ class SyncRunner:
         staging = run_dir / "wiki_staging"
         staging.mkdir(parents=True, exist_ok=True)
         config = self._load_config()
-        source_nodes = self.cli.list_nodes(config["source_space_id"])
+        source_nodes = self.cli.list_nodes(config.source.space_id)
+        if config.source.root_mode == "node" and not source_nodes:
+            raise SyncRunnerError("source root_mode=node returned no child nodes")
         self._write_json(run_dir / "source_nodes.json", source_nodes)
 
         manifest_path = staging / "_manifest.json"
@@ -65,6 +68,7 @@ class SyncRunner:
         self.bootstrap_state = BootstrapState.IN_PROGRESS
         lease = self.control_plane.acquire_lock("sync-runner", datetime.now(timezone.utc))
         try:
+            self._persist_bootstrap_state(BootstrapState.IN_PROGRESS)
             self.publisher.initialize()
             published = 0
             failed = 0
@@ -77,6 +81,7 @@ class SyncRunner:
                 except Exception:
                     failed += 1
             self.bootstrap_state = BootstrapState.COMPLETE
+            self._persist_bootstrap_state(BootstrapState.COMPLETE)
             if failed > 0:
                 self.bootstrap_state = BootstrapState.FAILED
                 raise SyncRunnerError("有候选页面发布失败")
@@ -86,6 +91,7 @@ class SyncRunner:
             return report.as_dict()
         except Exception:
             self.bootstrap_state = BootstrapState.FAILED
+            self._persist_bootstrap_state(BootstrapState.FAILED)
             raise
         finally:
             self.control_plane.release_lock(lease)
@@ -100,11 +106,8 @@ class SyncRunner:
         self._write_json(run_dir / "verify_report.json", report)
         return report
 
-    def _load_config(self) -> dict[str, Any]:
-        config = self._load_json(self.config_path)
-        config.setdefault("source_space_id", "source-space")
-        config.setdefault("target_parent", "target-root")
-        return config
+    def _load_config(self) -> Any:
+        return load_config(self.config_path, self.config_path.parent, {})
 
     @staticmethod
     def _load_json(path: Path) -> dict[str, Any]:
@@ -134,9 +137,21 @@ class SyncRunner:
         candidate_path = run_dir / "wiki_staging" / relative_path
         return candidate_path.read_text(encoding="utf-8")
 
-    @staticmethod
-    def _target_parent() -> str:
-        return "target-root"
+    def _target_parent(self) -> str:
+        return self._load_config().target.root_token
+
+    def _persist_bootstrap_state(self, state: str) -> None:
+        entry = IndexEntry(
+            key="system/bootstrap",
+            doc_token="bootstrap",
+            wiki_node_token="bootstrap",
+            source_revisions={"bootstrap": state},
+            last_ai_revision_id=1,
+            last_seen_revision_id=1,
+            status="published",
+        )
+        self.publisher.publish_new(entry, json.dumps({"state": state}, ensure_ascii=False),
+                                   self._target_parent())
 
 
 def main(argv=None):

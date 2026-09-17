@@ -13,9 +13,16 @@ from config import ConfigError, load_config
 
 def config_json(values):
     defaults = {
-        "schema_version": 1,
-        "source_wiki_url": "https://wcno1rbz0o8i.feishu.cn/wiki/OI9gwaRv8i3RwOkGBNnc7VHinDd",
-        "target_root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+        "schema_version": 2,
+        "source": {
+            "space_id": "7682720271706361023",
+            "root_mode": "space",
+            "wiki_url": "https://wcno1rbz0o8i.feishu.cn/wiki/OI9gwaRv8i3RwOkGBNnc7VHinDd",
+        },
+        "target": {
+            "space_id": "7686313522543774944",
+            "root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+        },
         "identity": "user",
         "lock_ttl_minutes": 45,
     }
@@ -35,21 +42,37 @@ class ConfigTests(unittest.TestCase):
     def test_environment_path_wins(self):
         path = self.tmp / "from-environment.json"
         config = self.load(config_json({}), {"PICTUREBOOK_KB_CONFIG": str(path)})
-        self.assertEqual(config.target_root_token, "T08vwqXroiuJEfkoVzFcRaFXnMf")
+        self.assertEqual(config.target.root_token, "T08vwqXroiuJEfkoVzFcRaFXnMf")
+        self.assertEqual(config.source.root_mode, "space")
 
     def test_bot_identity_is_rejected(self):
         with self.assertRaisesRegex(ConfigError, "identity must be 'user'"):
             self.load(config_json({"identity": "bot"}), {})
 
     def test_boolean_schema_version_is_rejected(self):
-        with self.assertRaisesRegex(ConfigError, "schema_version must be 1"):
+        with self.assertRaisesRegex(ConfigError, "schema_version must be 2"):
             self.load(config_json({"schema_version": True}), {})
+
+    def test_v1_is_rejected_as_deprecated(self):
+        v1 = {
+            "schema_version": 1,
+            "source_wiki_url": "https://example.feishu.cn/wiki/source",
+            "target_root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+            "identity": "user",
+            "lock_ttl_minutes": 45,
+        }
+        with self.assertRaisesRegex(ConfigError, "deprecated"):
+            self.load(json.dumps(v1), {})
 
     def test_rejects_unknown_and_missing_fields(self):
         with self.assertRaisesRegex(ConfigError, "unexpected"):
             self.load(config_json({"extra": True}), {})
         with self.assertRaisesRegex(ConfigError, "non-empty"):
-            self.load(config_json({"source_wiki_url": None}), {})
+            self.load(config_json({"source": {
+                "space_id": "7682720271706361023",
+                "root_mode": "space",
+                "wiki_url": None,
+            }}), {})
 
     def test_cli_candidates_follow_portable_order_without_duplicates(self):
         config = self.load(config_json({}), {"LARK_CLI_PATH": "lark-cli"}, which=lambda _: "lark-cli")

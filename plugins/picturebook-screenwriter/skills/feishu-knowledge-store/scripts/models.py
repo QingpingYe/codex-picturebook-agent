@@ -6,9 +6,22 @@ from typing import Literal
 
 
 @dataclass(frozen=True)
+class SourceConfig:
+    space_id: str
+    root_mode: Literal["space", "node"]
+    wiki_url: str
+
+
+@dataclass(frozen=True)
+class TargetConfig:
+    space_id: str
+    root_token: str
+
+
+@dataclass(frozen=True)
 class KnowledgeConfig:
-    source_wiki_url: str
-    target_root_token: str
+    source: SourceConfig
+    target: TargetConfig
     identity: Literal["user"]
     lock_ttl_minutes: int
     cli_candidates: tuple[Path, ...]

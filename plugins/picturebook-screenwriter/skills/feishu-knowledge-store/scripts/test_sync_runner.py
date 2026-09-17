@@ -51,9 +51,16 @@ class SyncRunnerTests(unittest.TestCase):
         self.run_dir = Path(self.tmp.name) / "runs" / "run-1"
         self.config_path = Path(self.tmp.name) / "config.json"
         self.config_path.write_text(json.dumps({
-            "schema_version": 1,
-            "source_wiki_url": "https://example.feishu.cn/wiki/source",
-            "target_root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+            "schema_version": 2,
+            "source": {
+                "space_id": "7682720271706361023",
+                "root_mode": "space",
+                "wiki_url": "https://example.feishu.cn/wiki/source",
+            },
+            "target": {
+                "space_id": "7686313522543774944",
+                "root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+            },
             "identity": "user",
             "lock_ttl_minutes": 45
         }), encoding="utf-8")
@@ -99,6 +106,21 @@ class SyncRunnerTests(unittest.TestCase):
         runner.prepare(self.run_dir)
         self.assertTrue((self.run_dir / "source_nodes.json").exists())
         self.assertTrue((self.run_dir / "wiki_staging" / "_manifest.json").exists())
+
+    def test_node_mode_with_no_children_is_rejected(self):
+        self._write_manifest()
+        config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        config["source"]["root_mode"] = "node"
+        self.config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+
+        class EmptyCli:
+            def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
+                return []
+
+        runner = SyncRunner(self.config_path, EmptyCli(), publisher=FakePublisher(),
+                             control_plane=FakeControlPlane())
+        with self.assertRaisesRegex(RuntimeError, "no child nodes"):
+            runner.prepare(self.run_dir)
 
     def test_publish_acquires_and_releases_lock(self):
         self._write_manifest()
