@@ -106,8 +106,8 @@ class LarkCli:
 
     def fetch_doc_revision(self, doc_token: str, revision_id: int) -> dict[str, Any]:
         return self._json(
-            "docs", "+get", "--as", self.identity, "--doc", doc_token,
-            "--revision-id", str(revision_id), "--format", "json",
+            "docs", "+fetch", "--as", self.identity, "--doc", doc_token,
+            "--doc-format", "markdown", "--revision-id", str(revision_id),
         )
 
     def update_doc(self, doc_token: str, revision_id: int, content: str) -> dict[str, Any]:

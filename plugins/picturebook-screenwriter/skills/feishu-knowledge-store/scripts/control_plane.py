@@ -64,13 +64,25 @@ class ControlPlane:
             raise LockHeld(_lock_message(payload))
         lease = self._new_lease(holder, now, revision)
         try:
-            new_revision = self.cli.update_doc(self.control_tokens["lock"], revision, _render_lock(lease))
+            result = self.cli.update_doc(self.control_tokens["lock"], revision, _render_lock(lease))
+            new_revision = self._revision_from_update_result(result)
+            verified_revision, verified_payload = self._read_lock()
+            if verified_payload["run_id"] != lease.run_id or verified_payload["holder"] != lease.holder:
+                raise LockHeld(_lock_message(verified_payload))
+            if verified_revision != new_revision:
+                raise ControlPlaneCorrupt("lock revision did not advance as expected")
         except RevisionConflict:
             revision, payload = self._read_lock()
             if _lock_is_active(payload, now):
                 raise LockHeld(_lock_message(payload))
             lease = self._new_lease(holder, now, revision)
-            new_revision = self.cli.update_doc(self.control_tokens["lock"], revision, _render_lock(lease))
+            result = self.cli.update_doc(self.control_tokens["lock"], revision, _render_lock(lease))
+            new_revision = self._revision_from_update_result(result)
+            verified_revision, verified_payload = self._read_lock()
+            if verified_payload["run_id"] != lease.run_id or verified_payload["holder"] != lease.holder:
+                raise LockHeld(_lock_message(verified_payload))
+            if verified_revision != new_revision:
+                raise ControlPlaneCorrupt("lock revision did not advance as expected")
         return Lease(lease.run_id, lease.holder, lease.started_at, lease.expires_at, new_revision)
 
     def refresh_lock(self, lease: Lease, now: datetime) -> Lease:
@@ -78,14 +90,21 @@ class ControlPlane:
         revision, payload = self._read_lock()
         self._assert_owner(payload, lease)
         renewed = Lease(lease.run_id, lease.holder, lease.started_at, now + self.ttl, revision)
-        new_revision = self.cli.update_doc(self.control_tokens["lock"], revision, _render_lock(renewed))
+        result = self.cli.update_doc(self.control_tokens["lock"], revision, _render_lock(renewed))
+        new_revision = self._revision_from_update_result(result)
         return Lease(renewed.run_id, renewed.holder, renewed.started_at, renewed.expires_at, new_revision)
 
     def release_lock(self, lease: Lease) -> None:
         revision, payload = self._read_lock()
         self._assert_owner(payload, lease)
         empty = {"schema_version": 1, "run_id": None, "holder": None, "started_at": None, "expires_at": None}
-        self.cli.update_doc(self.control_tokens["lock"], revision, _render_control("# AI_KB_LOCK_V1", empty))
+        result = self.cli.update_doc(self.control_tokens["lock"], revision, _render_control("# AI_KB_LOCK_V1", empty))
+        new_revision = self._revision_from_update_result(result)
+        verified_revision, verified_payload = self._read_lock()
+        if any(verified_payload[name] is not None for name in ("run_id", "holder", "started_at", "expires_at")):
+            raise LeaseOwnershipError("lock was not released cleanly")
+        if verified_revision != new_revision:
+            raise ControlPlaneCorrupt("lock revision did not advance as expected")
 
     def rebuild_index(self, pages: list[Mapping[str, Any]]) -> dict[str, IndexEntry]:
         rebuilt: dict[str, IndexEntry] = {}
@@ -125,6 +144,17 @@ class ControlPlane:
 
     def _new_lease(self, holder: str, now: datetime, revision: int) -> Lease:
         return Lease(uuid.uuid4().hex, holder, now, now + self.ttl, revision)
+
+    @staticmethod
+    def _revision_from_update_result(result: Any) -> int:
+        if isinstance(result, int) and not isinstance(result, bool) and result >= 0:
+            return result
+        if isinstance(result, Mapping):
+            document = result.get("data", {}).get("document", {})
+            revision = document.get("revision_id")
+            if not isinstance(revision, bool) and isinstance(revision, int) and revision >= 0:
+                return revision
+        raise ControlPlaneCorrupt("lock update did not return a valid revision_id")
 
     @staticmethod
     def _assert_owner(payload: Mapping[str, Any], lease: Lease) -> None:

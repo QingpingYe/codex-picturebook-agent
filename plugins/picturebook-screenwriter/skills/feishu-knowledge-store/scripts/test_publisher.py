@@ -10,7 +10,7 @@ if str(SCRIPTS) not in sys.path:
 
 from lark_cli import RevisionConflict
 from models import IndexEntry
-from page_codec import render_remote_page
+from page_codec import parse_remote_page, render_remote_page
 from publisher import NeedsReview, Publisher
 
 
@@ -24,8 +24,8 @@ def metadata():
     }
 
 
-def page(body="# 正文"):
-    return render_remote_page(body, metadata())
+def page(body="# 正文", revision=1):
+    return render_remote_page(body, {**metadata(), "last_ai_revision_id": revision})
 
 
 def entry(doc_token="doc-worldview"):
@@ -92,6 +92,14 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.publisher.initialize(), tokens)
         self.assertEqual(len(self.cli.created_titles), 10)
 
+    def test_initialize_rejects_duplicate_system_page(self):
+        self.cli.nodes["root"] = [
+            {"title": "00_使用说明", "node_token": "node-a"},
+            {"title": "00_使用说明", "node_token": "node-b"},
+        ]
+        with self.assertRaises(NeedsReview):
+            self.publisher.initialize()
+
     def test_initialize_locked_acquires_and_releases_the_lease(self):
         class Plane:
             def __init__(self):
@@ -129,7 +137,43 @@ class PublisherTests(unittest.TestCase):
         current = {"revision_id": 1, "content": page("# 人工规则")}
         self.cli.docs[entry().doc_token] = dict(current)
         self.publisher.conditional_update(entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"})
-        self.assertEqual(self.cli.docs[entry().doc_token]["content"], page("# 人工规则\n\n新资料"))
+        expected = render_remote_page(
+            "# 人工规则\n\n新资料",
+            {**metadata(), "source_revisions": {"source": "r2"}, "last_ai_revision_id": 2},
+        )
+        self.assertEqual(self.cli.docs[entry().doc_token]["content"], expected)
+
+    def test_publish_new_records_initial_revision(self):
+        zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
+        result = self.publisher.publish_new(zero_entry, "# 正文", "content-root")
+        self.assertEqual(result.last_ai_revision_id, 1)
+        self.assertEqual(result.last_seen_revision_id, 1)
+        parsed = parse_remote_page(self.cli.docs["doc-1"]["content"])
+        self.assertEqual(parsed.metadata["last_ai_revision_id"], 1)
+
+    def test_conditional_update_records_predicted_revision(self):
+        current = {"revision_id": 1, "content": page("# 人工规则")}
+        self.cli.docs[entry().doc_token] = dict(current)
+        result = self.publisher.conditional_update(
+            entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"}
+        )
+        self.assertEqual(result.last_ai_revision_id, 2)
+        self.assertEqual(result.last_seen_revision_id, 2)
+        parsed = parse_remote_page(self.cli.docs[entry().doc_token]["content"])
+        self.assertEqual(parsed.metadata["last_ai_revision_id"], 2)
+
+    def test_conditional_update_rejects_unexpected_revision(self):
+        current = {"revision_id": 1, "content": page("# 人工规则")}
+        self.cli.docs[entry().doc_token] = dict(current)
+        self.cli.update_result = {
+            "code": 0,
+            "data": {"result": "success", "document": {"revision_id": 3}},
+            "warnings": [],
+        }
+        with self.assertRaises(NeedsReview):
+            self.publisher.conditional_update(
+                entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"}
+            )
 
     def test_resource_bearing_page_requires_review(self):
         current = page("# 正文\n\n[资源](https://example.test/a)")

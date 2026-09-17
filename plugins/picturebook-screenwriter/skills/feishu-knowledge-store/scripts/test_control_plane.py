@@ -62,6 +62,59 @@ class ControlPlaneTests(unittest.TestCase):
         with self.assertRaises(LockHeld):
             plane.acquire_lock("bob@host", FIXED_NOW)
 
+    def test_acquire_lock_rechecks_written_lease(self):
+        cli = FakeCli()
+        plane = ControlPlane(cli, control_tokens())
+        lease = plane.acquire_lock("alice@host", FIXED_NOW)
+        self.assertEqual(lease.run_id, plane._read_lock()[1]["run_id"])
+
+    def test_acquire_lock_detects_postwrite_race(self):
+        class RacyCli(FakeCli):
+            def update_doc(self, token, revision, content):
+                result = super().update_doc(token, revision, content)
+                self.docs[token]["content"] = "# AI_KB_LOCK_V1\n```json\n" + json.dumps({
+                    "schema_version": 1,
+                    "run_id": "rival",
+                    "holder": "bob@host",
+                    "started_at": "2026-09-17T03:00:00Z",
+                    "expires_at": "2026-09-17T04:00:00Z",
+                }) + "\n```\n"
+                return result
+
+        plane = ControlPlane(RacyCli(), control_tokens())
+        with self.assertRaises(LockHeld):
+            plane.acquire_lock("alice@host", FIXED_NOW)
+
+    def test_acquire_lock_parses_update_result_revision(self):
+        class JsonCli(FakeCli):
+            def update_doc(self, token, revision, content):
+                result = super().update_doc(token, revision, content)
+                return {"data": {"document": {"revision_id": result}}}
+
+        plane = ControlPlane(JsonCli(), control_tokens())
+        lease = plane.acquire_lock("alice@host", FIXED_NOW)
+        self.assertIsInstance(lease.revision_id, int)
+
+    def test_release_lock_verifies_empty_state_after_write(self):
+        class RacyReleaseCli(FakeCli):
+            def update_doc(self, token, revision, content):
+                result = super().update_doc(token, revision, content)
+                payload = json.loads(content.split("```json\n", 1)[1].split("\n```", 1)[0])
+                if payload.get("run_id") is None:
+                    self.docs[token]["content"] = "# AI_KB_LOCK_V1\n```json\n" + json.dumps({
+                        "schema_version": 1,
+                        "run_id": "rival",
+                        "holder": "bob@host",
+                        "started_at": "2026-09-17T03:00:00Z",
+                        "expires_at": "2026-09-17T04:00:00Z",
+                    }) + "\n```\n"
+                return result
+
+        plane = ControlPlane(RacyReleaseCli(), control_tokens())
+        lease = plane.acquire_lock("alice@host", FIXED_NOW)
+        with self.assertRaises(LeaseOwnershipError):
+            plane.release_lock(lease)
+
     def test_bad_index_stops_writes(self):
         plane = ControlPlane(FakeCli(index_content="# AI_KB_INDEX_V1\nnot-json"), control_tokens())
         with self.assertRaises(ControlPlaneCorrupt):

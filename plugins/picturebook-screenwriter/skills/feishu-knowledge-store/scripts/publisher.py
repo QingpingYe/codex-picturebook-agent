@@ -51,10 +51,13 @@ class Publisher:
             control_plane.release_lock(lease)
 
     def publish_new(self, entry: IndexEntry, body: str, parent: str) -> IndexEntry:
-        page = render_remote_page(body, self._metadata(entry))
+        initial_revision = 1
+        page = render_remote_page(body, self._metadata(entry, initial_revision))
         result = self.cli.create_doc(parent, entry.doc_token, page)
         document = result.get("data", {}).get("document", {})
         revision = int(document.get("revision_id", 1))
+        if revision != initial_revision:
+            raise NeedsReview("created document did not start at revision 1")
         return replace(
             entry,
             last_ai_revision_id=revision,
@@ -77,11 +80,19 @@ class Publisher:
             raise NeedsReview("document contains resources or comments and must be reviewed")
 
         revision = int(current["revision_id"])
-        result = self.cli.update_doc(entry.doc_token, revision, merged_markdown)
+        predicted_revision = revision + 1
+        merged = parse_remote_page(merged_markdown)
+        updated_metadata = dict(merged.metadata)
+        updated_metadata["source_revisions"] = dict(source_revisions)
+        updated_metadata["last_ai_revision_id"] = predicted_revision
+        normalized_page = render_remote_page(merged.body, updated_metadata)
+        result = self.cli.update_doc(entry.doc_token, revision, normalized_page)
         if result.get("warnings") or result.get("data", {}).get("result") == "partial_success":
             raise NeedsReview("partial or warned update")
 
         updated_revision = int(result["data"]["document"]["revision_id"])
+        if updated_revision != predicted_revision:
+            raise NeedsReview("revision advanced differently than expected")
         return replace(
             entry,
             source_revisions=dict(source_revisions),
@@ -98,10 +109,10 @@ class Publisher:
         self.cli.update_doc(parent, int(current["revision_id"]), content)
 
     def _find_or_create(self, parent: str, title: str) -> tuple[str, bool]:
-        existing = next(
-            (node for node in self.cli.list_nodes(parent) if node.get("title") == title),
-            None,
-        )
+        matches = [node for node in self.cli.list_nodes(parent) if node.get("title") == title]
+        if len(matches) > 1:
+            raise NeedsReview(f"duplicate system page: {title}")
+        existing = matches[0] if matches else None
         if existing:
             for key in ("node_token", "obj_token", "token"):
                 if existing.get(key):
@@ -114,12 +125,12 @@ class Publisher:
         return token, False
 
     @staticmethod
-    def _metadata(entry: IndexEntry) -> dict[str, Any]:
+    def _metadata(entry: IndexEntry, revision: int | None = None) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "key": entry.key,
             "page_type": entry.key.split("/")[-1],
             "source_node_tokens": sorted(entry.source_revisions),
             "source_revisions": dict(entry.source_revisions),
-            "last_ai_revision_id": entry.last_ai_revision_id,
+            "last_ai_revision_id": revision if revision is not None else entry.last_ai_revision_id,
         }

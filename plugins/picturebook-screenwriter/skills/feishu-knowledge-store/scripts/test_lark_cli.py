@@ -103,6 +103,22 @@ class LarkCliTests(unittest.TestCase):
         with self.assertRaises(RevisionConflict):
             client.update_doc("doccn1", 12, "# 更新")
 
+    def test_document_reads_use_fetch_command(self):
+        runner = FakeRunner(
+            ok({"data": {"document": {"content": "# 当前版"}}}),
+            ok({"data": {"document": {"content": "# 历史版"}}}),
+        )
+        client = LarkCli(Path("lark-cli"), "user", runner)
+        client.fetch_doc("doccn1")
+        client.fetch_doc_revision("doccn1", 12)
+        for call in runner.calls:
+            self.assertIn("+fetch", call)
+            self.assertNotIn("+get", call)
+        self.assertIn("--doc-format", runner.calls[0])
+        self.assertIn("markdown", runner.calls[0])
+        self.assertIn("--revision-id", runner.calls[1])
+        self.assertIn("12", runner.calls[1])
+
     def test_preflight_is_read_only_and_checks_auth_then_root(self):
         runner = FakeRunner(ok({"data": {"user": "me"}}), ok({"data": {"node": {"token": "root"}}}))
         client = LarkCli(Path("lark-cli"), "user", runner)
