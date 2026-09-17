@@ -40,6 +40,7 @@
 | plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/sync_knowledge.py | preflight, initialize, prepare, validate-decisions, apply commands. |
 | plugins/picturebook-screenwriter/skills/wiki-ingest/ | Portable candidate-only source-ingestion skill, references, generic scripts, tests. |
 | plugins/picturebook-screenwriter/skills/knowledge-loader/ | Read-only target-Wiki retrieval skill, script, tests. |
+| plugins/picturebook-screenwriter/skills/knowledge-loader/scripts/cache.py | Per-user, timestamped offline knowledge cache. |
 | plugins/picturebook-screenwriter/skills/picturebook-screenwriter/SKILL.md | Updated sync routing and creation-time knowledge loading. |
 | plugins/picturebook-screenwriter/.codex-plugin/plugin.json and both READMEs | Marketplace metadata and multi-user operator docs. |
 
@@ -58,6 +59,7 @@ Task-local work bundles only may be created below <workspace>/.picturebook-scree
 **Interfaces:**
 - Produces load_config(config_path, workspace, environ) -> KnowledgeConfig.
 - Produces LarkCli(preferred_binary, identity, runner). Its public methods are preflight, get_node, list_nodes, create_doc, fetch_doc, fetch_doc_revision, and update_doc.
+- `preflight()` verifies the configured target root and the configured source root, so every run can prove both the write target and read-only source are reachable.
 - No later script may call subprocess.run directly.
 
 - [ ] **Step 1: Write the failing config tests.**
@@ -151,7 +153,7 @@ class LarkCli:
         return int(result["data"]["document"]["revision_id"])
 ~~~
 
-Use subprocess.run with UTF-8 decoding and check=False. Parse the final JSON payload, redact token-like values from errors, and distinguish revision conflict, authentication, permission, not-found, rate-limit, and transient failures. preflight runs auth status --json --verify then wiki +node-get for the configured root and makes no mutation.
+Use subprocess.run with UTF-8 decoding and check=False. Parse the final JSON payload, redact token-like values from errors, and distinguish revision conflict, authentication, permission, not-found, rate-limit, and transient failures. preflight runs auth status --json --verify, then wiki +node-get for the configured target root and the configured source root, and makes no mutation.
 
  
 - [ ] **Step 7: Run both test modules.**
@@ -363,6 +365,8 @@ Every navigation container is a docx page, because the Wiki CLI creates docx nod
 
 conditional_update refuses has_non_roundtrippable_content, then calls update_doc using current.revision_id. It propagates RevisionConflict without a hidden retry. Regenerate navigation from the remote index. Sync log is append-only. Conflict queue records logical key, source links, current document link, Chinese reason, timestamp, and current revision.
 
+`has_non_roundtrippable_content` is computed by `page_codec.parse_remote_page`, not guessed from the request. It marks conservative resource and comment indications at [page_codec.py](E:\codex-picturebook-agent\.worktrees\codex-feishu-authoritative-knowledge\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\page_codec.py:152). Any unknown block/markdown marker that cannot be safely round-tripped still produces `needs_review`, never a publish.
+
 - [ ] **Step 4: Write failing merge tests.**
 
 ~~~python
@@ -377,6 +381,10 @@ def test_human_and_source_change_requires_agent_decision(self):
 def test_publish_that_drops_human_line_is_rejected(self):
     with self.assertRaisesRegex(MergeValidationError, "人工"):
         validate_decision(requirement(), "# A", "# 人工规则", publish("# 新源规则"))
+
+def test_publish_that_reintroduces_human_deleted_content_is_rejected(self):
+    with self.assertRaisesRegex(MergeValidationError, "人工"):
+        validate_decision(requirement(), "# A\n\n旧设定\n", "# A\n", "# A\n\n人工补充\n")
 ~~~
 
 - [ ] **Step 5: Implement merge protocol and phase-separated sync command.**
@@ -393,7 +401,7 @@ def classify(base: str, current: str, candidate: str, source_changed: bool) -> M
     return MergeRequirement("agent_decision", "human_and_source_changed")
 ~~~
 
-The skill requires publish only when merged_markdown contains every human-only line. Otherwise it outputs queue. Validator rejects publish if it changes key, drops a human-only line, omits final metadata, or simply equals candidate while current differs from base.
+The skill requires publish only when `merge_protocol` proves a full three-way, line-level reconciliation: every human insertion stays inserted, every human deletion stays deleted, every surviving source change is accepted, and the result still contains the system metadata block. Otherwise it outputs queue. The validator rejects publish if it changes key, drops or reverts any human addition or deletion, omits final metadata, or drifts from both current and candidate.
 
 Implement:
 
@@ -439,6 +447,7 @@ git commit -m "feat: add human-priority Feishu knowledge sync"
 
 **Files:**
 - Create: plugins/picturebook-screenwriter/skills/knowledge-loader/SKILL.md
+- Create: plugins/picturebook-screenwriter/skills/knowledge-loader/scripts/cache.py
 - Create: plugins/picturebook-screenwriter/skills/knowledge-loader/scripts/load_knowledge.py
 - Test: plugins/picturebook-screenwriter/skills/knowledge-loader/scripts/test_load_knowledge.py
 - Create: plugins/picturebook-screenwriter/tests/test_skill_contract.py
@@ -449,6 +458,7 @@ git commit -m "feat: add human-priority Feishu knowledge sync"
 
 **Interfaces:**
 - Produces load(query) -> KnowledgeEvidenceBundle with key, doc_token, revision_id, title, reader body, and Chinese warnings.
+- Produces a per-user, timestamped offline cache that `load(..., allow_offline_cache=True)` may use only when the target Wiki is unreachable.
 - Saved writing artifacts include knowledge_provenance for every source used.
 
 - [ ] **Step 1: Write failing loader and entry contract tests.**
@@ -464,6 +474,12 @@ def test_entry_routes_sync_to_store(self):
     text = ENTRY_SKILL.read_text(encoding="utf-8")
     self.assertIn("feishu-knowledge-store", text)
     self.assertNotIn("If the user asks for Feishu sync", text)
+
+def test_offline_cache_marks_evidence_and_warns(self):
+    bundle = self.loader.load(KnowledgeQuery(project_id="小老鼠迈尔斯"), allow_offline_cache=True)
+    self.assertTrue(bundle.offline)
+    self.assertIn("最后确认的本地缓存", bundle.warnings[0])
+    self.assertEqual(bundle.fetched_at, "2026-09-17T10:00:00+08:00")
 ~~~
 
 - [ ] **Step 2: Run tests to prove failure.**
@@ -474,6 +490,8 @@ Expected: FAIL because loader and integration are absent.
 - [ ] **Step 3: Implement read-only retrieval.**
 
 Filter remote index entries by project/page type before fetching docx. Remove system metadata through parse_remote_page, score exact Chinese query terms, sort by score descending then key, and cap default output at eight pages. Include needs_review pages but warn in Chinese with title and conflict link. Never treat local staging as a knowledge source.
+
+After a successful remote load, write the returned bundle to `<workspace>/.picturebook-screenwriter/cache/<user>/knowledge-bundle.json` together with `fetched_at` and each source revision. On target-Wiki failure, `load(query, allow_offline_cache=True)` may read this cache, but the returned bundle must be marked `offline=true` and the summary must tell the user that it is from the last confirmed cache, not from the authoritative Wiki. Remote reads remain the only source of truth; cache is per-user and non-authoritative.
 
 - [ ] **Step 4: Integrate skill routing and documentation.**
 
@@ -572,6 +590,7 @@ git commit -m "test: cover authoritative knowledge workflow"
 | No WorkBuddy library dependency | 3, 5, 6 |
 | Portable multi-user CLI access | 1, 5, 6 |
 | Retrieval and writing provenance | 5, 6 |
+| Offline cache fallback and clear user warning | 5, 6 |
 | Initialization, logs, and failure behavior | 2, 4, 6 |
 
 The plan assigns every design requirement. It deliberately excludes source-Wiki writes, WorkBuddy integration, local shared state, automatic semantic conflict resolution, and destructive recovery actions.
