@@ -50,7 +50,7 @@
 - `update_doc()` → `docs +update --revision-id`, with content via `@file`
 - Add private helpers `_run_json(command)`, `_items(payload)`, and `_raw(command)`; each is defined once and reused.
 
-- [ ] **Step 1: Write a JSON-parsing regression test for `_notice`.**
+- [x] **Step 1: Write a JSON-parsing regression test for `_notice`.**
 
 ```python
 def test_notice_is_not_used_as_business_data():
@@ -69,7 +69,7 @@ Accept when:
 - `_notice` is preserved as metadata.
 - No false “0 nodes” result.
 
-- [ ] **Step 2: Replace `docs +get` with `docs +fetch`.**
+- [x] **Step 2: Replace `docs +get` with `docs +fetch`.**
 
 ```python
 def fetch_doc(self, doc_token: str) -> dict[str, Any]:
@@ -79,7 +79,7 @@ def fetch_doc(self, doc_token: str) -> dict[str, Any]:
     )
 ```
 
-- [ ] **Step 3: Make `list_nodes` require `space_id`.**
+- [x] **Step 3: Make `list_nodes` require `space_id`.**
 
 ```python
 def list_nodes(self, space_id: str, parent_node_token: str | None = None,
@@ -91,7 +91,7 @@ def list_nodes(self, space_id: str, parent_node_token: str | None = None,
     return self._items(self._run_json(*args))
 ```
 
-- [ ] **Step 4: Move long content to `@file`.**
+- [x] **Step 4: Move long content to `@file`.**
 
 ```python
 def update_doc(self, doc_token: str, revision_id: int, content: str) -> dict[str, Any]:
@@ -109,7 +109,7 @@ def update_doc(self, doc_token: str, revision_id: int, content: str) -> dict[str
         Path(path).unlink(missing_ok=True)
 ```
 
-- [ ] **Step 5: Add CLI version detection.**
+- [x] **Step 5: Add CLI version detection.**
 
 ```python
 def verify_supported_version(self) -> dict[str, str]:
@@ -128,7 +128,7 @@ Acceptance:
 - 1.0.96 is accepted if compatible.
 - Older or malformed versions are rejected with a Chinese error.
 
-- [ ] **Step 6: Add tests for authority and proxy presets.**
+- [x] **Step 6: Add tests for authority and proxy presets.**
 
 ```python
 def test_windows_utf8_and_child_process_env_is_stable():
@@ -142,7 +142,7 @@ Run:
 python -m unittest plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_lark_cli.py -v
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```powershell
 git add plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\lark_cli.py plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_lark_cli.py
@@ -168,7 +168,7 @@ normalize_remote_markdown(content, kind="control")
 normalize_remote_markdown(content, kind="page")
 ```
 
-- [ ] **Step 1: Write failing normalization tests.**
+- [x] **Step 1: Write failing normalization tests.**
 
 ```python
 def test_control_format_is_normalized():
@@ -184,7 +184,7 @@ def test_page_format_is_normalized():
     assert result.endswith("```\n")
 ```
 
-- [ ] **Step 2: Implement the normalizer.**
+- [x] **Step 2: Implement the normalizer.**
 
 Rules:
 
@@ -195,7 +195,7 @@ Rules:
 5. Ensure exactly one trailing newline.
 6. Do not collapse internal separation in user body content.
 
-- [ ] **Step 3: Wire control-plane reads through the normalizer.**
+- [x] **Step 3: Wire control-plane reads through the normalizer.**
 
 In `ControlPlane._fetch`, before parsing, call:
 
@@ -203,7 +203,7 @@ In `ControlPlane._fetch`, before parsing, call:
 content = normalize_remote_markdown(content, kind="control")
 ```
 
-- [ ] **Step 4: Wire page reads through a page-specific normalizer.**
+- [x] **Step 4: Wire page reads through a page-specific normalizer.**
 
 In `page_codec.parse_remote_page`, before validation:
 
@@ -211,7 +211,7 @@ In `page_codec.parse_remote_page`, before validation:
 markdown = normalize_remote_markdown(markdown, kind="page")
 ```
 
-- [ ] **Step 5: Add one import-time test to ensure no silent fallback.**
+- [x] **Step 5: Add one import-time test to ensure no silent fallback.**
 
 ```python
 def test_empty_control_document_is_rejected():
@@ -225,7 +225,7 @@ Run:
 python -m unittest plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_remote_markdown.py -v
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```powershell
 git add plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\remote_markdown.py plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_remote_markdown.py
@@ -264,7 +264,7 @@ Example keys:
 海外绘本/小老鼠迈尔斯/creation-standards
 ```
 
-- [ ] **Step 1: Write failing schema tests.**
+- [x] **Step 1: Write failing schema tests.**
 
 ```python
 def test_common_page_id_is_common():
@@ -281,7 +281,7 @@ def test_token_and_revision_must_match():
         validate_revisions(["a", "b"], ["1"])
 ```
 
-- [ ] **Step 2: Create `shared_schema.py`.**
+- [x] **Step 2: Create `shared_schema.py`.**
 
 ```python
 class SchemaError(ValueError):
@@ -298,7 +298,7 @@ def logical_key(series_id: str, project_id: str, page_type: str) -> str:
     return "/".join((series_id, project_id, page_type))
 ```
 
-- [ ] **Step 3: Refactor `page_codec.parse_candidate`.**
+- [x] **Step 3: Refactor `page_codec.parse_candidate`.**
 
 Replace local key logic with:
 
@@ -306,7 +306,7 @@ Replace local key logic with:
 from shared_schema import normalize_project_id, validate_revisions, logical_key
 ```
 
-- [ ] **Step 4: Refactor `generate_entries.py`.**
+- [x] **Step 4: Refactor `generate_entries.py`.**
 
 Replace:
 
@@ -320,7 +320,7 @@ with:
 normalize_project_id(frontmatter["page_type"], frontmatter.get("project_id", ""))
 ```
 
-- [ ] **Step 5: Add cross-test that all report's six keys are accepted.**
+- [x] **Step 5: Add cross-test that all report's six keys are accepted.**
 
 Run:
 
@@ -329,7 +329,7 @@ python -m unittest plugins\picturebook-screenwriter\skills\wiki-ingest\ -v
 python -m unittest plugins\picturebook-screenwriter\skills\feishu-knowledge-store\ -v
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```powershell
 git add plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\shared_schema.py plugins\picturebook-screenwriter\skills\wiki-ingest\scripts\generate_entries.py plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\page_codec.py
@@ -357,7 +357,7 @@ python sync_runner.py verify   --config <path>
 
 **Requirement:** `prepare` must never write the target Wiki. `publish` must always hold the lock. `verify` must be read-only.
 
-- [ ] **Step 1: Create a state enum.**
+- [x] **Step 1: Create a state enum.**
 
 ```python
 class BootstrapState:
@@ -367,7 +367,7 @@ class BootstrapState:
     FAILED = "bootstrap_failed"
 ```
 
-- [ ] **Step 2: Define run-dir storage.**
+- [x] **Step 2: Define run-dir storage.**
 
 ```text
 runs/<run_id>/
@@ -379,7 +379,7 @@ runs/<run_id>/
 └── verify_report.json
 ```
 
-- [ ] **Step 3: Implement `prepare`.**
+- [x] **Step 3: Implement `prepare`.**
 
 ```python
 def prepare(config_path, run_dir):
@@ -390,7 +390,7 @@ def prepare(config_path, run_dir):
     write_manifest(run_dir, manifest)
 ```
 
-- [ ] **Step 4: Implement `publish`.**
+- [x] **Step 4: Implement `publish`.**
 
 ```python
 def publish(config_path, run_dir):
@@ -404,7 +404,7 @@ def publish(config_path, run_dir):
         lock.release()
 ```
 
-- [ ] **Step 5: Implement `verify`.**
+- [x] **Step 5: Implement `verify`.**
 
 ```python
 def verify(config_path):
@@ -413,7 +413,7 @@ def verify(config_path):
     return build_verify_report(remote)
 ```
 
-- [ ] **Step 6: Add runner tests with fake CLI.**
+- [x] **Step 6: Add runner tests with fake CLI.**
 
 Cover:
 
@@ -423,7 +423,7 @@ Cover:
 4. `verify` does not write.
 5. Bootstrap can resume from interruption.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```powershell
 git add plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_runner.py plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\runner_status.py plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_sync_runner.py
@@ -460,7 +460,7 @@ git commit -m "feat: add feishu sync runner"
 }
 ```
 
-- [ ] **Step 1: Add `root_mode` to source.**
+- [x] **Step 1: Add `root_mode` to source.**
 
 Allowed values:
 
@@ -469,14 +469,14 @@ space
 node
 ```
 
-- [ ] **Step 2: Reject implicit fallback.**
+- [x] **Step 2: Reject implicit fallback.**
 
 ```text
 node mode + no children → explicit error, not space fallback
 space mode → enumerate the whole space
 ```
 
-- [ ] **Step 3: Define bootstrap state.**
+- [x] **Step 3: Define bootstrap state.**
 
 ```text
 bootstrap_required
@@ -485,7 +485,7 @@ bootstrap_complete
 bootstrap_failed
 ```
 
-- [ ] **Step 4: Persist bootstrap state in a dedicated target page that also serves as the initial lock.**
+- [x] **Step 4: Persist bootstrap state in a dedicated target page that also serves as the initial lock.**
 
 ```python
 def write_bootstrap_state(cli, root_token, state):
@@ -494,7 +494,7 @@ def write_bootstrap_state(cli, root_token, state):
     return update_page(page, state)
 ```
 
-- [ ] **Step 5: tests.**
+- [x] **Step 5: tests.**
 
 ```python
 class ConfigV2Tests(unittest.TestCase):
@@ -511,7 +511,7 @@ class ConfigV2Tests(unittest.TestCase):
         self.assertEqual(runner.bootstrap_state(), "bootstrap_in_progress")
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```powershell
 git add plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\config.py plugins\picturebook-screenwriter\config\feishu-knowledge-base.example.json plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_config.py
@@ -547,26 +547,26 @@ git commit -m "feat: add feishu config v2 and bootstrap state"
 }
 ```
 
-- [ ] **Step 1: Set subprocess env to UTF-8.**
+- [x] **Step 1: Set subprocess env to UTF-8.**
 
 ```python
 subprocess_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 ```
 
-- [ ] **Step 2: Use `Path` for all file and temp paths.**
+- [x] **Step 2: Use `Path` for all file and temp paths.**
 
-- [ ] **Step 3: Add Windows double-quote escaping.**
+- [x] **Step 3: Add Windows double-quote escaping.**
 
-- [ ] **Step 4: Add test case with Chinese path and Chinese title.**
+- [x] **Step 4: Add test case with Chinese path and Chinese title.**
 
-- [ ] **Step 5: Run the focused and full suites.**
+- [x] **Step 5: Run the focused and full suites.**
 
 ```powershell
 python -m unittest plugins\picturebook-screenwriter\skills\feishu-knowledge-store -v
 python -m unittest plugins\picturebook-screenwriter\skills\wiki-ingest -v
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```powershell
 git add plugins\picturebook-screenwriter\skills\feishu-knowledge-store plugins\picturebook-screenwriter\skills\wiki-ingest plugins\picturebook-screenwriter\README.md
