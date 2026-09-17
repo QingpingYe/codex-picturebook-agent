@@ -81,3 +81,18 @@ $env:PICTUREBOOK_KB_CONFIG = "$PWD\.picturebook-screenwriter\feishu-knowledge-ba
 lark-cli auth login
 python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_knowledge.py preflight --config $env:PICTUREBOOK_KB_CONFIG
 ```
+
+## Feishu sync runner
+
+The plugin uses Feishu configuration v2, which explicitly declares the source space, source root mode, target space, and target root token.
+
+The end-to-end runtime commands are:
+
+```powershell
+$run_dir = "$PWD\.picturebook-screenwriter\runs\$(Get-Date -Format yyyyMMdd-HHmmss)"
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_runner.py prepare --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_runner.py publish --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
+```
+
+`prepare` only writes the task-local run directory, `publish` holds the remote lock while updating the target Wiki, and `verify` is read-only.

@@ -130,7 +130,8 @@ class LarkCli:
         command = [str(self.binary), *arguments]
         try:
             completed = self.runner(
-                command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
+                command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             )
         except FileNotFoundError as error:
             raise CliUnavailable(f"lark-cli executable unavailable: {self.binary}") from error

@@ -24,6 +24,8 @@ class SyncReport:
     preserved: int
     queued: int
     failed: int
+    run_id: str
+    source: dict[str, int]
 
     def as_dict(self):
         return {
@@ -33,6 +35,8 @@ class SyncReport:
             "preserved": self.preserved,
             "queued": self.queued,
             "failed": self.failed,
+            "run_id": self.run_id,
+            "source": self.source,
         }
 
 
@@ -85,8 +89,11 @@ class SyncRunner:
             if failed > 0:
                 self.bootstrap_state = BootstrapState.FAILED
                 raise SyncRunnerError("有候选页面发布失败")
-            report = SyncReport(RunStatus.PUBLISHED, len(entries), published,
-                                preserved=0, queued=0, failed=failed)
+            report = SyncReport(
+                RunStatus.PUBLISHED, len(entries), published,
+                preserved=0, queued=0, failed=failed,
+                run_id=run_dir.name, source=self._source_summary(run_dir),
+            )
             self._write_json(run_dir / "sync_report.json", report.as_dict())
             return report.as_dict()
         except Exception:
@@ -102,6 +109,8 @@ class SyncRunner:
         report = {
             "status": RunStatus.VERIFIED,
             "candidates": len(manifest.get("entries", [])),
+            "run_id": run_dir.name,
+            "source": self._source_summary(run_dir),
         }
         self._write_json(run_dir / "verify_report.json", report)
         return report
@@ -119,6 +128,18 @@ class SyncRunner:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _source_summary(run_dir: Path) -> dict[str, int]:
+        path = run_dir / "source_nodes.json"
+        if not path.exists():
+            return {"document_count": 0, "container_count": 0}
+        nodes = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            "document_count": len(nodes),
+            "container_count": len([node for node in nodes
+                                    if node.get("obj_type") in {"folder", "container"}]),
+        }
 
     @staticmethod
     def _entry(raw: dict[str, Any]) -> IndexEntry:

@@ -122,6 +122,23 @@ class SyncRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no child nodes"):
             runner.prepare(self.run_dir)
 
+    def test_publish_report_includes_run_id_and_source_summary(self):
+        self._write_manifest()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=FakePublisher(),
+                             control_plane=FakeControlPlane())
+        runner.prepare(self.run_dir)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(report["run_id"], "run-1")
+        self.assertEqual(report["source"], {"document_count": 1, "container_count": 0})
+
+    def test_chinese_path_and_title_round_trip(self):
+        self.run_dir = Path(self.tmp.name) / "中文运行目录" / "runs" / "run-1"
+        self._write_manifest()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=FakePublisher(),
+                             control_plane=FakeControlPlane())
+        runner.prepare(self.run_dir)
+        self.assertTrue((self.run_dir / "source_nodes.json").exists())
+
     def test_publish_acquires_and_releases_lock(self):
         self._write_manifest()
         plane = FakeControlPlane()

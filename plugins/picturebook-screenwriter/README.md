@@ -25,6 +25,16 @@
 
 本插件不得编辑原始资料库，只能从它读取候选内容。多人同步时，目标飞书 Wiki 是唯一共享权威；人工修改优先于 AI 内容。若目标 Wiki 不可用，只能使用最后确认的本地缓存，且必须在提示中说明“离线”和“非权威”。
 
+## Feishu runtime commands
+
+配置文件使用 schema v2，明确区分 `source` 与 `target`。
+
+```powershell
+python .\skills\feishu-knowledge-store\scripts\sync_runner.py prepare --config <config> --run-dir <run_dir>
+python .\skills\feishu-knowledge-store\scripts\sync_runner.py publish --config <config> --run-dir <run_dir>
+python .\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config <config> --run-dir <run_dir>
+```
+
 ## 安装
 
 在仓库根目录执行：
