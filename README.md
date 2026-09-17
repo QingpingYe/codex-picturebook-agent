@@ -71,3 +71,13 @@ python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugi
 python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\craft-benchmark-check\scripts -p "test_*.py" -v
 node .\plugins\picturebook-screenwriter\skills\staging-planner\scripts\run_regression.js
 ```
+
+## Feishu preflight
+
+Before the first live sync, set the local config path and verify user authentication, source access, and target access:
+
+```powershell
+$env:PICTUREBOOK_KB_CONFIG = "$PWD\.picturebook-screenwriter\feishu-knowledge-base.json"
+lark-cli auth login
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_knowledge.py preflight --config $env:PICTUREBOOK_KB_CONFIG
+```
