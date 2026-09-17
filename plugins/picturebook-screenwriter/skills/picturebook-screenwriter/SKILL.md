@@ -11,7 +11,7 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 
 1. **Intent**: classify the request as `creation`, `revision`, `review`, or `planning`.
 2. **Brief gate**: for creation and revision, collect missing essentials before drafting: audience age band, target page count, language, story premise, tone, and any constraints. Ask at most three questions at once.
-3. **Knowledge loading**: read `../text-craft/SKILL.md` and the relevant references before drafting.
+3. **Knowledge loading**: read `../text-craft/SKILL.md` and the relevant references before drafting. For creation and revision, also invoke `../knowledge-loader/SKILL.md` to retrieve authoritative Feishu knowledge. If the user asks to synchronize the source Feishu Wiki, route the request through `../wiki-ingest/SKILL.md` and then `../feishu-knowledge-store/SKILL.md`.
 4. **Writing**: draft the requested artifact type: positioning, topic plan, worldview, characters, outline, or page-by-page script.
 5. **Pre-output check**: for page-by-page scripts, invoke `../craft-benchmark-check/SKILL.md`.
 6. **Quality review**: review the draft against craft principles and the benchmark report. Fix deterministic issues before showing the draft.
@@ -31,4 +31,5 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 - Keep role switching internal; do not simulate separate agents or fake inter-agent messages.
 - For scripts, include page number, text, image intent, and emotional beat.
 - Never silently save files.
-- If the user asks for Feishu sync, illustration generation, or multi-agent orchestration, explain that these are out of MVP scope.
+- For illustration generation or multi-agent orchestration, explain that these are out of scope.
+- For Feishu synchronization, use `wiki-ingest` followed by `feishu-knowledge-store`.

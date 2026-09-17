@@ -8,6 +8,7 @@ This repository is the active home for the Codex plugin. It packages:
 - Text craft methodology
 - Craft benchmark checks
 - Staging planner
+- 多人协作飞书知识库同步与权威检索
 
 The original WorkBuddy expert files are kept locally as a reference archive and
 are not part of this repository.
@@ -43,6 +44,17 @@ The plugin supports:
 - Picture-book text craft methodology and baselines
 - Quantified self-review of page text
 - Spatial planning for page-by-page storyboards
+- Feishu authoritative knowledge retrieval and synchronized ingestion
+
+## Feishu knowledge setup
+
+Each writer should:
+
+1. Run `lark-cli auth login` with their own account.
+2. Obtain read access to the source Feishu Wiki and write access to the target Feishu Wiki.
+3. Copy `plugins/picturebook-screenwriter/config/feishu-knowledge-base.example.json` to `.picturebook-screenwriter/feishu-knowledge-base.json`.
+
+The target Feishu Wiki is the authoritative shared knowledge source. Human edits are preserved. If the target Wiki is unavailable, the plugin can only use its last confirmed local cache after explicitly warning that the content is offline.
 
 ## Local development
 
