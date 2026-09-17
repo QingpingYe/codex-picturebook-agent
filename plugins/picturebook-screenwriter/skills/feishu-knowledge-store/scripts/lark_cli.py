@@ -1,0 +1,179 @@
+"""The sole subprocess boundary for Lark CLI access.
+
+All calls are JSON-oriented, injected runners make the boundary fully unit-testable,
+and CLI output is never surfaced without redacting credential-shaped values.
+"""
+
+import json
+import re
+import subprocess
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+
+class LarkCliError(RuntimeError):
+    pass
+
+
+class CliUnavailable(LarkCliError):
+    pass
+
+
+class AuthenticationError(LarkCliError):
+    pass
+
+
+class PermissionDenied(LarkCliError):
+    pass
+
+
+class ResourceNotFound(LarkCliError):
+    pass
+
+
+class RateLimited(LarkCliError):
+    pass
+
+
+class TransientFailure(LarkCliError):
+    pass
+
+
+class RevisionConflict(LarkCliError):
+    pass
+
+
+_TOKEN_VALUE = re.compile(
+    r"(?i)(\b(?:access[_-]?token|refresh[_-]?token|token|authorization|bearer)\b[\"']?\s*(?:=|:)+\s*[\"']?)([^\s,}\]\"']+)"
+)
+_LONG_SECRET = re.compile(r"(?<![\w-])[A-Za-z0-9_=-]{24,}(?![\w-])")
+
+
+class LarkCli:
+    """Typed command adapter.  Direct ``subprocess.run`` is intentionally isolated here."""
+
+    def __init__(
+        self,
+        preferred_binary: Path | str,
+        identity: str = "user",
+        runner: Callable[..., Any] = subprocess.run,
+    ) -> None:
+        if identity != "user":
+            raise ValueError("identity must be 'user'")
+        self.binary = Path(preferred_binary)
+        self.identity = identity
+        self.runner = runner
+
+    def preflight(self, target_root_token: str) -> dict[str, Any]:
+        """Verify user authentication and root readability without making mutations."""
+        auth = self._json("auth", "status", "--json", "--verify")
+        node = self.get_node(target_root_token)
+        return {"auth": auth, "root": node}
+
+    def get_node(self, node_token: str) -> dict[str, Any]:
+        return self._json(
+            "wiki", "+node-get", "--as", self.identity, "--node-token", node_token, "--format", "json"
+        )
+
+    def list_nodes(self, parent_node_token: str) -> list[dict[str, Any]]:
+        result = self._json(
+            "wiki", "+node-list", "--as", self.identity,
+            "--parent-node-token", parent_node_token, "--format", "json",
+        )
+        data = result.get("data", result)
+        nodes = data.get("items", data.get("nodes", [])) if isinstance(data, Mapping) else []
+        if not isinstance(nodes, list):
+            raise LarkCliError("unexpected node-list response")
+        return nodes
+
+    def create_doc(self, parent_node_token: str, title: str, content: str = "") -> dict[str, Any]:
+        return self._json(
+            "docs", "+create", "--as", self.identity, "--parent-token", parent_node_token,
+            "--title", title, "--doc-format", "markdown", "--content", content, "--format", "json",
+        )
+
+    def fetch_doc(self, doc_token: str) -> dict[str, Any]:
+        return self._json("docs", "+get", "--as", self.identity, "--doc", doc_token, "--format", "json")
+
+    def fetch_doc_revision(self, doc_token: str, revision_id: int) -> dict[str, Any]:
+        return self._json(
+            "docs", "+get", "--as", self.identity, "--doc", doc_token,
+            "--revision-id", str(revision_id), "--format", "json",
+        )
+
+    def update_doc(self, doc_token: str, revision_id: int, content: str) -> int:
+        result = self._json(
+            "docs", "+update", "--as", self.identity, "--doc", doc_token,
+            "--command", "overwrite", "--doc-format", "markdown",
+            "--revision-id", str(revision_id), "--content", content, "--format", "json",
+        )
+        try:
+            return int(result["data"]["document"]["revision_id"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise LarkCliError("update response did not include document revision_id") from error
+
+    def _json(self, *arguments: str) -> dict[str, Any]:
+        command = [str(self.binary), *arguments]
+        try:
+            completed = self.runner(
+                command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
+            )
+        except FileNotFoundError as error:
+            raise CliUnavailable(f"lark-cli executable unavailable: {self.binary}") from error
+        except OSError as error:
+            raise TransientFailure(f"could not execute lark-cli: {self._redact(str(error))}") from error
+
+        stdout = self._text(getattr(completed, "stdout", ""))
+        stderr = self._text(getattr(completed, "stderr", ""))
+        payload = self._final_json(stdout)
+        if getattr(completed, "returncode", 0) != 0 or self._is_error_payload(payload):
+            self._raise_command_error(payload, stdout, stderr)
+        if payload is None:
+            raise LarkCliError("lark-cli returned no JSON payload")
+        return payload
+
+    @staticmethod
+    def _text(value: Any) -> str:
+        return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value or "")
+
+    @staticmethod
+    def _final_json(stdout: str) -> dict[str, Any] | None:
+        for line in reversed(stdout.splitlines()):
+            try:
+                parsed = json.loads(line.strip())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _is_error_payload(payload: dict[str, Any] | None) -> bool:
+        return bool(payload and (payload.get("code") not in (None, 0, "0") or payload.get("error")))
+
+    def _raise_command_error(self, payload: dict[str, Any] | None, stdout: str, stderr: str) -> None:
+        serialized = json.dumps(payload, ensure_ascii=False) if payload is not None else ""
+        message = self._redact(" ".join(part for part in (serialized, stderr, stdout) if part).strip())
+        lowered = message.lower()
+        if "revision" in lowered and ("conflict" in lowered or "changed" in lowered):
+            error_type = RevisionConflict
+        elif any(term in lowered for term in ("auth", "unauth", "login", "access_token", "credential", "401")):
+            error_type = AuthenticationError
+        elif any(term in lowered for term in ("permission", "forbidden", "access denied", " 403")):
+            error_type = PermissionDenied
+        elif any(term in lowered for term in ("not found", " 404", "not_exist")):
+            error_type = ResourceNotFound
+        elif any(term in lowered for term in ("rate limit", "too many", " 429", "quota")):
+            error_type = RateLimited
+        else:
+            error_type = TransientFailure
+        raise error_type(message or "lark-cli command failed")
+
+    @staticmethod
+    def _redact(value: str) -> str:
+        value = _TOKEN_VALUE.sub(r"\1[REDACTED]", value)
+        return _LONG_SECRET.sub("[REDACTED]", value)
