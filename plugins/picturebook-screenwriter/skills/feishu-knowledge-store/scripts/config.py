@@ -54,7 +54,7 @@ def load_config(
         raise ConfigError("unexpected configuration fields: " + ", ".join(sorted(unknown)))
     if missing:
         raise ConfigError("missing configuration fields: " + ", ".join(sorted(missing)))
-    if raw["schema_version"] != 1:
+    if isinstance(raw["schema_version"], bool) or raw["schema_version"] != 1:
         raise ConfigError("schema_version must be 1")
 
     source_wiki_url = _nonempty_string(raw["source_wiki_url"], "source_wiki_url")

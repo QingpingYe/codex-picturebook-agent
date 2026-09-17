@@ -41,6 +41,10 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "identity must be 'user'"):
             self.load(config_json({"identity": "bot"}), {})
 
+    def test_boolean_schema_version_is_rejected(self):
+        with self.assertRaisesRegex(ConfigError, "schema_version must be 1"):
+            self.load(config_json({"schema_version": True}), {})
+
     def test_rejects_unknown_and_missing_fields(self):
         with self.assertRaisesRegex(ConfigError, "unexpected"):
             self.load(config_json({"extra": True}), {})

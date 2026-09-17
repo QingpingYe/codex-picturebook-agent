@@ -46,6 +46,7 @@ class RevisionConflict(LarkCliError):
 _TOKEN_VALUE = re.compile(
     r"(?i)(\b(?:access[_-]?token|refresh[_-]?token|token|authorization|bearer)\b[\"']?\s*(?:=|:)+\s*[\"']?)([^\s,}\]\"']+)"
 )
+_BEARER_CREDENTIAL = re.compile(r"(?i)(\bauthorization\b\s*:\s*bearer\s+|\bbearer\s+)(\S+)")
 _LONG_SECRET = re.compile(r"(?<![\w-])[A-Za-z0-9_=-]{24,}(?![\w-])")
 
 
@@ -145,6 +146,19 @@ class LarkCli:
                 continue
             if isinstance(parsed, dict):
                 return parsed
+        decoder = json.JSONDecoder()
+        starts = [0]
+        starts.extend(index + 1 for index, char in enumerate(stdout) if char == "\n")
+        for start in reversed(starts):
+            candidate = stdout[start:].lstrip()
+            if not candidate.startswith("{"):
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
         try:
             parsed = json.loads(stdout)
         except json.JSONDecodeError:
@@ -175,5 +189,6 @@ class LarkCli:
 
     @staticmethod
     def _redact(value: str) -> str:
+        value = _BEARER_CREDENTIAL.sub(r"\1[REDACTED]", value)
         value = _TOKEN_VALUE.sub(r"\1[REDACTED]", value)
         return _LONG_SECRET.sub("[REDACTED]", value)

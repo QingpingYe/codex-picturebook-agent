@@ -68,6 +68,17 @@ class LarkCliTests(unittest.TestCase):
             LarkCli(Path("lark-cli"), "user", runner).get_node("doccnSensitiveToken")
         self.assertNotIn("short-secret", str(raised.exception))
 
+    def test_error_messages_redact_bearer_credentials_regardless_of_length(self):
+        runner = FakeRunner(Completed("Authorization: Bearer shortsecret", returncode=1))
+        with self.assertRaises(AuthenticationError) as raised:
+            LarkCli(Path("lark-cli"), "user", runner).get_node("doccnSensitiveToken")
+        self.assertNotIn("shortsecret", str(raised.exception))
+
+    def test_final_json_accepts_diagnostics_before_pretty_printed_payload(self):
+        stdout = "diagnostic line\n{\n  \"data\": {\n    \"node\": {\"token\": \"root\"}\n  }\n}\n"
+        result = LarkCli(Path("lark-cli"), "user", FakeRunner(Completed(stdout))).get_node("root")
+        self.assertEqual(result["data"]["node"]["token"], "root")
+
 
 if __name__ == "__main__":
     unittest.main()
