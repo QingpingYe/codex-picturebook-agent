@@ -23,6 +23,17 @@ class PageCodecTests(unittest.TestCase):
         self.assertEqual(page.metadata["key"], "海外绘本/小老鼠迈尔斯/worldview")
         self.assertEqual(page.metadata["schema_version"], 1)
 
+    def test_remote_page_accepts_blank_line_before_metadata_json(self):
+        text = render_remote_page(
+            "# 小老鼠世界观\n\n正文。\n",
+            {"key": "海外绘本/小老鼠迈尔斯/worldview", "page_type": "worldview",
+             "source_node_tokens": ["K8EXw4Ja2i7mGnk1Tvgc4zcknkd"],
+             "source_revisions": {"K8EXw4Ja2i7mGnk1Tvgc4zcknkd": "r3"},
+             "last_ai_revision_id": 12},
+        ).replace("## 系统元数据（请勿编辑）\n```json", "## 系统元数据（请勿编辑）\n\n```json")
+        page = parse_remote_page(text)
+        self.assertEqual(page.metadata["key"], "海外绘本/小老鼠迈尔斯/worldview")
+
     def test_metadata_must_be_final_section(self):
         broken = "## 系统元数据（请勿编辑）\n```json\n{}\n```\n\n正文"
         with self.assertRaisesRegex(PageCodecError, "final section"):

@@ -95,7 +95,7 @@ def parse_remote_page(markdown: str) -> RemotePage:
     prefix, envelope = markdown.split(SYSTEM_HEADING, 1)
     if not prefix.endswith("\n\n"):
         raise PageCodecError("system metadata must be a separate final section")
-    match = re.fullmatch(r"\n```json\n(\{.*\})\n```\n*", envelope, flags=re.DOTALL)
+    match = re.fullmatch(r"\n\n?```json\n(\{.*\})\n```\n*", envelope, flags=re.DOTALL)
     if match is None:
         raise PageCodecError("system metadata must be the final section")
     try:
