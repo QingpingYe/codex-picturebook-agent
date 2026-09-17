@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from remote_markdown import normalize_remote_markdown
+
 
 SYSTEM_HEADING = "## 系统元数据（请勿编辑）"
 _PAGE_TYPES = frozenset((
@@ -99,6 +101,7 @@ def render_remote_page(body: str, metadata: Mapping[str, Any]) -> str:
 def parse_remote_page(markdown: str) -> RemotePage:
     if not isinstance(markdown, str):
         raise PageCodecError("remote page must be text")
+    markdown = normalize_remote_markdown(markdown, kind="page")
     count = markdown.count(SYSTEM_HEADING)
     if count != 1:
         raise PageCodecError("system metadata must occur exactly once")

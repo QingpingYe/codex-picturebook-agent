@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from lark_cli import RevisionConflict
 from models import IndexEntry
+from remote_markdown import normalize_remote_markdown
 
 
 class ControlPlaneCorrupt(ValueError):
@@ -119,6 +120,7 @@ class ControlPlane:
         content = document.get("content", document.get("markdown"))
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0 or not isinstance(content, str):
             raise ControlPlaneCorrupt("control document revision or content is invalid")
+        content = normalize_remote_markdown(content, kind="control")
         return revision, content
 
     def _new_lease(self, holder: str, now: datetime, revision: int) -> Lease:
