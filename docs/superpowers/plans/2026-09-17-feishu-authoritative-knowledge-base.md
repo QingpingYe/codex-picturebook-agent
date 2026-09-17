@@ -63,7 +63,7 @@ Task-local work bundles only may be created below <workspace>/.picturebook-scree
 - `update_doc` returns the full CLI result, not only the new revision. Any `partial_success`, `warnings`, or non-success result is treated as a failed publish and the page becomes `needs_review`.
 - No later script may call subprocess.run directly.
 
-- [ ] **Step 1: Write the failing config tests.**
+- [x] **Step 1: Write the failing config tests.**
 
 ~~~python
 class ConfigTests(unittest.TestCase):
@@ -83,12 +83,12 @@ class ConfigTests(unittest.TestCase):
             load_config(str(write_config(self.tmp, {"identity": "bot"})), self.tmp, {})
 ~~~
 
-- [ ] **Step 2: Run the test to verify failure.**
+- [x] **Step 2: Run the test to verify failure.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_config.py -v  
 Expected: FAIL because config.py does not exist.
 
-- [ ] **Step 3: Implement strict models and config parser.**
+- [x] **Step 3: Implement strict models and config parser.**
 
 ~~~python
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class IndexEntry:
 
 Accept only schema_version 1 and the five config fields shown in the test. Reject empty source URL/root token and lease values outside 15–120. Build CLI candidates from LARK_CLI_PATH, shutil.which("lark-cli"), then D:\lark-cli\lark-cli.exe, omitting duplicates.
 
-- [ ] **Step 4: Add the distributable config template.**
+- [x] **Step 4: Add the distributable config template.**
 
 ~~~json
 {
@@ -124,7 +124,7 @@ Accept only schema_version 1 and the five config fields shown in the test. Rejec
 }
 ~~~
 
-- [ ] **Step 5: Write failing CLI contract tests.**
+- [x] **Step 5: Write failing CLI contract tests.**
 
 ~~~python
 class LarkCliTests(unittest.TestCase):
@@ -141,7 +141,7 @@ class LarkCliTests(unittest.TestCase):
             client.update_doc("doccn1", 12, "# 更新")
 ~~~
 
-- [ ] **Step 6: Implement the adapter.**
+- [x] **Step 6: Implement the adapter.**
 
 ~~~python
 class LarkCli:
@@ -160,12 +160,12 @@ To prove write access without mutating production content, preflight must report
 
 
  
-- [ ] **Step 7: Run both test modules.**
+- [x] **Step 7: Run both test modules.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_config.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_lark_cli.py -v  
 Expected: PASS.
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ~~~powershell
 git add plugins/picturebook-screenwriter/config/feishu-knowledge-base.example.json plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/models.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/config.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/lark_cli.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_config.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_lark_cli.py
@@ -185,7 +185,7 @@ git commit -m "feat: add Feishu knowledge configuration and CLI"
 - Produces ControlPlane.read_index(), acquire_lock(holder, now), refresh_lock(lease, now), release_lock(lease), rebuild_index(pages).
 - Publisher and loader use these interfaces only.
 
-- [ ] **Step 1: Write failing page codec tests.**
+- [x] **Step 1: Write failing page codec tests.**
 
 ~~~python
 def test_remote_page_round_trip_excludes_system_metadata(self):
@@ -204,18 +204,18 @@ def test_metadata_must_be_final_section(self):
         parse_remote_page(broken)
 ~~~
 
-- [ ] **Step 2: Run tests to verify failure.**
+- [x] **Step 2: Run tests to verify failure.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_page_codec.py -v  
 Expected: FAIL because page_codec.py does not exist.
 
-- [ ] **Step 3: Implement the reader/system envelope.**
+- [x] **Step 3: Implement the reader/system envelope.**
 
 A candidate retains YAML frontmatter only in task-local wiki_staging. Publishing removes it from reader content and appends one final section named 系统元数据（请勿编辑） containing canonical JSON. The logical key is series_id/project_id/page_type. Reject missing/duplicate/final-position violations, invalid page types, changed keys, and invalid source token lists. Preserve all existing machine-data YAML blocks in the reader body.
 
 The system metadata must also contain a `source_revisions` map. Index recovery rebuilds `IndexEntry.source_revisions` from that map rather than replacing it with `unknown`, so incremental sync state survives a corrupted index document.
 
-- [ ] **Step 4: Write failing remote lease tests.**
+- [x] **Step 4: Write failing remote lease tests.**
 
 ~~~python
 def test_first_writer_acquires_lock_at_revision(self):
@@ -231,18 +231,18 @@ def test_bad_index_stops_writes(self):
         plane.read_index()
 ~~~
 
-- [ ] **Step 5: Implement remote control documents and CAS lease.**
+- [x] **Step 5: Implement remote control documents and CAS lease.**
 
 同步索引 begins with # AI_KB_INDEX_V1 and contains exactly one JSON object. 同步锁 begins with # AI_KB_LOCK_V1 and contains exactly one object with schema_version, run_id, holder, started_at, and expires_at.
 
 Acquire fetches the lock, verifies expiry, and calls update_doc with the fetched revision. On RevisionConflict it refetches once; if the new lock is non-expired it raises LockHeld. Refresh and release verify both run_id and holder. Validate every index entry and token before a publish. A malformed index stops writes; rebuild_index scans published page metadata, restores `source_revisions` from that metadata, and rejects duplicate logical keys.
 
-- [ ] **Step 6: Run Task 2 tests.**
+- [x] **Step 6: Run Task 2 tests.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_page_codec.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_control_plane.py -v  
 Expected: PASS.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ~~~powershell
 git add plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/page_codec.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/control_plane.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_page_codec.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_control_plane.py
@@ -266,16 +266,16 @@ git commit -m "feat: add authoritative page and control protocols"
 - Produces validated candidate Markdown and wiki_staging/_manifest.json.
 - Every manifest record includes logical key and source revision vector. No ingestion script writes target Wiki pages.
 
-- [ ] **Step 1: Copy generic source code.**
+- [x] **Step 1: Copy generic source code.**
 
 Copy only the listed generic files and templates from E:\picturebook-screenwriter\workbuddy-expert\skills\wiki-ingest. Do not copy caches, credentials, manifests, or WorkBuddy scripts.
 
-- [ ] **Step 2: Run the pre-port tests.**
+- [x] **Step 2: Run the pre-port tests.**
 
 Run: python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p "test_*.py" -v  
 Expected: FAIL because generate_entries.py imports write_library.canonical_title.
 
-- [ ] **Step 3: Write the failing duplicate-key test.**
+- [x] **Step 3: Write the failing duplicate-key test.**
 
 ~~~python
 def test_display_titles_cannot_share_logical_key(self):
@@ -285,7 +285,7 @@ def test_display_titles_cannot_share_logical_key(self):
     self.assertTrue(any(level == "FAIL" and "logical key" in reason for level, reason in issues))
 ~~~
 
-- [ ] **Step 4: Replace the WorkBuddy title dependency and rewrite the skill contract.**
+- [x] **Step 4: Replace the WorkBuddy title dependency and rewrite the skill contract.**
 
 ~~~python
 def candidate_key(frontmatter: dict[str, object]) -> str:
@@ -309,7 +309,7 @@ def test_manifest_contains_source_revision_vector(self):
     self.assertEqual(entry["source_revisions"], {"node-a": "17", "node-b": "28"})
 ~~~
 
-- [ ] **Step 5: Run portable-ingestion validation.**
+- [x] **Step 5: Run portable-ingestion validation.**
 
 Run: python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p "test_*.py" -v  
 Expected: PASS.
@@ -317,7 +317,7 @@ Expected: PASS.
 Run: rg -n -i "write_library|sync_state|workbuddy.*api|资料库 API" plugins/picturebook-screenwriter/skills/wiki-ingest  
 Expected: no matches.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ~~~powershell
 git add plugins/picturebook-screenwriter/skills/wiki-ingest
@@ -340,7 +340,7 @@ git commit -m "feat: add portable wiki ingest candidates"
 - Produces SyncService.prepare() and SyncService.apply().
 - The agent may author a MergeDecision, but Python validates every decision and owns every mutation.
 
-- [ ] **Step 1: Write failing publisher safety tests.**
+- [x] **Step 1: Write failing publisher safety tests.**
 
 ~~~python
 def test_initialize_creates_system_tree_only_once(self):
@@ -360,12 +360,12 @@ def test_revision_conflict_does_not_replace_human_page(self):
     self.assertEqual(self.cli.read(entry().doc_token), current_human_page().content)
 ~~~
 
-- [ ] **Step 2: Run publisher test to verify failure.**
+- [x] **Step 2: Run publisher test to verify failure.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_publisher.py -v  
 Expected: FAIL because publisher.py does not exist.
 
-- [ ] **Step 3: Implement idempotent docx tree and conditional updates.**
+- [x] **Step 3: Implement idempotent docx tree and conditional updates.**
 
 Every navigation container is a docx page, because the Wiki CLI creates docx nodes rather than folders. Initialize the system tree only while holding the remote lease; this prevents two first-run users from creating duplicate system nodes. Find children by exact title plus parent token, and fetch every page of children with a bounded pagination loop rather than relying on the default page size. Create leaf pages with docs +create --parent-token <parent node> --title <title> --doc-format markdown. Fetch and verify final metadata before adding an index record.
 
@@ -373,7 +373,7 @@ conditional_update refuses has_non_roundtrippable_content, then calls update_doc
 
 `has_non_roundtrippable_content` is computed by `page_codec.parse_remote_page`, not guessed from the request. It marks conservative resource and comment indications at [page_codec.py](E:\codex-picturebook-agent\.worktrees\codex-feishu-authoritative-knowledge\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\page_codec.py:152). Any unknown block/markdown marker that cannot be safely round-tripped still produces `needs_review`, never a publish.
 
-- [ ] **Step 4: Write failing merge tests.**
+- [x] **Step 4: Write failing merge tests.**
 
 ~~~python
 def test_source_only_change_can_publish(self):
@@ -393,7 +393,7 @@ def test_publish_that_reintroduces_human_deleted_content_is_rejected(self):
         validate_decision(requirement(), "# A\n\n旧设定\n", "# A\n", "# A\n\n人工补充\n")
 ~~~
 
-- [ ] **Step 5: Implement merge protocol and phase-separated sync command.**
+- [x] **Step 5: Implement merge protocol and phase-separated sync command.**
 
 ~~~python
 def classify(base: str, current: str, candidate: str, source_changed: bool) -> MergeRequirement:
@@ -421,7 +421,7 @@ sync_knowledge.py apply --config <path> --work-items <work-items.json> --decisio
 
 prepare acquires the remote lease then, for every existing entry, calls fetch_doc_revision(entry.doc_token, entry.last_ai_revision_id) for base and fetch_doc(entry.doc_token) for current before storing base/current/candidate in the task-local bundle. If the historical base is unavailable, it queues that entry rather than guessing a baseline. apply verifies the lease, refetches each page, permits exactly one fetch/merge retry after RevisionConflict, queues unsupported or undecidable pages, releases the lease in finally, and reports published/preserved/queued/failed/retried counts.
 
-- [ ] **Step 6: Add orchestration tests.**
+- [x] **Step 6: Add orchestration tests.**
 
 ~~~python
 def test_queue_preserves_human_page(self):
@@ -437,12 +437,12 @@ def test_second_conflict_queues_after_one_retry(self):
 ~~~
 
  
-- [ ] **Step 7: Run the Task 4 test suite.**
+- [x] **Step 7: Run the Task 4 test suite.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_publisher.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_merge_protocol.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_sync_knowledge.py -v  
 Expected: PASS.
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ~~~powershell
 git add plugins/picturebook-screenwriter/skills/feishu-knowledge-store
@@ -467,7 +467,7 @@ git commit -m "feat: add human-priority Feishu knowledge sync"
 - Produces a per-user, timestamped offline cache that `load(..., allow_offline_cache=True)` may use only when the target Wiki is unreachable.
 - Saved writing artifacts include knowledge_provenance for every source used.
 
-- [ ] **Step 1: Write failing loader and entry contract tests.**
+- [x] **Step 1: Write failing loader and entry contract tests.**
 
 ~~~python
 def test_loader_reads_remote_page_and_strips_metadata(self):
@@ -488,34 +488,34 @@ def test_offline_cache_marks_evidence_and_warns(self):
     self.assertEqual(bundle.fetched_at, "2026-09-17T10:00:00+08:00")
 ~~~
 
-- [ ] **Step 2: Run tests to prove failure.**
+- [x] **Step 2: Run tests to prove failure.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/knowledge-loader/scripts/test_load_knowledge.py plugins/picturebook-screenwriter/tests/test_skill_contract.py -v  
 Expected: FAIL because loader and integration are absent.
 
-- [ ] **Step 3: Implement read-only retrieval.**
+- [x] **Step 3: Implement read-only retrieval.**
 
 Filter remote index entries by project/page type before fetching docx. Remove system metadata through parse_remote_page, score exact Chinese query terms, sort by score descending then key, and cap default output at eight pages. Include needs_review pages but warn in Chinese with title and conflict link. Never treat local staging as a knowledge source.
 
 After a successful remote load, write the returned bundle to `<workspace>/.picturebook-screenwriter/cache/<user>/knowledge-bundle.json` together with `fetched_at` and each source revision. On target-Wiki failure, `load(query, allow_offline_cache=True)` may read this cache, but the returned bundle must be marked `offline=true` and the summary must tell the user that it is from the last confirmed cache, not from the authoritative Wiki. Remote reads remain the only source of truth; cache is per-user and non-authoritative.
 
-- [ ] **Step 4: Integrate skill routing and documentation.**
+- [x] **Step 4: Integrate skill routing and documentation.**
 
 Route synchronization to wiki-ingest then prepare/validate/apply. Creation and revision load text-craft plus knowledge-loader before drafting. Preserve the existing confirmation gate. Approved saved artifacts add knowledge_provenance containing key, doc_token, revision_id.
 
 Update plugin descriptions to say 多人协作飞书知识库同步与权威检索. Document personal lark-cli auth login, source/target ACLs, config copying, human-priority behavior, and recovery for lock held, bad index, and a local CLI token-store lock.
 
-- [ ] **Step 5: Run the loader and entry contract tests.**
+- [x] **Step 5: Run the loader and entry contract tests.**
 
 Run: python -m unittest plugins/picturebook-screenwriter/skills/knowledge-loader/scripts/test_load_knowledge.py plugins/picturebook-screenwriter/tests/test_skill_contract.py -v  
 Expected: PASS.
 
-- [ ] **Step 6: Validate the plugin manifest.**
+- [x] **Step 6: Validate the plugin manifest.**
 
 Run: python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter  
 Expected: validation succeeds.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ~~~powershell
 git add README.md plugins/picturebook-screenwriter
@@ -532,7 +532,7 @@ git commit -m "feat: integrate authoritative knowledge into writing"
 - Exercises all public interfaces through an in-memory fake CLI; it never mutates the production Wiki.
 - Documents a non-mutating live preflight command.
 
-- [ ] **Step 1: Write the full offline scenario.**
+- [x] **Step 1: Write the full offline scenario.**
 
 ~~~python
 def test_two_sync_users_and_human_edit_never_lose_human_content(self):
@@ -548,7 +548,7 @@ def test_two_sync_users_and_human_edit_never_lose_human_content(self):
 
 Also cover source-only update of one page, zero writes when unchanged, corrupted-index stop, resource-bearing page queue, single retry after conflict, and loader revision citations.
 
-- [ ] **Step 2: Run all checks.**
+- [x] **Step 2: Run all checks.**
 
 Run: python -m unittest discover -s plugins/picturebook-screenwriter -p "test_*.py" -v  
 Expected: PASS.
@@ -559,7 +559,7 @@ Expected: existing regression suite passes.
 Run: python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\craft-benchmark-check\scripts -p "test_*.py" -v  
 Expected: existing craft benchmark tests pass.
 
-- [ ] **Step 3: Add the live preflight instructions.**
+- [x] **Step 3: Add the live preflight instructions.**
 
 ~~~powershell
 $env:PICTUREBOOK_KB_CONFIG = "$PWD\.picturebook-screenwriter\feishu-knowledge-base.json"
@@ -569,7 +569,7 @@ python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\
 
 Expected: identity verification, source access, target root resolution, and target space_id; no Wiki node or page is created.
 
-- [ ] **Step 4: Validate the plugin and diff.**
+- [x] **Step 4: Validate the plugin and diff.**
 
 Run: python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter  
 Expected: validation succeeds.
@@ -577,7 +577,7 @@ Expected: validation succeeds.
 Run: git diff --check  
 Expected: no whitespace errors.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ~~~powershell
 git add README.md plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_end_to_end.py
