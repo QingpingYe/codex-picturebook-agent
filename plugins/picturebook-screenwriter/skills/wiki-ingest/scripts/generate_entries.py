@@ -16,9 +16,16 @@ import json
 import os
 import sys
 import re
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from glob import glob
 from collections import defaultdict
+
+STORE_SCRIPTS = Path(__file__).resolve().parents[2] / "feishu-knowledge-store" / "scripts"
+if str(STORE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(STORE_SCRIPTS))
+
+from shared_schema import logical_key, normalize_project_id, normalize_series_id
 
 # --- Config ---
 STAGING_DIR = "wiki_staging"
@@ -44,11 +51,10 @@ COMMON_TYPES = ("ip-overview", "creation-standards", "quality-rubric", "market-r
 
 def candidate_key(frontmatter: dict[str, object]) -> str:
     """Return the stable logical key used by duplicate and sync layers."""
-    return "/".join((
-        str(frontmatter.get("series_id", "")),
-        str(frontmatter.get("project_id", "")),
-        str(frontmatter["page_type"]),
-    ))
+    page_type = str(frontmatter["page_type"])
+    series_id = normalize_series_id(page_type, str(frontmatter.get("series_id", "")))
+    project_id = normalize_project_id(page_type, str(frontmatter.get("project_id", "")))
+    return logical_key(series_id, project_id, page_type)
 
 
 def _string_list(value: object) -> list[str]:
@@ -227,12 +233,12 @@ def parse_series_project(rel_path):
     # Root files (index.md, log.md)
     if len(parts) == 1:
         name = parts[0].replace(".md", "")
-        return ("", "", name)
+        return ("system", "system", name)
 
     # common/ files
     if len(parts) == 2 and parts[0] == "common":
         name = parts[1].replace(".md", "")
-        return ("海外绘本", "", name)
+        return ("海外绘本", "common", name)
 
     # Project files
     if len(parts) == 2:

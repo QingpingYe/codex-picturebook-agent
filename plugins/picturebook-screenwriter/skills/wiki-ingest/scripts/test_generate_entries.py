@@ -68,8 +68,8 @@ class TestCrossFileDup(unittest.TestCase):
         self.assertEqual(issues, [])
 
     def test_display_titles_cannot_share_logical_key(self):
-        _file(self.d, "common/a.md", title="世界设定", page_type="worldview")
-        _file(self.d, "common/b.md", title="另一个世界设定", page_type="worldview")
+        _file(self.d, "projA/a.md", title="世界设定", page_type="worldview", project="小老鼠迈尔斯")
+        _file(self.d, "projA/b.md", title="另一个世界设定", page_type="worldview", project="小老鼠迈尔斯")
         files = ge.discover_files(self.d)
         issues = ge.check_cross_file_dups(files)
         self.assertTrue(any(level == "FAIL" and "logical key" in reason
@@ -102,6 +102,13 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(entry["key"], "海外绘本/小老鼠迈尔斯/worldview")
         self.assertEqual(entry["source_revisions"],
                          {"node-a": "17", "node-b": "28"})
+
+    def test_manifest_uses_common_for_series_level_pages(self):
+        candidate = _file(self.tmp.name, "common/creation-standards.md",
+                          title="创作规范", page_type="creation-standards")
+        manifest = ge.build_manifest(self.d, {candidate: []})
+        entry = manifest["entries"][0]
+        self.assertEqual(entry["key"], "海外绘本/common/creation-standards")
 
 
 class TestSourceRevisionVector(unittest.TestCase):

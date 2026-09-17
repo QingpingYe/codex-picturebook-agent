@@ -6,16 +6,12 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from remote_markdown import normalize_remote_markdown
+from shared_schema import PAGE_TYPES
+from shared_schema import logical_key as shared_logical_key
+from shared_schema import normalize_project_id, normalize_series_id, validate_revisions
 
 
 SYSTEM_HEADING = "## 系统元数据（请勿编辑）"
-_PAGE_TYPES = frozenset((
-    "worldview", "characters", "content_spec", "correction_register",
-    "creative_traits", "quotes", "props", "topic_fingerprint", "reference_index",
-    "ip-overview", "creation-standards", "quality-rubric", "market-research",
-    "content-spec", "corrections", "references", "creative-feature-ledger",
-    "golden-sentence-registry", "prop-registry", "story-fingerprint-spec", "index", "log",
-))
 _RESOURCE_OR_COMMENT = re.compile(
     r"(?is)(<!--|<\s*(?:comment|resource|attachment)\b|\[\s*(?:资源|附件|resource|attachment)\s*\])"
 )
@@ -42,15 +38,10 @@ def logical_key(page: Candidate | Mapping[str, Any]) -> str:
     if isinstance(page, Candidate):
         return page.metadata["key"]
     metadata = page
-    try:
-        parts = (metadata["series_id"], metadata["project_id"], metadata["page_type"])
-    except KeyError as error:
-        raise PageCodecError(f"missing {error.args[0]}") from error
-    if any(not isinstance(part, str) or not part.strip() or "/" in part for part in parts):
-        raise PageCodecError("logical key components must be non-empty strings without '/'")
-    if parts[2] not in _PAGE_TYPES:
-        raise PageCodecError("invalid page_type")
-    return "/".join(parts)
+    page_type = metadata.get("page_type")
+    series_id = normalize_series_id(page_type, metadata.get("series_id", ""))
+    project_id = normalize_project_id(page_type, metadata.get("project_id", ""))
+    return shared_logical_key(series_id, project_id, page_type)
 
 
 def parse_candidate(markdown: str) -> Candidate:
@@ -68,14 +59,10 @@ def parse_candidate(markdown: str) -> Candidate:
     source_revision_parts = frontmatter.get("source_revision_parts")
     if not isinstance(source_node_tokens, list) or not isinstance(source_revision_parts, list):
         raise PageCodecError("source_node_tokens and source_revision_parts must be lists")
-    if len(source_node_tokens) != len(source_revision_parts):
-        raise PageCodecError("source_node_tokens and source_revision_parts must have equal length")
-    if any(not isinstance(token, str) or not token.strip() or not isinstance(revision, str) or not revision.strip()
-           for token, revision in zip(source_node_tokens, source_revision_parts)):
-        raise PageCodecError("source_node_tokens and source_revision_parts must be non-empty text")
-    if len(set(source_node_tokens)) != len(source_node_tokens):
-        raise PageCodecError("source_node_tokens must be unique")
-    source_revisions = dict(zip(source_node_tokens, source_revision_parts))
+    try:
+        source_revisions = validate_revisions(source_node_tokens, source_revision_parts)
+    except ValueError as error:
+        raise PageCodecError(str(error)) from error
     metadata = {
         "schema_version": 1,
         "key": key,
@@ -129,7 +116,7 @@ def _validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     if metadata["schema_version"] != 1:
         raise PageCodecError("unsupported metadata schema_version")
     page_type = metadata["page_type"]
-    if not isinstance(page_type, str) or page_type not in _PAGE_TYPES:
+    if not isinstance(page_type, str) or page_type not in PAGE_TYPES:
         raise PageCodecError("invalid page_type")
     key = metadata["key"]
     if not isinstance(key, str) or key.count("/") != 2 or key.split("/")[-1] != page_type:
