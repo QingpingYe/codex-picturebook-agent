@@ -5,8 +5,10 @@ and CLI output is never surfaced without redacting credential-shaped values.
 """
 
 import json
+import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -76,25 +78,31 @@ class LarkCli:
             "wiki", "+node-get", "--as", self.identity, "--node-token", node_token, "--format", "json"
         )
 
-    def list_nodes(self, parent_node_token: str) -> list[dict[str, Any]]:
-        result = self._json(
+    def list_nodes(self, space_id: str, parent_node_token: str | None = None,
+                   page_limit: int = 10) -> list[dict[str, Any]]:
+        args = [
             "wiki", "+node-list", "--as", self.identity,
-            "--parent-node-token", parent_node_token, "--format", "json",
-        )
-        data = result.get("data", result)
-        nodes = data.get("items", data.get("nodes", [])) if isinstance(data, Mapping) else []
-        if not isinstance(nodes, list):
-            raise LarkCliError("unexpected node-list response")
-        return nodes
+            "--space-id", space_id, "--page-all", "--page-limit", str(page_limit), "--format", "json",
+        ]
+        if parent_node_token:
+            args.extend(["--parent-node-token", parent_node_token])
+        return self._items(self._json(*args))
 
     def create_doc(self, parent_node_token: str, title: str, content: str = "") -> dict[str, Any]:
-        return self._json(
-            "docs", "+create", "--as", self.identity, "--parent-token", parent_node_token,
-            "--title", title, "--doc-format", "markdown", "--content", content, "--format", "json",
-        )
+        path = self._temp_content_file(content)
+        try:
+            return self._json(
+                "docs", "+create", "--as", self.identity, "--parent-token", parent_node_token,
+                "--title", title, "--doc-format", "markdown", "--content", f"@{path}",
+            )
+        finally:
+            Path(path).unlink(missing_ok=True)
 
     def fetch_doc(self, doc_token: str) -> dict[str, Any]:
-        return self._json("docs", "+get", "--as", self.identity, "--doc", doc_token, "--format", "json")
+        return self._json(
+            "docs", "+fetch", "--as", self.identity,
+            "--doc", doc_token, "--doc-format", "markdown",
+        )
 
     def fetch_doc_revision(self, doc_token: str, revision_id: int) -> dict[str, Any]:
         return self._json(
@@ -103,11 +111,15 @@ class LarkCli:
         )
 
     def update_doc(self, doc_token: str, revision_id: int, content: str) -> dict[str, Any]:
-        result = self._json(
-            "docs", "+update", "--as", self.identity, "--doc", doc_token,
-            "--command", "overwrite", "--doc-format", "markdown",
-            "--revision-id", str(revision_id), "--content", content, "--format", "json",
-        )
+        path = self._temp_content_file(content)
+        try:
+            result = self._json(
+                "docs", "+update", "--as", self.identity, "--doc", doc_token,
+                "--command", "overwrite", "--doc-format", "markdown",
+                "--revision-id", str(revision_id), "--content", f"@{path}",
+            )
+        finally:
+            Path(path).unlink(missing_ok=True)
         try:
             int(result["data"]["document"]["revision_id"])
             return result
@@ -134,23 +146,62 @@ class LarkCli:
             raise LarkCliError("lark-cli returned no JSON payload")
         return payload
 
+    def _raw(self, *arguments: str) -> str:
+        command = [str(self.binary), *arguments]
+        try:
+            completed = self.runner(
+                command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+        except FileNotFoundError as error:
+            raise CliUnavailable(f"lark-cli executable unavailable: {self.binary}") from error
+        except OSError as error:
+            raise TransientFailure(f"could not execute lark-cli: {self._redact(str(error))}") from error
+        return self._text(getattr(completed, "stdout", "")) + self._text(getattr(completed, "stderr", ""))
+
+    @staticmethod
+    def _temp_content_file(content: str) -> Path:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", delete=False) as file:
+            file.write(content)
+            return Path(file.name)
+
+    @staticmethod
+    def _items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        data = payload.get("data", payload)
+        items = data.get("items", data.get("nodes", [])) if isinstance(data, Mapping) else []
+        if not isinstance(items, list):
+            raise LarkCliError("unexpected node-list response")
+        return items
+
+    def verify_supported_version(self) -> dict[str, str]:
+        text = self._raw("--version").strip()
+        match = re.search(r"lark-cli.*?([0-9]+\.[0-9]+\.[0-9]+)", text, flags=re.IGNORECASE)
+        if match is None:
+            raise CliUnavailable("未识别 lark-cli 版本")
+        version = match.group(1)
+        if version not in {"1.0.95", "1.0.96"}:
+            raise CliUnavailable(f"暂不支持的 lark-cli 版本：{version}")
+        return {"version": version}
+
     @staticmethod
     def _text(value: Any) -> str:
         return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value or "")
 
     @staticmethod
     def _final_json(stdout: str) -> dict[str, Any] | None:
-        for line in reversed(stdout.splitlines()):
-            try:
-                parsed = json.loads(line.strip())
-            except json.JSONDecodeError:
-                continue
+        stripped = stdout.strip()
+        try:
+            parsed = json.loads(stripped)
             if isinstance(parsed, dict):
                 return parsed
+        except json.JSONDecodeError:
+            pass
+
         decoder = json.JSONDecoder()
-        starts = [0]
-        starts.extend(index + 1 for index, char in enumerate(stdout) if char == "\n")
-        for start in reversed(starts):
+        candidates: list[dict[str, Any]] = []
+        for start, char in enumerate(stdout):
+            if char != "{":
+                continue
             candidate = stdout[start:].lstrip()
             if not candidate.startswith("{"):
                 continue
@@ -159,12 +210,10 @@ class LarkCli:
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
-                return parsed
-        try:
-            parsed = json.loads(stdout)
-        except json.JSONDecodeError:
-            return None
-        return parsed if isinstance(parsed, dict) else None
+                if "data" in parsed or "code" in parsed:
+                    return parsed
+                candidates.append(parsed)
+        return candidates[0] if candidates else None
 
     @staticmethod
     def _is_error_payload(payload: dict[str, Any] | None) -> bool:

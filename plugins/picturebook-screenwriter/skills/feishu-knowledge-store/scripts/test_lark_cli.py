@@ -36,6 +36,54 @@ def revision_conflict():
 
 
 class LarkCliTests(unittest.TestCase):
+    def test_notice_is_not_used_as_business_data(self):
+        business = {
+            "code": 0,
+            "data": {"items": [{"token": "A"}, {"token": "B"}, {"token": "C"}]},
+            "_notice": {"update": {"current": "1.0.95", "latest": "1.0.96"}},
+        }
+        stdout = json.dumps(business)
+        result = LarkCli._final_json(stdout)
+        self.assertEqual(result["data"]["items"][0]["token"], "A")
+        self.assertIn("_notice", result)
+
+    def test_fetch_doc_uses_fetch_and_not_get(self):
+        runner = FakeRunner(ok({"data": {"document": {"content": "# 正文"}}}))
+        client = LarkCli(Path("lark-cli"), "user", runner)
+        client.fetch_doc("doccn1")
+        self.assertIn("+fetch", runner.calls[-1])
+        self.assertNotIn("+get", runner.calls[-1])
+
+    def test_list_nodes_requires_space_id_and_uses_pagination(self):
+        runner = FakeRunner(ok({"data": {"items": [{"title": "节点"}]}}))
+        client = LarkCli(Path("lark-cli"), "user", runner)
+        nodes = client.list_nodes("space-1", "node-1")
+        self.assertEqual(nodes, [{"title": "节点"}])
+        self.assertIn("--space-id", runner.calls[-1])
+        self.assertIn("space-1", runner.calls[-1])
+        self.assertIn("--page-all", runner.calls[-1])
+
+    def test_update_doc_uses_temp_file_for_long_content(self):
+        runner = FakeRunner(ok({"data": {"document": {"revision_id": 13}}}))
+        client = LarkCli(Path("lark-cli"), "user", runner)
+        result = client.update_doc("doccn1", 12, "# 正文" * 500)
+        self.assertIn("--revision-id", runner.calls[-1])
+        content_arg = runner.calls[-1][runner.calls[-1].index("--content") + 1]
+        self.assertTrue(content_arg.startswith("@"))
+        self.assertFalse(Path(content_arg[1:]).exists())
+
+    def test_supported_version_is_detected(self):
+        runner = FakeRunner(Completed("lark-cli version 1.0.95\n"))
+        client = LarkCli(Path("lark-cli"), "user", runner)
+        self.assertEqual(client.verify_supported_version(), {"version": "1.0.95"})
+
+    def test_final_json_prefers_top_level_payload_when_notice_is_a_separate_line(self):
+        business = {"code": 0, "data": {"items": [{"token": "A"}]}}
+        notice = {"_notice": {"update": {"current": "1.0.95", "latest": "1.0.96"}}}
+        stdout = json.dumps(business) + "\n" + json.dumps(notice) + "\n"
+        result = LarkCli._final_json(stdout)
+        self.assertEqual(result["data"]["items"][0]["token"], "A")
+
     def test_update_uses_current_revision_as_precondition(self):
         runner = FakeRunner(ok({"data": {"document": {"revision_id": 13}}}))
         client = LarkCli(Path("lark-cli"), "user", runner)
