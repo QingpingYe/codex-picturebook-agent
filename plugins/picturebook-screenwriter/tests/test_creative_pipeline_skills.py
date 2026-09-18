@@ -6,6 +6,7 @@ ROOT = Path(__file__).parents[1]
 STORY = ROOT / "skills" / "story-planning" / "SKILL.md"
 PRE_CREATE = ROOT / "skills" / "pre_create-baseline" / "SKILL.md"
 IN_CREATE = ROOT / "skills" / "in_create-baseline" / "SKILL.md"
+POST_CREATE = ROOT / "skills" / "post_create-baseline" / "SKILL.md"
 
 
 class StoryPlanningTests(unittest.TestCase):
@@ -29,6 +30,13 @@ class InCreateBaselineTests(unittest.TestCase):
         self.assertIn("结构骨架", text)
         self.assertIn("边界卡", text)
         self.assertIn("text-craft", text)
+
+
+class PostCreateBaselineTests(unittest.TestCase):
+    def test_post_create_is_polish_not_rewrite(self):
+        text = POST_CREATE.read_text(encoding="utf-8")
+        self.assertIn("只做打磨", text)
+        self.assertIn("不得新增", text)
 
 
 if __name__ == "__main__":
