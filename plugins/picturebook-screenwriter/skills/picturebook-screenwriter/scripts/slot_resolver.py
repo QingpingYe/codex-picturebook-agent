@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 
 SLOTS = ("pre_create", "in_create", "post_create", "pre_output", "quality")
-ARTIFACT_TYPES = ("positioning", "topic", "worldview", "character", "outline", "script")
+ARTIFACT_TYPES = ("positioning", "topic_plan", "worldview", "characters", "outline", "script")
 
 
 @dataclass(frozen=True)
