@@ -31,6 +31,40 @@ class PluginContractTests(unittest.TestCase):
             with self.subTest(intent=intent):
                 self.assertIn(intent, text)
 
+    def test_contract_declares_creative_pipeline_skills(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        for skill in (
+            "story-planning",
+            "pre_create-baseline",
+            "in_create-baseline",
+            "post_create-baseline",
+            "pre_output-baseline",
+            "quality-baseline",
+        ):
+            with self.subTest(skill=skill):
+                self.assertIn(skill, contract["skills"])
+
+    def test_contract_declares_creative_pipeline_boundary(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        pipeline = contract["creative_pipeline"]
+        self.assertEqual(pipeline["resolver"], "skills/picturebook-screenwriter/scripts/slot_resolver.py")
+        self.assertEqual(
+            pipeline["slots"],
+            ["pre_create", "in_create", "post_create", "pre_output", "quality"],
+        )
+        self.assertEqual(pipeline["default_tier"], "baseline")
+        for slot in pipeline["slots"]:
+            with self.subTest(slot=slot):
+                self.assertIn(pipeline["slot_skills"][slot], contract["skills"])
+        self.assertEqual(
+            pipeline["lightweight_mode"],
+            {
+                "skill": "story-planning",
+                "trigger": "explicit_user_request",
+                "write_policy": "dialog_only",
+            },
+        )
+
     def test_entry_skill_declares_confirmation_and_export_gates(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
         self.assertIn("确认门", text)

@@ -8,7 +8,13 @@
     "staging-planner",
     "wiki-ingest",
     "feishu-knowledge-store",
-    "knowledge-loader"
+    "knowledge-loader",
+    "story-planning",
+    "pre_create-baseline",
+    "in_create-baseline",
+    "post_create-baseline",
+    "pre_output-baseline",
+    "quality-baseline"
   ],
   "intents": [
     "creation",
@@ -36,6 +42,29 @@
     "exported",
     "rejected"
   ],
+  "creative_pipeline": {
+    "resolver": "skills/picturebook-screenwriter/scripts/slot_resolver.py",
+    "slots": [
+      "pre_create",
+      "in_create",
+      "post_create",
+      "pre_output",
+      "quality"
+    ],
+    "default_tier": "baseline",
+    "slot_skills": {
+      "pre_create": "pre_create-baseline",
+      "in_create": "in_create-baseline",
+      "post_create": "post_create-baseline",
+      "pre_output": "pre_output-baseline",
+      "quality": "quality-baseline"
+    },
+    "lightweight_mode": {
+      "skill": "story-planning",
+      "trigger": "explicit_user_request",
+      "write_policy": "dialog_only"
+    }
+  },
   "write_policy": {
     "default": "dialog_only",
     "allowed_write_triggers": [
