@@ -1,5 +1,10 @@
 import unittest
-from dependencies import build_dependency_record, render_dependency_record, parse_dependency_record
+from dependencies import (
+    build_dependency_record,
+    find_stale_dependencies,
+    parse_dependency_record,
+    render_dependency_record,
+)
 from load_knowledge import KnowledgeEvidence, KnowledgeEvidenceBundle
 
 
@@ -50,6 +55,25 @@ class DependencyTests(unittest.TestCase):
         rendered = render_dependency_record(record)
         parsed = parse_dependency_record(rendered)
         self.assertEqual(parsed, record)
+
+    def test_revision_change_is_stale(self):
+        record = build_dependency_record(BUNDLE, "demo-script-v1", "script")
+        current = {
+            "海外绘本/小老鼠迈尔斯/worldview": {
+                "key": "海外绘本/小老鼠迈尔斯/worldview",
+                "doc_token": "doc-a",
+                "revision_id": 45,
+                "status": "published",
+            }
+        }
+        stale = find_stale_dependencies(record, current)
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0].current_revision_id, 45)
+
+    def test_missing_key_is_stale(self):
+        record = build_dependency_record(BUNDLE, "demo-script-v1", "script")
+        stale = find_stale_dependencies(record, {})
+        self.assertEqual(stale[0].reason, "missing")
 
 
 if __name__ == "__main__":

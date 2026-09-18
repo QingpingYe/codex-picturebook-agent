@@ -19,6 +19,37 @@ class DependencyRecord:
     evidence: tuple[Mapping[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class StaleReason:
+    key: str
+    reason: str
+    locked_revision_id: int | None
+    current_revision_id: int | None
+    status: str | None
+
+
+def find_stale_dependencies(record: DependencyRecord,
+                            current_index: Mapping[str, Mapping[str, Any]]) -> tuple[StaleReason, ...]:
+    stale: list[StaleReason] = []
+    for item in record.evidence:
+        key = item["key"]
+        current = current_index.get(key)
+        if current is None:
+            stale.append(StaleReason(key, "missing", item["revision_id"], None, None))
+            continue
+        if current.get("revision_id") != item["revision_id"]:
+            stale.append(StaleReason(
+                key, "revision_changed", item["revision_id"],
+                current.get("revision_id"), current.get("status"),
+            ))
+        if current.get("status") == "needs_review":
+            stale.append(StaleReason(
+                key, "needs_review", item["revision_id"],
+                current.get("revision_id"), "needs_review",
+            ))
+    return tuple(stale)
+
+
 def build_dependency_record(bundle: Mapping[str, Any] | KnowledgeEvidenceBundle,
                             artifact_id: str, artifact_type: str) -> DependencyRecord:
     if _bundle_offline(bundle):
