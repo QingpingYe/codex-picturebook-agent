@@ -9,6 +9,7 @@ IN_CREATE = ROOT / "skills" / "in_create-baseline" / "SKILL.md"
 POST_CREATE = ROOT / "skills" / "post_create-baseline" / "SKILL.md"
 PRE_OUTPUT = ROOT / "skills" / "pre_output-baseline" / "SKILL.md"
 QUALITY = ROOT / "skills" / "quality-baseline" / "SKILL.md"
+ENTRY = ROOT / "skills" / "picturebook-screenwriter" / "SKILL.md"
 
 
 class StoryPlanningTests(unittest.TestCase):
@@ -53,6 +54,14 @@ class QualityBaselineTests(unittest.TestCase):
         text = QUALITY.read_text(encoding="utf-8")
         self.assertIn("不重复", text)
         self.assertIn("跨产物一致性", text)
+
+
+class EntryWorkflowTests(unittest.TestCase):
+    def test_entry_uses_all_five_slots(self):
+        text = ENTRY.read_text(encoding="utf-8")
+        for slot in ("pre_create", "in_create", "post_create", "pre_output", "quality"):
+            with self.subTest(slot=slot):
+                self.assertIn(f"{slot}-baseline", text)
 
 
 if __name__ == "__main__":

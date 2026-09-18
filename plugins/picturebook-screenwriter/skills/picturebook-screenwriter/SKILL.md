@@ -18,6 +18,16 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 7. **确认门**：用中文呈现草稿和基准摘要，等待用户批准后才允许保存文件。
 8. **Landing**: save only after explicit approval. Use versioned Markdown files in the current workspace, such as `picturebook/positioning_v1.md`.
 
+## Editorial Slots
+
+1. `pre_create-baseline`：复核简报与权威知识缺口。
+2. `in_create-baseline`：装载工艺方法、结构骨架和边界卡。
+3. `post_create-baseline`：对完整草稿做表达层打磨。
+4. `pre_output-baseline`：执行廉价代理扫描和语义判定。
+5. `quality-baseline`：补读者视角、朗读测试、跨产物一致性和漏检复查。
+
+所有槽位通过 `scripts/slot_resolver.py` 选择，当前默认使用 baseline 层。未来新增项目层或系列层时，不得改变入口契约。只有用户显式要求轻量模式时，才改用 `../story-planning/SKILL.md`；该技能不落盘，且不得替代完整编辑流程。
+
 ## Intent Routes
 
 - `creation`: enter briefing, knowledge loading, drafting, self review, quality review, and confirmation.
