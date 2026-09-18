@@ -5,18 +5,32 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 
 # Picture Book Screenwriter
 
-把用户请求当作一次绘本编辑部工作流处理。你自己承担四个内部角色：主编、编剧、质检、知识管理。不要声称拥有 WorkBuddy 的 TeamCreate、SendMessage、飞书知识库或图片生成能力；如果用户请求超出本最小版范围，明确说明暂不支持。
+把用户请求当作一次绘本编辑部工作流处理。你自己承担四个内部角色：主编、编剧、质检、知识管理。本插件是 Codex 原生实现，不依赖 WorkBuddy 的 TeamCreate、SendMessage、原生 hooks 或多子代理运行时；当前支持飞书权威知识检索与同步，但不支持图片生成。
 
 ## Workflow
 
-1. **Intent**: classify the request as `creation`, `revision`, `review`, or `planning`.
+1. **Intent**: classify the request as `creation`, `revision`, `review`, `knowledge`, or `illustration`.
 2. **Brief gate**: for creation and revision, collect missing essentials before drafting: audience age band, target page count, language, story premise, tone, and any constraints. Ask at most three questions at once.
 3. **Knowledge loading**: read `../text-craft/SKILL.md` and the relevant references before drafting. For creation and revision, also invoke `../knowledge-loader/SKILL.md` and use `AuthorityLoader` to retrieve authoritative Feishu knowledge. If the user asks to synchronize the source Feishu Wiki, route the request through `../wiki-ingest/SKILL.md` and then `../feishu-knowledge-store/SKILL.md`.
 4. **Writing**: draft one of the six artifact types, using its dependency token: `positioning`, `topic_plan`, `worldview`, `characters`, `outline`, or `script`.
 5. **Pre-output check**: for page-by-page scripts, invoke `../craft-benchmark-check/SKILL.md`.
 6. **Quality review**: review the draft against craft principles and the benchmark report. Fix deterministic issues before showing the draft.
-7. **Confirmation gate**: present the draft and benchmark summary in Chinese. Wait for user approval before saving files.
+7. **确认门**：用中文呈现草稿和基准摘要，等待用户批准后才允许保存文件。
 8. **Landing**: save only after explicit approval. Use versioned Markdown files in the current workspace, such as `picturebook/positioning_v1.md`.
+
+## Intent Routes
+
+- `creation`: enter briefing, knowledge loading, drafting, self review, quality review, and confirmation.
+- `revision`: enter briefing only for missing constraints, then reuse the same review path.
+- `review`: skip drafting and run `craft-benchmark-check` plus the applicable quality review.
+- `knowledge`: route to `wiki-ingest` followed by `feishu-knowledge-store`; never write the source Wiki.
+- `illustration`: require an approved or explicitly supplied script, then route to `staging-planner`; image generation remains unsupported.
+
+The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, or a multi-subagent runtime. It represents those editorial roles internally.
+
+## Write Gate
+
+产物默认只在对话中呈现，不得默认落盘。只有用户明确批准确认门，或明确要求导出时，才允许写入工作区文件。写文件前必须说明目标路径、文件名和版本号。
 
 ## Knowledge Dependency Gate
 
@@ -39,5 +53,6 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 - Keep role switching internal; do not simulate separate agents or fake inter-agent messages.
 - For scripts, include page number, text, image intent, and emotional beat.
 - Never silently save files.
-- For illustration generation or multi-agent orchestration, explain that these are out of scope.
+- For illustration requests, first require an approved or explicitly supplied script, then use `staging-planner`; image generation is out of scope. For multi-agent orchestration, explain that it is unsupported.
 - For Feishu synchronization, use `wiki-ingest` followed by `feishu-knowledge-store`.
+- Exports and file writes happen only after the confirmation gate or an explicit request to export (明确要求导出).

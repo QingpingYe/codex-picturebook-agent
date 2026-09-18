@@ -1,6 +1,6 @@
 # Picture Book Screenwriter for Codex
 
-A minimal Codex plugin for picture-book screenwriting.
+这是「绘本编剧工坊」的 Codex 原生插件，不依赖 WorkBuddy 团队运行时。它把 WorkBuddy 的编辑方法论迁移为普通 Codex 技能与脚本。
 
 This repository is the active home for the Codex plugin. It packages:
 

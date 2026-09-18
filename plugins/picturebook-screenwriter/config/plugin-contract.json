@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "entry_skill": "picturebook-screenwriter",
+  "skills": [
+    "picturebook-screenwriter",
+    "text-craft",
+    "craft-benchmark-check",
+    "staging-planner",
+    "wiki-ingest",
+    "feishu-knowledge-store",
+    "knowledge-loader"
+  ],
+  "intents": [
+    "creation",
+    "revision",
+    "review",
+    "knowledge",
+    "illustration"
+  ],
+  "artifact_types": [
+    "positioning",
+    "topic_plan",
+    "worldview",
+    "characters",
+    "outline",
+    "script"
+  ],
+  "workflow_states": [
+    "briefing",
+    "knowledge_loading",
+    "drafting",
+    "self_review",
+    "quality_review",
+    "confirmation",
+    "approved",
+    "exported",
+    "rejected"
+  ],
+  "write_policy": {
+    "default": "dialog_only",
+    "allowed_write_triggers": [
+      "user_approves_confirmation_gate",
+      "user_explicitly_requests_export"
+    ],
+    "forbidden_write_triggers": [
+      "workflow_finished",
+      "quality_gate_passed",
+      "cache_available",
+      "plugin_maintenance"
+    ]
+  },
+  "unsupported_workbuddy_capabilities": [
+    "TeamCreate",
+    "SendMessage",
+    "native_workbuddy_hooks",
+    "multi_subagent_team_runtime",
+    "workbuddy_local_library"
+  ]
+}
