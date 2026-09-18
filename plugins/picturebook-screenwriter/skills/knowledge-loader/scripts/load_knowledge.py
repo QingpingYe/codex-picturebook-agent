@@ -86,6 +86,11 @@ class KnowledgeLoader:
                 raw = self.cli.fetch_doc(entry.doc_token)
                 document = raw.get("data", {}).get("document", {})
                 page = parse_remote_page(document.get("content", ""))
+                if (page.metadata["key"] != entry.key
+                        or page.metadata["source_revisions"] != entry.source_revisions):
+                    raise ValueError(
+                        f"系统元数据与索引不一致：{entry.key}"
+                    )
                 score = sum(1 for term in query.terms if term in page.body)
                 if query.terms and score == 0:
                     continue

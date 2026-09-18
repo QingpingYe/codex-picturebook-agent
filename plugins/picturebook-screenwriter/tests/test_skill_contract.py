@@ -27,6 +27,25 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("陈旧", text)
         self.assertIn("revision_id", text)
 
+    def test_entry_and_loader_name_operational_knowledge_loop_modules(self):
+        entry = ENTRY_SKILL.read_text(encoding="utf-8")
+        loader = ROOT / "skills" / "knowledge-loader" / "SKILL.md"
+        loader_text = loader.read_text(encoding="utf-8")
+        for name in (
+            "AuthorityLoader",
+            "build_dependency_record",
+            "check_collisions",
+            "find_stale_dependencies",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, entry)
+                self.assertIn(name, loader_text)
+
+    def test_entry_documents_built_against_append_and_reload(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("正文末尾", text)
+        self.assertIn("parse_dependency_record", text)
+
     def test_plugin_advertises_authoritative_feishu_knowledge(self):
         import json
         manifest = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
