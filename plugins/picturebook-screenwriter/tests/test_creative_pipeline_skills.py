@@ -7,6 +7,8 @@ STORY = ROOT / "skills" / "story-planning" / "SKILL.md"
 PRE_CREATE = ROOT / "skills" / "pre_create-baseline" / "SKILL.md"
 IN_CREATE = ROOT / "skills" / "in_create-baseline" / "SKILL.md"
 POST_CREATE = ROOT / "skills" / "post_create-baseline" / "SKILL.md"
+PRE_OUTPUT = ROOT / "skills" / "pre_output-baseline" / "SKILL.md"
+QUALITY = ROOT / "skills" / "quality-baseline" / "SKILL.md"
 
 
 class StoryPlanningTests(unittest.TestCase):
@@ -37,6 +39,20 @@ class PostCreateBaselineTests(unittest.TestCase):
         text = POST_CREATE.read_text(encoding="utf-8")
         self.assertIn("只做打磨", text)
         self.assertIn("不得新增", text)
+
+
+class PreOutputBaselineTests(unittest.TestCase):
+    def test_pre_output_uses_two_stage_review(self):
+        text = PRE_OUTPUT.read_text(encoding="utf-8")
+        self.assertIn("廉价代理", text)
+        self.assertIn("语义判定", text)
+
+
+class QualityBaselineTests(unittest.TestCase):
+    def test_quality_baseline_complements_not_duplicates(self):
+        text = QUALITY.read_text(encoding="utf-8")
+        self.assertIn("不重复", text)
+        self.assertIn("跨产物一致性", text)
 
 
 if __name__ == "__main__":
