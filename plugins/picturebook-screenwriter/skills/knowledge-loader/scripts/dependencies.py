@@ -1,8 +1,14 @@
 """Creation dependency locking for authoritative Feishu evidence."""
 
+from __future__ import annotations
+
 import json
 from dataclasses import asdict, dataclass, is_dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from load_knowledge import KnowledgeEvidenceBundle
 
 
 @dataclass(frozen=True)
@@ -13,8 +19,8 @@ class DependencyRecord:
     evidence: tuple[Mapping[str, Any], ...]
 
 
-def build_dependency_record(bundle: Mapping[str, Any], artifact_id: str,
-                            artifact_type: str) -> DependencyRecord:
+def build_dependency_record(bundle: Mapping[str, Any] | KnowledgeEvidenceBundle,
+                            artifact_id: str, artifact_type: str) -> DependencyRecord:
     if _bundle_offline(bundle):
         raise ValueError("离线缓存不能生成权威依赖记录")
     if not artifact_id or artifact_type not in {
@@ -27,20 +33,23 @@ def build_dependency_record(bundle: Mapping[str, Any], artifact_id: str,
     return DependencyRecord(
         artifact_id=artifact_id,
         artifact_type=artifact_type,
-        built_at=bundle["fetched_at"],
+        built_at=_bundle_field(bundle, "fetched_at"),
         evidence=items,
     )
 
 
+def _bundle_field(bundle: Any, name: str, default: Any = None) -> Any:
+    if isinstance(bundle, Mapping):
+        return bundle.get(name, default)
+    return getattr(bundle, name, default)
+
+
 def _bundle_offline(bundle: Any) -> bool:
-    return bool(bundle.get("offline")) if isinstance(bundle, Mapping) else bool(bundle.offline)
+    return bool(_bundle_field(bundle, "offline", False))
 
 
 def _bundle_items(bundle: Any) -> tuple[dict[str, Any], ...]:
-    if isinstance(bundle, Mapping):
-        raw_items = bundle.get("items", ())
-    else:
-        raw_items = bundle.items
+    raw_items = _bundle_field(bundle, "items", ())
     return tuple(asdict(item) if is_dataclass(item) else dict(item) for item in raw_items)
 
 
