@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 STORY = ROOT / "skills" / "story-planning" / "SKILL.md"
 PRE_CREATE = ROOT / "skills" / "pre_create-baseline" / "SKILL.md"
+IN_CREATE = ROOT / "skills" / "in_create-baseline" / "SKILL.md"
 
 
 class StoryPlanningTests(unittest.TestCase):
@@ -20,6 +21,14 @@ class PreCreateBaselineTests(unittest.TestCase):
         text = PRE_CREATE.read_text(encoding="utf-8")
         self.assertIn("缺口", text)
         self.assertIn("不猜默认值", text)
+
+
+class InCreateBaselineTests(unittest.TestCase):
+    def test_in_create_requires_structure_before_body(self):
+        text = IN_CREATE.read_text(encoding="utf-8")
+        self.assertIn("结构骨架", text)
+        self.assertIn("边界卡", text)
+        self.assertIn("text-craft", text)
 
 
 if __name__ == "__main__":
