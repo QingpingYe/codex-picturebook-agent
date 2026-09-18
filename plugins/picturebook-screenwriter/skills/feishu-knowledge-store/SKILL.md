@@ -20,12 +20,13 @@ description: 通过远端租约、docx revision 前提、人工优先三方合�
 
 ## 使用流程
 
-1. 运行 `preflight`，验证用户身份、原始库读取和目标库读写能力。
-2. 首次运行 `initialize`，在远端系统树中创建控制页。
-3. 运行 `wiki-ingest` 生成任务局部 `_manifest.json`。
-4. 运行 `prepare`，读取历史版本、当前版本和候选版本，并获取远端锁。
-5. 为每个 `agent_decision` 生成一个 `MergeDecision`，由 `merge_protocol` 校验。
-6. 运行 `apply`，完成条件更新并在结束时释放锁。
+1. 运行 `scripts/lark_cli_bootstrap.py` 检查兼容的 lark-cli。若结果为 `missing`，先向用户说明将执行 `npx @larksuite/cli@latest install`，获得明确批准后加 `--install` 重跑；若为 `unsupported`，不得替换用户已有 CLI。
+2. 运行 `preflight`，验证用户身份、原始库读取和目标库读写能力。安装 CLI 不代表完成登录；认证失败时由用户本人执行 `lark-cli auth login`。
+3. 首次运行 `initialize`，在远端系统树中创建控制页。
+4. 运行 `wiki-ingest` 生成任务局部 `_manifest.json`。
+5. 运行 `prepare`，读取历史版本、当前版本和候选版本，并获取远端锁。
+6. 为每个 `agent_decision` 生成一个 `MergeDecision`，由 `merge_protocol` 校验。
+7. 运行 `apply`，完成条件更新并在结束时释放锁。
 
 ## 输出
 

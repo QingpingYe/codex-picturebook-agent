@@ -14,19 +14,36 @@
 
 ## CLI 与认证
 
-按以下顺序解析 lark-cli：
+先运行兼容检查：
+
+```bash
+python <plugin>/skills/feishu-knowledge-store/scripts/lark_cli_bootstrap.py
+```
+
+脚本按以下顺序解析 lark-cli：
 
 1. `LARK_CLI_PATH`
 2. PATH 中的 `lark-cli`
-3. `D:\lark-cli\lark-cli.exe`
+3. `%APPDATA%\npm` 中的 `lark-cli.cmd` 及包内二进制
+4. `%ProgramFiles%\nodejs\lark-cli.cmd`
+5. `C:\lark-cli\lark-cli.exe`
+6. `D:\lark-cli\lark-cli.exe`（仅本机兼容回退）
 
-找到候选后先运行：
+若返回 `missing`，先向用户说明安装来源和影响，获得明确批准后运行：
+
+```bash
+python <plugin>/skills/feishu-knowledge-store/scripts/lark_cli_bootstrap.py --install
+```
+
+安装使用官方命令 `npx @larksuite/cli@latest install`，要求本机有 Node.js 16+。若返回 `unsupported`，终止并报告版本和路径，不自动替换已有 CLI。
+
+找到兼容候选后先运行：
 
 ```bash
 lark-cli auth status --json --verify
 ```
 
-认证失败时提示用户运行 `lark-cli auth login`，本次提取终止。不要保存、输出或转发令牌。
+认证失败时提示用户本人运行 `lark-cli auth login`，本次提取终止。安装 CLI 不会自动完成认证。不要保存、输出或转发令牌。
 
 配置中的 `source_wiki_url` 是输入。提取根节点 token 时清理 URL 查询参数和 hash 片段；节点 token 是 URL 中 `/wiki/` 后的段。
 
@@ -194,7 +211,8 @@ source_revision_parts:
 
 | 故障 | 处理 |
 | --- | --- |
-| CLI 不存在 | 终止，并列出尝试过的候选路径 |
+| CLI 不存在 | 先经用户批准运行官方安装器；仍失败时终止，并列出尝试过的候选路径 |
+| CLI 版本不兼容 | 终止，报告版本和路径，不自动替换 |
 | 认证失效 | 终止，提示用户重新登录 |
 | 根节点无权限 | 终止，不创建替代知识库 |
 | 单节点无权限 | 记录失败，继续其他独立节点 |

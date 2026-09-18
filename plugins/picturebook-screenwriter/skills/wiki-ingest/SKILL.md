@@ -26,9 +26,10 @@ applies_to:
 运行前必须确认：
 
 1. 已知配置文件路径，且其中的 `source_wiki_url` 指向原始飞书知识库。
-2. `lark-cli auth status --json --verify` 返回用户身份认证成功。
-3. 当前用户对原始知识库根节点有读取权限。
-4. `LARK_CLI_PATH`、PATH 中的 `lark-cli`，或 Windows 兼容路径 `D:\lark-cli\lark-cli.exe` 至少一个可用。
+2. 先运行 `../feishu-knowledge-store/scripts/lark_cli_bootstrap.py` 检查兼容的 lark-cli。若结果为 `missing`，先向用户说明将执行官方安装器，获得明确批准后加 `--install` 重跑；若为 `unsupported`，终止并报告版本和路径。
+3. `lark-cli auth status --json --verify` 返回用户身份认证成功。安装 CLI 不会自动登录；认证失败时由用户本人执行 `lark-cli auth login`。
+4. 当前用户对原始知识库根节点有读取权限。
+5. `LARK_CLI_PATH`、PATH 中的 `lark-cli`，或常见安装位置（Windows 优先检查 `%APPDATA%\npm`、`%ProgramFiles%\nodejs`、`C:\lark-cli`，最后才是 `D:\lark-cli`）至少一个可用；安装场景还要求 Node.js 16+ 提供 `npx`。
 
 除 `auth status` 外，所有 lark-cli 读写命令使用 `--as user`，以保留实际读取者身份。
 
@@ -65,7 +66,7 @@ lark-cli auth status --json --verify
 lark-cli wiki +node-get --node-token <source_root_token> --as user --format json
 ```
 
-认证失败、CLI 不可用、根节点不可读取时，终止运行并报告具体原因。不得尝试创建替代知识库。
+认证失败、CLI 不兼容、根节点不可读取时，终止运行并报告具体原因。CLI 缺失时先走上述经用户批准的安装流程。不得尝试创建替代知识库。
 
 ### 2. 枚举源节点
 

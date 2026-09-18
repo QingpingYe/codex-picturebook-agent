@@ -30,10 +30,13 @@
 配置文件使用 schema v2，明确区分 `source` 与 `target`。
 
 ```powershell
+python .\skills\feishu-knowledge-store\scripts\lark_cli_bootstrap.py
 python .\skills\feishu-knowledge-store\scripts\sync_runner.py prepare --config <config> --run-dir <run_dir>
 python .\skills\feishu-knowledge-store\scripts\sync_runner.py publish --config <config> --run-dir <run_dir>
 python .\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config <config> --run-dir <run_dir>
 ```
+
+`lark_cli_bootstrap.py` 支持 `1.0.95` / `1.0.96`，按 `LARK_CLI_PATH`、PATH、常见 C 盘 npm 全局位置（`%APPDATA%\npm` 与 `%ProgramFiles%\nodejs`）、`C:\lark-cli`、`D:\lark-cli` 的顺序查找。缺 CLI 时会输出官方安装命令；只有在用户明确批准后，才加 `--install` 执行 `npx @larksuite/cli@latest install`。安装机需要 Node.js 16+，且每个用户安装后仍需本人执行 `lark-cli auth login`。
 
 ## 安装
 
