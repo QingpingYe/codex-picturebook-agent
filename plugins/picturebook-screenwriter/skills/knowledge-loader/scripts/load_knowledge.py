@@ -17,6 +17,7 @@ from page_codec import parse_remote_page, PageCodecError
 @dataclass(frozen=True)
 class KnowledgeQuery:
     project_id: str
+    series_id: str = ""
     terms: tuple[str, ...] = ()
     page_types: tuple[str, ...] = ()
     limit: int = 8
@@ -64,11 +65,19 @@ class KnowledgeLoader:
                 )
             raise error
 
-        candidates = [
-            entry for entry in index.values()
-            if query.project_id in entry.key
-            and (not query.page_types or entry.key.split("/")[-1] in query.page_types)
-        ]
+        candidates = []
+        for entry in index.values():
+            parts = entry.key.split("/")
+            if len(parts) != 3:
+                continue
+            if query.series_id:
+                if parts[0] != query.series_id or parts[1] != query.project_id:
+                    continue
+            elif query.project_id and query.project_id not in entry.key:
+                continue
+            if query.page_types and parts[2] not in query.page_types:
+                continue
+            candidates.append(entry)
 
         items = []
         warnings = []

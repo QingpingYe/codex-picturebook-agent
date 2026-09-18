@@ -23,6 +23,7 @@ class AuthorityLoader:
     def load(self, query: AuthorityQuery):
         bundle = self.loader.load(KnowledgeQuery(
             project_id=query.project_id,
+            series_id=query.series_id,
             page_types=query.page_types,
             limit=len(query.page_types) * 2,
         ))
