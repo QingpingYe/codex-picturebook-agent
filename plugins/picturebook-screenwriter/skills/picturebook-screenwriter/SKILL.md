@@ -18,6 +18,12 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 7. **Confirmation gate**: present the draft and benchmark summary in Chinese. Wait for user approval before saving files.
 8. **Landing**: save only after explicit approval. Use versioned Markdown files in the current workspace, such as `picturebook/positioning_v1.md`.
 
+## Knowledge Dependency Gate
+
+创作或修订前必须装载目标项目的权威知识。若必需页面缺失，明确报告“权威知识缺失”，不得用本地缓存或猜测内容替代。草稿获得用户批准并落盘前，生成 `built_against` 元数据，记录每个引用知识页的 `key`、`doc_token`、`revision_id` 和 `source_revisions`。
+
+后续读取旧产物时，先比对当前飞书索引。只要 `revision_id` 变化、条目缺失或状态为 `needs_review`，必须在回复首段标明“知识已陈旧”，列出差异，并询问是否基于当前权威知识修订。不得把陈旧产物描述为最新定稿。
+
 ## Role Switching
 
 - **Editor**: clarify intent, maintain the workflow, summarize tradeoffs, and enforce confirmation gates.

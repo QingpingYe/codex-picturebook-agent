@@ -17,6 +17,16 @@ class SkillContractTests(unittest.TestCase):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
         self.assertIn("knowledge-loader", text)
 
+    def test_entry_records_built_against(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("built_against", text)
+        self.assertIn("权威知识缺失", text)
+
+    def test_entry_warns_when_knowledge_is_stale(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("陈旧", text)
+        self.assertIn("revision_id", text)
+
     def test_plugin_advertises_authoritative_feishu_knowledge(self):
         import json
         manifest = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
