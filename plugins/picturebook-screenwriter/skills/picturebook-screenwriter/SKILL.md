@@ -5,7 +5,7 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 
 # Picture Book Screenwriter
 
-把用户请求当作一次绘本编辑部工作流处理。你自己承担四个内部角色：主编、编剧、质检、知识管理。本插件是 Codex 原生实现，不依赖 WorkBuddy 的 TeamCreate、SendMessage、原生 hooks 或多子代理运行时；当前支持飞书权威知识检索与同步，但不支持图片生成。
+把用户请求当作一次绘本编辑部工作流处理。你自己承担四个内部角色：主编、编剧、质检、知识管理。本插件是 Codex 原生实现，不依赖 WorkBuddy 的 TeamCreate、SendMessage、原生 hooks 或多子代理运行时；当前支持飞书权威知识检索与同步，也支持需要用户明确确认的插画工作流。
 
 ## Workflow
 
@@ -34,9 +34,18 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 - `revision`: enter briefing only for missing constraints, then reuse the same review path.
 - `review`: skip drafting and run `craft-benchmark-check` plus the applicable quality review.
 - `knowledge`: route to `wiki-ingest` followed by `feishu-knowledge-store`; never write the source Wiki.
-- `illustration`: require an approved or explicitly supplied script, then route to `staging-planner`; image generation remains unsupported.
+- `illustration`: follow the gated illustration route below.
 
 The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, or a multi-subagent runtime. It represents those editorial roles internally.
+
+## Illustration Route
+
+1. 确认脚本已获用户批准，或用户明确提供脚本并要求生成插画。
+2. 运行 `../staging-planner/SKILL.md`，得到跨页空间账本和帧向铁律。
+3. 运行 `../image-prompt-architect/SKILL.md`，生成结构化提示词 JSON。
+4. 向用户展示提示词、参考图、输出目录、尺寸和画质，并获得明确确认。
+5. 只有确认后才调用 `../image-generate/SKILL.md`。
+6. 生成后登记资产版本，再按用户明确导出请求调用 `../illustration-export/SKILL.md`。
 
 ## Write Gate
 
@@ -74,6 +83,6 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, o
 - Keep role switching internal; do not simulate separate agents or fake inter-agent messages.
 - For scripts, include page number, text, image intent, and emotional beat.
 - Never silently save files.
-- For illustration requests, first require an approved or explicitly supplied script, then use `staging-planner`; image generation is out of scope. For multi-agent orchestration, explain that it is unsupported.
+- For illustration requests, first require an approved or explicitly supplied script, then run the gated illustration route. Do not call `image-generate` before explicit user confirmation. For multi-agent orchestration, explain that it is unsupported.
 - For Feishu synchronization, use `wiki-ingest` followed by `feishu-knowledge-store`.
 - Exports and file writes happen only after the confirmation gate or an explicit request to export (明确要求导出).

@@ -46,6 +46,13 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("正文末尾", text)
         self.assertIn("parse_dependency_record", text)
 
+    def test_illustration_route_requires_staging_and_confirmation(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("staging-planner", text)
+        self.assertIn("image-prompt-architect", text)
+        self.assertIn("illustration-export", text)
+        self.assertIn("明确确认", text)
+
     def test_entry_blocks_project_failures(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
         self.assertIn("项目权威 FAIL", text)
