@@ -64,6 +64,16 @@ class Publisher:
         finally:
             control_plane.release_lock(lease)
 
+    def fetch_current(self, doc_token: str) -> dict[str, Any]:
+        document = self.cli.fetch_doc(doc_token).get("data", {}).get("document", {})
+        revision = document.get("revision_id")
+        content = document.get("content")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+            raise NeedsReview(f"current page has invalid revision: {doc_token}")
+        if not isinstance(content, str) or not content:
+            raise NeedsReview(f"current page is empty or unreadable: {doc_token}")
+        return {"revision_id": revision, "content": content}
+
     def publish_new(self, entry: IndexEntry, body: str, parent: str) -> IndexEntry:
         title = entry.key
         page = render_remote_page(body, self._metadata(entry, revision=0))

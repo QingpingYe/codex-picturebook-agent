@@ -175,6 +175,14 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(result.wiki_node_token, "node-1")
         self.assertEqual(result.last_ai_revision_id, 5)
 
+    def test_fetch_current_returns_validated_revision_and_content(self):
+        current = page("# 正文")
+        self.cli.docs[entry().doc_token] = {"revision_id": 9, "content": current}
+        self.assertEqual(
+            self.publisher.fetch_current(entry().doc_token),
+            {"revision_id": 9, "content": current},
+        )
+
     def test_publish_new_rejects_non_positive_create_revision(self):
         self.cli = FakeCli(create_revision=0)
         self.publisher = Publisher(self.cli, "root")

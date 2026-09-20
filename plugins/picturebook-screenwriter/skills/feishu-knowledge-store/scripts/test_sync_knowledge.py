@@ -34,6 +34,12 @@ class FakePublisher:
         self.pages[entry.doc_token].content = content
         return entry
 
+    def fetch_current(self, doc_token):
+        current = self.pages.get(doc_token)
+        if not current:
+            raise IndexError(f"missing current page: {doc_token}")
+        return {"revision_id": current.revision_id, "content": current.content}
+
     def append_conflict(self, record):
         self.record = record
 

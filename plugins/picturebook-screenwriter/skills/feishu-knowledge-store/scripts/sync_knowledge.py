@@ -79,13 +79,7 @@ class SyncService:
             self.control_plane.release_lock(lease)
 
     def _current(self, doc_token: str) -> Mapping[str, object]:
-        current = self.publisher.pages.get(doc_token)
-        if not current:
-            raise IndexError(f"missing current page: {doc_token}")
-        return {
-            "revision_id": current.revision_id,
-            "content": current.content,
-        }
+        return self.publisher.fetch_current(doc_token)
 
 
 if __name__ == "__main__":
