@@ -18,7 +18,8 @@
     "quality-baseline",
     "image-prompt-architect",
     "image-generate",
-    "illustration-export"
+    "illustration-export",
+    "session-export"
   ],
   "intents": [
     "creation",

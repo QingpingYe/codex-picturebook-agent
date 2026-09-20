@@ -51,6 +51,10 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, o
 
 产物默认只在对话中呈现，不得默认落盘。只有用户明确批准确认门，或明确要求导出时，才允许写入工作区文件。写文件前必须说明目标路径、文件名和版本号。
 
+## Session Export Gate
+
+只有用户明确要求导出会话证据时，才调用 `../session-export/SKILL.md`。必须先要求用户给出绝对输出目录；不得默认选择路径，也不得写入插件目录。
+
 ## Quality Gate
 
 确认门前必须汇总：

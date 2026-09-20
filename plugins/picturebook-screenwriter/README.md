@@ -11,6 +11,7 @@
 - `image-prompt-architect`：结构化插画提示词；只输出 JSON，不生成图片
 - `image-generate`：仅在用户明确确认后调用图片 API
 - `illustration-export`：资产登记、本地 HTML 预览与显式图片内嵌
+- `session-export`：仅在用户明确要求时导出会话证据，且必须使用用户提供的绝对输出目录
 - `knowledge-loader`：只读检索多人协作飞书权威知识库
 - `feishu-knowledge-store`：人工优先合并、冲突队列与远端租约
 - `lexile-check`：仅使用用户提供的实测结果
@@ -19,7 +20,6 @@
 
 - 多 Agent / 子 Agent 团队执行
 - hooks 与约束门禁
-- 会话取证导出
 - 未确认的默认图片 API 调用
 
 ## 飞书知识库

@@ -84,6 +84,15 @@ class PluginContractTests(unittest.TestCase):
             with self.subTest(skill=skill):
                 self.assertIn(skill, contract["skills"])
 
+    def test_contract_declares_session_export(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        self.assertIn("session-export", contract["skills"])
+
+    def test_plugin_readme_describes_session_export(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertIn("session-export", text)
+        self.assertNotIn("- 会话取证导出\n", text)
+
     def test_contract_declares_gated_illustration_route(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         route = contract["illustration_route"]

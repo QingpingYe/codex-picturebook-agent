@@ -53,6 +53,12 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("illustration-export", text)
         self.assertIn("明确确认", text)
 
+    def test_entry_routes_explicit_session_export(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("session-export", text)
+        self.assertIn("绝对输出目录", text)
+        self.assertIn("不得默认选择路径", text)
+
     def test_entry_blocks_project_failures(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
         self.assertIn("项目权威 FAIL", text)

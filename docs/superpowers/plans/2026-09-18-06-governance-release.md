@@ -206,7 +206,7 @@ git commit -m "docs: align release surface with art export"
   - `export_session(session_id: str, messages: list, files: list, images: list, output_dir: Path, plugin_root: Path) -> Path`
 - Consumes: caller-supplied JSON-safe messages, file paths, and image paths; it must not invent missing data.
 
-- [ ] **Step 1: Add the contract and failing skill tests**
+- [x] **Step 1: Add the contract and failing skill tests**
 
 In `tests/test_plugin_contract.py`, add:
 
@@ -304,13 +304,13 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `python .\plugins\picturebook-screenwriter\skills\session-export\scripts\test_export_session.py -v`
 
 Expected: ERROR because `export_session.py` does not exist.
 
-- [ ] **Step 3: Implement the strict export boundary**
+- [x] **Step 3: Implement the strict export boundary**
 
 Create `skills/session-export/scripts/export_session.py`:
 
@@ -390,7 +390,7 @@ def export_session(
     return bundle
 ```
 
-- [ ] **Step 4: Add the skill and route**
+- [x] **Step 4: Add the skill and route**
 
 Create `skills/session-export/SKILL.md` with this content:
 
@@ -438,7 +438,7 @@ def test_entry_routes_explicit_session_export(self):
     self.assertIn("不得默认选择路径", text)
 ```
 
-- [ ] **Step 5: Run focused and contract tests**
+- [x] **Step 5: Run focused and contract tests**
 
 ```powershell
 python .\plugins\picturebook-screenwriter\skills\session-export\scripts\test_export_session.py -v
@@ -448,7 +448,7 @@ python .\plugins\picturebook-screenwriter\tests\test_skill_contract.py -v
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add .\plugins\picturebook-screenwriter\skills\session-export .\plugins\picturebook-screenwriter\skills\picturebook-screenwriter\SKILL.md .\plugins\picturebook-screenwriter\config\plugin-contract.json .\plugins\picturebook-screenwriter\tests\test_plugin_contract.py .\plugins\picturebook-screenwriter\tests\test_skill_contract.py
