@@ -336,6 +336,45 @@ class PublisherTests(unittest.TestCase):
                 "conflict-doc", {"key": entry().key, "reason": "human conflict"}
             )
 
+    def test_append_conflict_rejects_warned_update(self):
+        self.cli.docs["conflict-doc"] = {
+            "revision_id": 4,
+            "content": "# AI_KB_CONFLICT_QUEUE_V1\n",
+        }
+        original_update = self.cli.update_doc
+
+        def warned_update(token, revision, content):
+            self.cli.docs[token]["content"] = content
+            self.cli.docs[token]["revision_id"] = 5
+            return {
+                "code": 0,
+                "data": {"document": {"revision_id": 5}},
+                "warnings": ["partial write"],
+            }
+
+        self.cli.update_doc = warned_update
+        with self.assertRaises(NeedsReview):
+            self.publisher.append_conflict(
+                "conflict-doc", {"key": entry().key, "reason": "human conflict"}
+            )
+
+    def test_append_conflict_requires_matching_update_and_readback_revision(self):
+        self.cli.docs["conflict-doc"] = {
+            "revision_id": 4,
+            "content": "# AI_KB_CONFLICT_QUEUE_V1\n",
+        }
+
+        def revision_drift_update(token, revision, content):
+            self.cli.docs[token]["content"] = content
+            self.cli.docs[token]["revision_id"] = 6
+            return {"code": 0, "data": {"document": {"revision_id": 5}}, "warnings": []}
+
+        self.cli.update_doc = revision_drift_update
+        with self.assertRaises(NeedsReview):
+            self.publisher.append_conflict(
+                "conflict-doc", {"key": entry().key, "reason": "human conflict"}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

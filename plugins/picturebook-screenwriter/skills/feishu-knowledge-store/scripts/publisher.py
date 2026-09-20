@@ -224,8 +224,20 @@ class Publisher:
         content = current.get("content", "# AI_KB_CONFLICT_QUEUE_V1\n")
         if not content.rstrip().endswith(f"[{record['key']}] {record['reason']}"):
             content = content.rstrip() + f"\n[{record['key']}] {record['reason']}\n"
-        self.cli.update_doc(parent, int(current["revision_id"]), content)
+        result = self.cli.update_doc(parent, int(current["revision_id"]), content)
+        if (
+            not isinstance(result, Mapping)
+            or result.get("warnings")
+            or result.get("data", {}).get("result") == "partial_success"
+        ):
+            raise NeedsReview("partial, warned, or invalid conflict queue update")
+        update_revision = result.get("data", {}).get("document", {}).get("revision_id")
+        if isinstance(update_revision, bool) or not isinstance(update_revision, int) or update_revision < 0:
+            raise NeedsReview("conflict queue update did not return a valid revision")
         verified_document = self.cli.fetch_doc(parent).get("data", {}).get("document", {})
+        verified_revision = verified_document.get("revision_id")
+        if verified_revision != update_revision:
+            raise NeedsReview("conflict queue readback revision did not match update result")
         after = self._conflict_records(verified_document.get("content", ""))
         if after[:len(before)] != before or not after or after[-1] != (record["key"], record["reason"]):
             raise NeedsReview("conflict queue readback did not preserve records")
