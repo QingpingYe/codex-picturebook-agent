@@ -15,7 +15,11 @@ class NeedsReview(RuntimeError):
 CONTROL_TREE = (
     ("00_使用说明", ("AI知识库编辑说明",)),
     ("02_导航与日志", ("知识导航索引", "同步日志")),
-    ("99_系统控制台", ("同步索引", "同步锁", "冲突待处理")),
+    ("99_系统控制台", (
+        "AI_KB_INDEX_V1",
+        "AI_KB_LOCK_V1",
+        "AI_KB_CONFLICT_QUEUE_V1",
+    )),
 )
 
 TREE_ORDER = ("00_使用说明", "01_知识内容", "02_导航与日志", "99_系统控制台")
@@ -43,7 +47,13 @@ class Publisher:
             children = dict(CONTROL_TREE).get(title, ())
             for child in children:
                 child_token, _ = self._find_or_create(parent, child)
-                tokens[child] = child_token
+                canonical = {
+                    "AI_KB_INDEX_V1": "index",
+                    "AI_KB_LOCK_V1": "lock",
+                    "AI_KB_CONFLICT_QUEUE_V1": "conflict",
+                }
+                if child in canonical:
+                    tokens[canonical[child]] = child_token
         self.tokens = tokens
         return tokens
 
@@ -160,6 +170,12 @@ class Publisher:
         token = document.get("document_id", document.get("doc_token", document.get("token")))
         if not token:
             raise NeedsReview("created document did not return a usable token")
+        matches = [node for node in self.cli.list_nodes(parent) if node.get("title") == title]
+        if len(matches) != 1:
+            raise NeedsReview(f"created page has ambiguous node identity: {title}")
+        for key in ("node_token", "obj_token", "token"):
+            if matches[0].get(key):
+                return matches[0][key], False
         return token, False
 
     @staticmethod

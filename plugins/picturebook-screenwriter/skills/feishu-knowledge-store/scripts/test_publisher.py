@@ -89,10 +89,23 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.cli.created_titles, [
             "00_使用说明", "AI知识库编辑说明", "01_知识内容",
             "02_导航与日志", "知识导航索引", "同步日志",
-            "99_系统控制台", "同步索引", "同步锁", "冲突待处理",
+            "99_系统控制台", "AI_KB_INDEX_V1", "AI_KB_LOCK_V1",
+            "AI_KB_CONFLICT_QUEUE_V1",
         ])
         self.assertEqual(self.publisher.initialize(), tokens)
         self.assertEqual(len(self.cli.created_titles), 10)
+
+    def test_initialize_uses_actual_control_page_titles(self):
+        tokens = self.publisher.initialize()
+        self.assertEqual(self.cli.created_titles, [
+            "00_使用说明", "AI知识库编辑说明", "01_知识内容",
+            "02_导航与日志", "知识导航索引", "同步日志",
+            "99_系统控制台", "AI_KB_INDEX_V1", "AI_KB_LOCK_V1",
+            "AI_KB_CONFLICT_QUEUE_V1",
+        ])
+        self.assertEqual(tokens["index"], "node-8")
+        self.assertEqual(tokens["lock"], "node-9")
+        self.assertEqual(tokens["conflict"], "node-10")
 
     def test_initialize_rejects_duplicate_system_page(self):
         self.cli.nodes["root"] = [
