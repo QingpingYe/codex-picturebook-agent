@@ -79,6 +79,7 @@ class SyncRunner:
             published = 0
             failed = 0
             errors = []
+            successful_pages = 0
             for raw in entries:
                 try:
                     entry = self._entry(raw)
@@ -86,6 +87,11 @@ class SyncRunner:
                     published_entry = self.publisher.publish_new(entry, body, parent)
                     self.control_plane.update_index([published_entry])
                     published += 1
+                    successful_pages += 1
+                    if successful_pages % 5 == 0:
+                        lease = self.control_plane.refresh_lock(
+                            lease, datetime.now(timezone.utc)
+                        )
                 except Exception as error:
                     failed += 1
                     errors.append(f"{raw.get('key', '<unknown>')}: {error}")

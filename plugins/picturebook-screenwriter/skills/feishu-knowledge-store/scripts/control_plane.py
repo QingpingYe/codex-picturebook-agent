@@ -93,6 +93,10 @@ class ControlPlane:
         renewed = Lease(lease.run_id, lease.holder, lease.started_at, now + self.ttl, revision)
         result = self.cli.update_doc(self.control_tokens["lock"], revision, _render_lock(renewed))
         new_revision = self._revision_from_update_result(result)
+        verified_revision, verified_payload = self._read_lock()
+        self._assert_owner(verified_payload, lease)
+        if verified_revision != new_revision:
+            raise ControlPlaneCorrupt("lock refresh revision did not match readback")
         return Lease(renewed.run_id, renewed.holder, renewed.started_at, renewed.expires_at, new_revision)
 
     def release_lock(self, lease: Lease) -> None:

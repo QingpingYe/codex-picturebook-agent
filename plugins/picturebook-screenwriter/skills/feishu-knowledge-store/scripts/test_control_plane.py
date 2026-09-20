@@ -178,6 +178,28 @@ class ControlPlaneTests(unittest.TestCase):
             plane.release_lock(type(lease)("other", lease.holder, lease.started_at, lease.expires_at, lease.revision_id))
         plane.release_lock(refreshed)
 
+    def test_refresh_lock_detects_postwrite_owner_change(self):
+        class RacyRefreshCli(FakeCli):
+            def __init__(self):
+                super().__init__()
+                self.acquired = False
+
+            def update_doc(self, token, revision, content):
+                result = super().update_doc(token, revision, content)
+                if self.acquired:
+                    self.docs[token]["content"] = "# AI_KB_LOCK_V1\n```json\n" + json.dumps({
+                        "schema_version": 1, "run_id": "rival", "holder": "bob@host",
+                        "started_at": "2026-09-17T03:00:00Z",
+                        "expires_at": "2026-09-17T04:00:00Z",
+                    }) + "\n```\n"
+                self.acquired = True
+                return result
+
+        plane = ControlPlane(RacyRefreshCli(), control_tokens())
+        lease = plane.acquire_lock("alice@host", FIXED_NOW)
+        with self.assertRaises(LeaseOwnershipError):
+            plane.refresh_lock(lease, FIXED_NOW)
+
     def test_rebuild_rejects_duplicate_logical_keys(self):
         plane = ControlPlane(FakeCli(), control_tokens())
         pages = [

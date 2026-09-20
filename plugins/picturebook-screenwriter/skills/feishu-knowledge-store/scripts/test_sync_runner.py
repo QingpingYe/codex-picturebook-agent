@@ -17,6 +17,7 @@ class FakeControlPlane:
     def __init__(self):
         self.acquired = 0
         self.released = 0
+        self.refreshed = 0
 
     def acquire_lock(self, holder, now):
         self.acquired += 1
@@ -24,6 +25,10 @@ class FakeControlPlane:
 
     def release_lock(self, lease):
         self.released += 1
+
+    def refresh_lock(self, lease, now):
+        self.refreshed += 1
+        return object()
 
     def update_index(self, entries):
         return {entry.key: entry for entry in entries}
@@ -81,34 +86,38 @@ class SyncRunnerTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _write_manifest(self):
+    def _write_manifest(self, count=1):
         staging = self.run_dir / "wiki_staging"
         staging.mkdir(parents=True)
-        candidate = staging / "worldview.md"
-        candidate.write_text(
-            "---\n"
-            "title: 世界观\n"
-            "series_id: 海外绘本\n"
-            "project_id: 小老鼠迈尔斯\n"
-            "page_type: worldview\n"
-            "source_node_tokens:\n  - node-a\n"
-            "source_revision_parts:\n  - \"17\"\n"
-            "---\n"
-            "# 世界观\n",
-            encoding="utf-8",
-        )
-        manifest = {
-            "version": 9,
-            "series": {},
-            "root": [],
-            "entries": [{
-                "path": "worldview.md",
-                "key": "海外绘本/小老鼠迈尔斯/worldview",
+        entries = []
+        for number in range(count):
+            suffix = "" if count == 1 else f"-{number}"
+            candidate_name = f"worldview{suffix}.md"
+            (staging / candidate_name).write_text(
+                "---\n"
+                "title: 世界观\n"
+                "series_id: 海外绘本\n"
+                "project_id: 小老鼠迈尔斯\n"
+                "page_type: worldview\n"
+                "source_node_tokens:\n  - node-a\n"
+                "source_revision_parts:\n  - \"17\"\n"
+                "---\n"
+                "# 世界观\n",
+                encoding="utf-8",
+            )
+            entries.append({
+                "path": candidate_name,
+                "key": f"海外绘本/小老鼠迈尔斯/worldview{suffix}",
                 "source_revisions": {"node-a": "17"},
                 "page_type": "worldview",
                 "series_id": "海外绘本",
                 "project_id": "小老鼠迈尔斯",
-            }],
+            })
+        manifest = {
+            "version": 9,
+            "series": {},
+            "root": [],
+            "entries": entries,
         }
         (staging / "_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
 
@@ -156,6 +165,15 @@ class SyncRunnerTests(unittest.TestCase):
             "海外绘本/小老鼠迈尔斯/worldview",
         ])
         self.assertEqual(report["published"], 1)
+
+    def test_publish_renews_lease_every_five_successful_pages(self):
+        self._write_manifest(5)
+        plane = RecordingPlane()
+        publisher = FakePublisher()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(report["published"], 5)
+        self.assertEqual(plane.refreshed, 1)
 
     def test_publish_does_not_create_bootstrap_page(self):
         self._write_manifest()
