@@ -467,7 +467,7 @@ git commit -m "feat: add explicit session export boundary"
 - Consumes: manifest version `0.3.0` from Task 1.
 - Produces: a Keep a Changelog-style file that records the completed Phase 5 work under `[Unreleased]`.
 
-- [ ] **Step 1: Add failing release version tests**
+- [x] **Step 1: Add failing release version tests**
 
 Append to `tests/test_release_contract.py`:
 
@@ -488,13 +488,13 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertIn("Self-contained HTML preview", text)
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v`
 
 Expected: FAIL because `docs/CHANGELOG.md` does not exist.
 
-- [ ] **Step 3: Create the changelog**
+- [x] **Step 3: Create the changelog**
 
 Create `docs/CHANGELOG.md`:
 
@@ -518,13 +518,13 @@ Create `docs/CHANGELOG.md`:
 
 If Task 1 did not already set the manifest version to `0.3.0`, update it now.
 
-- [ ] **Step 4: Run the test and confirm it passes**
+- [x] **Step 4: Run the test and confirm it passes**
 
 Run: `python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v`
 
 Expected: 7 tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add docs\CHANGELOG.md .\plugins\picturebook-screenwriter\.codex-plugin\plugin.json .\plugins\picturebook-screenwriter\tests\test_release_contract.py

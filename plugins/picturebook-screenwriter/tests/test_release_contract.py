@@ -54,5 +54,21 @@ class ReleaseSurfaceTests(unittest.TestCase):
         self.assertIn("Self-contained HTML preview", text)
 
 
+class ReleaseVersionTests(unittest.TestCase):
+    def test_manifest_version_is_semver(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertIsNotNone(re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"]))
+
+    def test_release_target_is_0_3_0(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["version"], "0.3.0")
+
+    def test_changelog_records_phase5(self):
+        text = (ROOT.parent.parent / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn("## [Unreleased]", text)
+        self.assertIn("Gated illustration workflow", text)
+        self.assertIn("Self-contained HTML preview", text)
+
+
 if __name__ == "__main__":
     unittest.main()
