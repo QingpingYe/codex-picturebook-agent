@@ -65,6 +65,33 @@ class Publisher:
         finally:
             control_plane.release_lock(lease)
 
+    def resolve_control_plane(self) -> dict[str, str]:
+        tokens: dict[str, str] = {}
+        for title in TREE_ORDER:
+            token = self._existing_token(self.target_root, title)
+            if token is None:
+                raise NeedsReview(f"missing system container: {title}")
+            tokens[title] = token
+        for parent_key, children in (
+            ("00_使用说明", ("AI知识库编辑说明",)),
+            ("02_导航与日志", ("知识导航索引", "同步日志")),
+            ("99_系统控制台", (
+                "AI_KB_INDEX_V1",
+                "AI_KB_LOCK_V1",
+                "AI_KB_CONFLICT_QUEUE_V1",
+            )),
+        ):
+            for child in children:
+                token = self._existing_token(tokens[parent_key], child)
+                if token is None:
+                    raise NeedsReview(f"missing system page: {child}")
+                tokens[child] = token
+        tokens["index"] = tokens["AI_KB_INDEX_V1"]
+        tokens["lock"] = tokens["AI_KB_LOCK_V1"]
+        tokens["conflict"] = tokens["AI_KB_CONFLICT_QUEUE_V1"]
+        tokens["content"] = tokens["01_知识内容"]
+        return tokens
+
     def fetch_current(self, doc_token: str) -> dict[str, Any]:
         document = self.cli.fetch_doc(doc_token).get("data", {}).get("document", {})
         revision = document.get("revision_id")
@@ -174,14 +201,9 @@ class Publisher:
         self.cli.update_doc(parent, int(current["revision_id"]), content)
 
     def _find_or_create(self, parent: str, title: str) -> tuple[str, bool]:
-        matches = [node for node in self.cli.list_nodes(parent) if node.get("title") == title]
-        if len(matches) > 1:
-            raise NeedsReview(f"duplicate system page: {title}")
-        existing = matches[0] if matches else None
+        existing = self._existing_token(parent, title)
         if existing:
-            for key in ("node_token", "obj_token", "token"):
-                if existing.get(key):
-                    return existing[key], True
+            return existing, True
         response = self.cli.create_doc(parent, title, "")
         document = response.get("data", {}).get("document", {})
         token = document.get("document_id", document.get("doc_token", document.get("token")))
@@ -198,6 +220,21 @@ class Publisher:
             if matches[0].get(key):
                 return matches[0][key], False
         return token, False
+
+    def _existing_token(self, parent: str, title: str) -> str | None:
+        matches = [
+            node
+            for node in self.cli.list_nodes(self.space_id, parent_node_token=parent)
+            if node.get("title") == title
+        ]
+        if len(matches) > 1:
+            raise NeedsReview(f"duplicate system page: {title}")
+        if not matches:
+            return None
+        for key in ("node_token", "obj_token", "token"):
+            if matches[0].get(key):
+                return matches[0][key]
+        return None
 
     @staticmethod
     def _metadata(entry: IndexEntry, revision: int | None = None) -> dict[str, Any]:

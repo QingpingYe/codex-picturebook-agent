@@ -144,6 +144,17 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(plane.acquired, 1)
         self.assertEqual(plane.released, 1)
 
+    def test_resolve_control_plane_fails_without_creating_missing_pages(self):
+        self.cli.nodes["root"] = [
+            {"title": "00_使用说明", "node_token": "node-00"},
+            {"title": "01_知识内容", "node_token": "node-01"},
+            {"title": "02_导航与日志", "node_token": "node-02"},
+            {"title": "99_系统控制台", "node_token": "node-99"},
+        ]
+        with self.assertRaises(NeedsReview):
+            self.publisher.resolve_control_plane()
+        self.assertEqual(self.cli.created_titles, [])
+
     def test_revision_conflict_does_not_replace_human_page(self):
         current = {"revision_id": 1, "content": page("# 人工规则")}
         self.cli.docs[entry().doc_token] = dict(current)
