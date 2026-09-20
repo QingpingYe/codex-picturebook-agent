@@ -3,6 +3,11 @@
 from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
+from control_plane import (
+    render_empty_conflict_queue,
+    render_empty_index,
+    render_empty_lock,
+)
 from lark_cli import RevisionConflict
 from models import IndexEntry
 from page_codec import parse_remote_page, render_remote_page
@@ -204,7 +209,12 @@ class Publisher:
         existing = self._existing_token(parent, title)
         if existing:
             return existing, True
-        response = self.cli.create_doc(parent, title, "")
+        seed_content = {
+            "AI_KB_INDEX_V1": render_empty_index(),
+            "AI_KB_LOCK_V1": render_empty_lock(),
+            "AI_KB_CONFLICT_QUEUE_V1": render_empty_conflict_queue(),
+        }
+        response = self.cli.create_doc(parent, title, seed_content.get(title, ""))
         document = response.get("data", {}).get("document", {})
         token = document.get("document_id", document.get("doc_token", document.get("token")))
         if not token:

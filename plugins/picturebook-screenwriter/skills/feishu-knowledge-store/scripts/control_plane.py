@@ -40,6 +40,7 @@ class ControlPlane:
             raise ValueError("lock_ttl_minutes must be between 15 and 120")
         self.cli = cli
         self.control_tokens = dict(control_tokens)
+
         self.ttl = timedelta(minutes=lock_ttl_minutes)
 
     def read_index(self) -> dict[str, IndexEntry]:
@@ -182,6 +183,21 @@ class ControlPlane:
     def _assert_owner(payload: Mapping[str, Any], lease: Lease) -> None:
         if payload["run_id"] != lease.run_id or payload["holder"] != lease.holder:
             raise LeaseOwnershipError("lock ownership no longer matches this lease")
+
+
+def render_empty_index() -> str:
+    return _render_control("# AI_KB_INDEX_V1", {"schema_version": 1, "entries": []})
+
+
+def render_empty_lock() -> str:
+    return _render_control("# AI_KB_LOCK_V1", {
+        "schema_version": 1, "run_id": None, "holder": None,
+        "started_at": None, "expires_at": None,
+    })
+
+
+def render_empty_conflict_queue() -> str:
+    return "# AI_KB_CONFLICT_QUEUE_V1\n"
 
 
 def _parse_control(content: str, heading: str) -> dict[str, Any]:

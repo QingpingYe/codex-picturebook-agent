@@ -56,9 +56,12 @@ class FakeCli:
         if parent not in self.nodes:
             self.nodes[parent] = []
         token = f"doc-{len(self.created_titles)}"
-        self.nodes[parent].append({"title": title, "node_token": f"node-{len(self.created_titles)}"})
+        node_token = f"node-{len(self.created_titles)}"
+        self.nodes[parent].append({"title": title, "node_token": node_token})
         # lark-cli 1.0.96 creates docx revisions starting at 3.
-        self.docs[token] = {"revision_id": self.create_revision, "content": content}
+        document = {"revision_id": self.create_revision, "content": content}
+        self.docs[token] = document
+        self.docs[node_token] = document
         return {"data": {"document": {"document_id": token, "revision_id": self.create_revision}}}
 
     def fetch_doc(self, token):
@@ -154,6 +157,18 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaises(NeedsReview):
             self.publisher.resolve_control_plane()
         self.assertEqual(self.cli.created_titles, [])
+
+    def test_initialize_seeds_valid_control_documents(self):
+        tokens = self.publisher.initialize()
+        self.assertEqual(
+            self.cli.docs[tokens["index"]]["content"],
+            '# AI_KB_INDEX_V1\n```json\n{"entries":[],"schema_version":1}\n```\n',
+        )
+        self.assertIn('"expires_at":null', self.cli.docs[tokens["lock"]]["content"])
+        self.assertEqual(
+            self.cli.docs[tokens["conflict"]]["content"],
+            "# AI_KB_CONFLICT_QUEUE_V1\n",
+        )
 
     def test_revision_conflict_does_not_replace_human_page(self):
         current = {"revision_id": 1, "content": page("# 人工规则")}
