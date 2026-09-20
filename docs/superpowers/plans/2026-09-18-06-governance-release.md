@@ -545,7 +545,7 @@ git commit -m "chore: add release versioning"
   - `check_repo(root: Path) -> GovernanceReport`
   - CLI: `python scripts/governance_check.py`
 
-- [ ] **Step 1: Write failing governance tests**
+- [x] **Step 1: Write failing governance tests**
 
 Create `scripts/test_governance_check.py`:
 
@@ -631,13 +631,13 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `python .\scripts\test_governance_check.py -v`
 
 Expected: ERROR because `governance_check.py` does not exist.
 
-- [ ] **Step 3: Implement the checker**
+- [x] **Step 3: Implement the checker**
 
 Create `scripts/governance_check.py`:
 
@@ -724,7 +724,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Run tests and CLI**
+- [x] **Step 4: Run tests and CLI**
 
 ```powershell
 python .\scripts\test_governance_check.py -v
@@ -733,7 +733,7 @@ python .\scripts\governance_check.py
 
 Expected: 4 tests pass and the CLI exits 0 on the real repository.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add .\scripts\governance_check.py .\scripts\test_governance_check.py
