@@ -46,10 +46,10 @@ class FakeCli:
         self.update_error = None
         self.update_result = None
 
-    def list_nodes(self, parent):
-        if parent not in self.nodes:
-            self.nodes[parent] = []
-        return self.nodes[parent]
+    def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
+        if parent_node_token not in self.nodes:
+            self.nodes[parent_node_token] = []
+        return self.nodes[parent_node_token]
 
     def create_doc(self, parent, title, content=""):
         self.created_titles.append(title)
@@ -79,10 +79,21 @@ class FakeCli:
         return result
 
 
+class SpaceAwareCli(FakeCli):
+    def __init__(self):
+        super().__init__()
+        self.list_node_calls = []
+        self.nodes["content-root"] = []
+
+    def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
+        self.list_node_calls.append((space_id, parent_node_token, page_limit))
+        return self.nodes.get(parent_node_token, [])
+
+
 class PublisherTests(unittest.TestCase):
     def setUp(self):
         self.cli = FakeCli()
-        self.publisher = Publisher(self.cli, "root")
+        self.publisher = Publisher(self.cli, "root", "target-space")
 
     def test_initialize_creates_system_tree_only_once(self):
         tokens = self.publisher.initialize()
@@ -168,7 +179,7 @@ class PublisherTests(unittest.TestCase):
 
     def test_publish_new_uses_logical_key_title_and_returns_real_tokens(self):
         self.cli = FakeCli()
-        self.publisher = Publisher(self.cli, "root")
+        self.publisher = Publisher(self.cli, "root", "target-space")
         result = self.publisher.publish_new(entry(), "# 正文", "content-root")
         self.assertEqual(self.cli.created_titles, ["s/p/worldview"])
         self.assertEqual(result.doc_token, "doc-1")
@@ -183,9 +194,15 @@ class PublisherTests(unittest.TestCase):
             {"revision_id": 9, "content": current},
         )
 
+    def test_node_lookup_uses_space_id_and_parent_token(self):
+        cli = SpaceAwareCli()
+        publisher = Publisher(cli, "content-root", "target-space")
+        publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(cli.list_node_calls[-1], ("target-space", "content-root", 10))
+
     def test_publish_new_rejects_non_positive_create_revision(self):
         self.cli = FakeCli(create_revision=0)
-        self.publisher = Publisher(self.cli, "root")
+        self.publisher = Publisher(self.cli, "root", "target-space")
         zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
         with self.assertRaises(NeedsReview):
             self.publisher.publish_new(zero_entry, "# 正文", "content-root")

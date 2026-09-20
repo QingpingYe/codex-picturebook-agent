@@ -29,9 +29,10 @@ class Publisher:
     DEFAULT_REVISION_ADVANCE = 2
     MAX_METADATA_ATTEMPTS = 3
 
-    def __init__(self, cli: Any, target_root: str) -> None:
+    def __init__(self, cli: Any, target_root: str, space_id: str) -> None:
         self.cli = cli
         self.target_root = target_root
+        self.space_id = space_id
         self.tokens: dict[str, str] | None = None
         self.revision_advance = self.DEFAULT_REVISION_ADVANCE
 
@@ -186,7 +187,11 @@ class Publisher:
         token = document.get("document_id", document.get("doc_token", document.get("token")))
         if not token:
             raise NeedsReview("created document did not return a usable token")
-        matches = [node for node in self.cli.list_nodes(parent) if node.get("title") == title]
+        matches = [
+            node
+            for node in self.cli.list_nodes(self.space_id, parent_node_token=parent)
+            if node.get("title") == title
+        ]
         if len(matches) != 1:
             raise NeedsReview(f"created page has ambiguous node identity: {title}")
         for key in ("node_token", "obj_token", "token"):
@@ -206,7 +211,11 @@ class Publisher:
         }
 
     def _node_token(self, parent: str, title: str) -> str:
-        matches = [node for node in self.cli.list_nodes(parent) if node.get("title") == title]
+        matches = [
+            node
+            for node in self.cli.list_nodes(self.space_id, parent_node_token=parent)
+            if node.get("title") == title
+        ]
         if len(matches) != 1:
             raise NeedsReview(f"expected exactly one page named {title}")
         for key in ("node_token", "obj_token", "token"):
