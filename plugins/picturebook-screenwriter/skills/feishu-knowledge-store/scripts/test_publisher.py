@@ -166,6 +166,15 @@ class PublisherTests(unittest.TestCase):
         parsed = parse_remote_page(self.cli.docs["doc-1"]["content"])
         self.assertEqual(parsed.metadata["last_ai_revision_id"], 5)
 
+    def test_publish_new_uses_logical_key_title_and_returns_real_tokens(self):
+        self.cli = FakeCli()
+        self.publisher = Publisher(self.cli, "root")
+        result = self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(self.cli.created_titles, ["s/p/worldview"])
+        self.assertEqual(result.doc_token, "doc-1")
+        self.assertEqual(result.wiki_node_token, "node-1")
+        self.assertEqual(result.last_ai_revision_id, 5)
+
     def test_publish_new_rejects_non_positive_create_revision(self):
         self.cli = FakeCli(create_revision=0)
         self.publisher = Publisher(self.cli, "root")

@@ -65,19 +65,25 @@ class Publisher:
             control_plane.release_lock(lease)
 
     def publish_new(self, entry: IndexEntry, body: str, parent: str) -> IndexEntry:
+        title = entry.key
         page = render_remote_page(body, self._metadata(entry, revision=0))
-        result = self.cli.create_doc(parent, entry.doc_token, page)
+        result = self.cli.create_doc(parent, title, page)
         document = result.get("data", {}).get("document", {})
         revision = int(document.get("revision_id", 0))
         if revision <= 0:
             raise NeedsReview("created document did not return a positive revision")
-        current = self.cli.fetch_doc(document["document_id"]).get("data", {}).get("document", {})
+        doc_token = document.get("document_id", document.get("doc_token", document.get("token")))
+        if not doc_token:
+            raise NeedsReview("created document did not return a usable doc token")
+        node_token = self._node_token(parent, title)
+        current = self.cli.fetch_doc(doc_token).get("data", {}).get("document", {})
         parsed = parse_remote_page(current["content"])
         if parsed.metadata["key"] != entry.key:
             raise NeedsReview("created page metadata key mismatch")
-        return self._write_page_with_metadata_fix(
-            document["document_id"], int(current["revision_id"]), parsed.body, entry,
+        fixed = self._write_page_with_metadata_fix(
+            doc_token, int(current["revision_id"]), parsed.body, entry,
         )
+        return replace(fixed, doc_token=doc_token, wiki_node_token=node_token)
 
     def conditional_update(
         self,
@@ -188,3 +194,12 @@ class Publisher:
             "source_revisions": dict(entry.source_revisions),
             "last_ai_revision_id": revision if revision is not None else entry.last_ai_revision_id,
         }
+
+    def _node_token(self, parent: str, title: str) -> str:
+        matches = [node for node in self.cli.list_nodes(parent) if node.get("title") == title]
+        if len(matches) != 1:
+            raise NeedsReview(f"expected exactly one page named {title}")
+        for key in ("node_token", "obj_token", "token"):
+            if matches[0].get(key):
+                return matches[0][key]
+        raise NeedsReview(f"created page has no usable node token: {title}")
