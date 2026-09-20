@@ -15,7 +15,10 @@
     "in_create-baseline",
     "post_create-baseline",
     "pre_output-baseline",
-    "quality-baseline"
+    "quality-baseline",
+    "image-prompt-architect",
+    "image-generate",
+    "illustration-export"
   ],
   "intents": [
     "creation",
@@ -77,6 +80,39 @@
     "craft_benchmark": "FAIL_requires_user_confirmation",
     "wiki_lint": "read_only",
     "lexile_check": "optional_measured_only"
+  },
+  "illustration_route": {
+    "sequence": [
+      "staging-planner",
+      "image-prompt-architect",
+      "image-generate",
+      "illustration-export"
+    ],
+    "confirmation_gate": "before_image_generation",
+    "explicit_choices": [
+      "output_directory",
+      "size",
+      "quality"
+    ]
+  },
+  "image_generation": {
+    "api_key_sources": [
+      "explicit_cli_argument",
+      "PICTUREBOOK_SFACAI_KEY"
+    ],
+    "key_logging": "forbidden",
+    "default_api_call": "forbidden",
+    "missing_references": "error"
+  },
+  "html_export": {
+    "self_contained": true,
+    "model_calls": "forbidden",
+    "external_resources": "forbidden",
+    "embed_required_args": [
+      "limit_mb",
+      "quality"
+    ],
+    "over_limit": "fail_closed"
   },
   "write_policy": {
     "default": "dialog_only",

@@ -74,6 +74,59 @@ class PluginContractTests(unittest.TestCase):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         self.assertIn("lexile-check", contract["skills"])
 
+    def test_contract_declares_art_export_skills(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        for skill in (
+            "image-prompt-architect",
+            "image-generate",
+            "illustration-export",
+        ):
+            with self.subTest(skill=skill):
+                self.assertIn(skill, contract["skills"])
+
+    def test_contract_declares_gated_illustration_route(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        route = contract["illustration_route"]
+        self.assertEqual(
+            route["sequence"],
+            [
+                "staging-planner",
+                "image-prompt-architect",
+                "image-generate",
+                "illustration-export",
+            ],
+        )
+        self.assertEqual(route["confirmation_gate"], "before_image_generation")
+        self.assertEqual(route["explicit_choices"], ["output_directory", "size", "quality"])
+
+    def test_contract_declares_image_generation_boundary(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            contract["image_generation"],
+            {
+                "api_key_sources": [
+                    "explicit_cli_argument",
+                    "PICTUREBOOK_SFACAI_KEY",
+                ],
+                "key_logging": "forbidden",
+                "default_api_call": "forbidden",
+                "missing_references": "error",
+            },
+        )
+
+    def test_contract_declares_html_export_boundary(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            contract["html_export"],
+            {
+                "self_contained": True,
+                "model_calls": "forbidden",
+                "external_resources": "forbidden",
+                "embed_required_args": ["limit_mb", "quality"],
+                "over_limit": "fail_closed",
+            },
+        )
+
     def test_contract_declares_quality_gate_boundary(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         self.assertEqual(
