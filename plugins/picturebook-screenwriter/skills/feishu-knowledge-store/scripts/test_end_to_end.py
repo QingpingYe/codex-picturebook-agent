@@ -25,6 +25,14 @@ class FakePage:
     content: str
 
 
+def entry():
+    return IndexEntry(
+        key="s/p/worldview", doc_token="doc-worldview", wiki_node_token="node-worldview",
+        source_revisions={"source": "r1"}, last_ai_revision_id=1,
+        last_seen_revision_id=1, status="published",
+    )
+
+
 class FakePublisher:
     def __init__(self):
         self.pages = {"doc-worldview": FakePage(1, "# 人工设定")}
@@ -44,8 +52,8 @@ class FakePublisher:
             raise IndexError(f"missing current page: {doc_token}")
         return {"revision_id": current.revision_id, "content": current.content}
 
-    def append_conflict(self, record):
-        self.conflicts.append(record)
+    def append_conflict(self, parent, record):
+        self.conflicts.append((parent, record))
 
 
 class FakeControlPlane:
@@ -61,12 +69,15 @@ class FakeControlPlane:
     def release_lock(self, lease):
         self.lock_holders.remove(lease)
 
+    def update_index(self, entries):
+        return {entry.key: entry for entry in entries}
+
 
 class EndToEndTests(unittest.TestCase):
     def test_two_sync_users_and_human_edit_never_lose_human_content(self):
         plane = FakeControlPlane()
         publisher = FakePublisher()
-        service = SyncService(publisher, plane)
+        service = SyncService(publisher, plane, conflict_parent="conflict-doc")
 
         decision = MergeDecision(
             key="s/p/worldview",
@@ -74,7 +85,7 @@ class EndToEndTests(unittest.TestCase):
             merged_markdown=None,
             reason="人工内容与新源资料冲突",
         )
-        report = service.apply([decision])
+        report = service.apply([decision], {decision.key: entry()})
         self.assertEqual(report, SyncReport(published=0, preserved=0, queued=1,
                                              failed=0, retried=0))
         self.assertTrue(publisher.conflicts)
