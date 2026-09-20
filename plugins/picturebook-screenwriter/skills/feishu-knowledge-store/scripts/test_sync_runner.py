@@ -59,7 +59,7 @@ class SyncRunnerTests(unittest.TestCase):
             },
             "target": {
                 "space_id": "7686313522543774944",
-                "root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+                "root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN",
             },
             "identity": "user",
             "lock_ttl_minutes": 45

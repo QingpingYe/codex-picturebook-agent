@@ -21,7 +21,7 @@ def config_json(values):
         },
         "target": {
             "space_id": "7686313522543774944",
-            "root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+            "root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN",
         },
         "identity": "user",
         "lock_ttl_minutes": 45,
@@ -42,7 +42,7 @@ class ConfigTests(unittest.TestCase):
     def test_environment_path_wins(self):
         path = self.tmp / "from-environment.json"
         config = self.load(config_json({}), {"PICTUREBOOK_KB_CONFIG": str(path)})
-        self.assertEqual(config.target.root_token, "T08vwqXroiuJEfkoVzFcRaFXnMf")
+        self.assertEqual(config.target.root_token, "REPLACE_WITH_TARGET_ROOT_TOKEN")
         self.assertEqual(config.source.root_mode, "space")
 
     def test_bot_identity_is_rejected(self):
@@ -57,7 +57,7 @@ class ConfigTests(unittest.TestCase):
         v1 = {
             "schema_version": 1,
             "source_wiki_url": "https://example.feishu.cn/wiki/source",
-            "target_root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+            "target_root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN",
             "identity": "user",
             "lock_ttl_minutes": 45,
         }

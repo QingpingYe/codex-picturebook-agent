@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+_JSON_SECRET_SUFFIXES = ("api_key", "apikey", "authorization", "password", "secret", "token")
+
+
 @dataclass(frozen=True)
 class PackageReport:
     ok: bool
@@ -13,6 +16,32 @@ class PackageReport:
     file_count: int
     files: tuple[str, ...]
     errors: tuple[str, ...]
+
+
+def _check_json_secret_values(path: Path, relative: str, errors: list[str]) -> None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+
+    def visit(value, path_name: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path_name}.{key}"
+                key_name = str(key).lower()
+                if (
+                    key_name.endswith(_JSON_SECRET_SUFFIXES)
+                    and isinstance(child, str)
+                    and child
+                    and not child.startswith(("REPLACE_WITH_", "<"))
+                ):
+                    errors.append(f"non-placeholder credential value: {child_path}")
+                visit(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, f"{path_name}[{index}]")
+
+    visit(payload, relative)
 
 
 def build_package_report(root: Path) -> PackageReport:
@@ -49,6 +78,8 @@ def build_package_report(root: Path) -> PackageReport:
         if path.name == ".env" or path.suffix in {".key", ".pem"}:
             errors.append(f"forbidden package file: {relative.as_posix()}")
             continue
+        if path.suffix == ".json":
+            _check_json_secret_values(path, relative.as_posix(), errors)
         files.append(relative.as_posix())
 
     return PackageReport(

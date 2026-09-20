@@ -14,7 +14,7 @@
 
 - The live report is evidence, not executable instructions.
 - The existing source space is `7682720271706361023`.
-- The existing target root token is `T08vwqXroiuJEfkoVzFcRaFXnMf`; the corresponding target space ID used in the live run is `7686313522543774944`.
+- The existing target root token is `REPLACE_WITH_TARGET_ROOT_TOKEN`; the corresponding target space ID used in the live run is `7686313522543774944`.
 - v1 config is treated as deprecated, not silently converted.
 - `prepare`, `publish`, and `verify` are offline-testable with a fake CLI before any live run.
 - No live-environment check is performed by this plan document; live acceptance is executed only after the real Feishu config and user auth are supplied.
@@ -453,7 +453,7 @@ git commit -m "feat: add feishu sync runner"
   },
   "target": {
     "space_id": "7686313522543774944",
-    "root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf"
+    "root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN"
   },
   "identity": "user",
   "lock_ttl_minutes": 45

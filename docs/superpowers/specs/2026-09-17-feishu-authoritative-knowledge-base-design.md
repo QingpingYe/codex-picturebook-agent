@@ -8,7 +8,7 @@
 
 原 WorkBuddy 专家团通过 `wiki-ingest` 从原始飞书知识库读取资料、归纳生成项目化知识文档，再写入 WorkBuddy 资料库。Codex 插件不能使用该资料库。
 
-目标根节点为 `T08vwqXroiuJEfkoVzFcRaFXnMf`。多人可：
+目标根节点为 `REPLACE_WITH_TARGET_ROOT_TOKEN`。多人可：
 
 - 向原始飞书知识库上传资料；
 - 发起知识库同步；

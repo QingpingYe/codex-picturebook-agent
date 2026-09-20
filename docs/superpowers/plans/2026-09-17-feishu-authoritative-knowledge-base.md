@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- The target Wiki rooted at T08vwqXroiuJEfkoVzFcRaFXnMf is the only shared authority; local state is disposable cache only.
+- The target Wiki rooted at REPLACE_WITH_TARGET_ROOT_TOKEN is the only shared authority; local state is disposable cache only.
 - The original Feishu Wiki is read-only wiki-ingest input. Never write source material back to it.
 - Store shared knowledge as docx pages and update only through docs +update --revision-id <current revision>. Never use unconditional markdown +overwrite for these pages.
 - Human edits are authoritative. A source conflict retains the current page and creates a conflict record.
@@ -71,12 +71,12 @@ class ConfigTests(unittest.TestCase):
         path = write_config(self.tmp, {
             "schema_version": 1,
             "source_wiki_url": "https://wcno1rbz0o8i.feishu.cn/wiki/OI9gwaRv8i3RwOkGBNnc7VHinDd",
-            "target_root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+            "target_root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN",
             "identity": "user",
             "lock_ttl_minutes": 45,
         })
         config = load_config(None, self.tmp, {"PICTUREBOOK_KB_CONFIG": str(path)})
-        self.assertEqual(config.target_root_token, "T08vwqXroiuJEfkoVzFcRaFXnMf")
+        self.assertEqual(config.target_root_token, "REPLACE_WITH_TARGET_ROOT_TOKEN")
 
     def test_bot_identity_is_rejected(self):
         with self.assertRaisesRegex(ConfigError, "identity must be 'user'"):
@@ -118,7 +118,7 @@ Accept only schema_version 1 and the five config fields shown in the test. Rejec
 {
   "schema_version": 1,
   "source_wiki_url": "https://wcno1rbz0o8i.feishu.cn/wiki/OI9gwaRv8i3RwOkGBNnc7VHinDd",
-  "target_root_token": "T08vwqXroiuJEfkoVzFcRaFXnMf",
+  "target_root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN",
   "identity": "user",
   "lock_ttl_minutes": 45
 }
