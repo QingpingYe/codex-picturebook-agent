@@ -37,7 +37,8 @@ def entry(doc_token="doc-worldview"):
 
 
 class FakeCli:
-    def __init__(self):
+    def __init__(self, create_revision=3):
+        self.create_revision = create_revision
         self.nodes = {"root": []}
         self.docs = {}
         self.created_titles = []
@@ -56,8 +57,9 @@ class FakeCli:
             self.nodes[parent] = []
         token = f"doc-{len(self.created_titles)}"
         self.nodes[parent].append({"title": title, "node_token": f"node-{len(self.created_titles)}"})
-        self.docs[token] = {"revision_id": 1, "content": content}
-        return {"data": {"document": {"document_id": token, "revision_id": 1}}}
+        # lark-cli 1.0.96 creates docx revisions starting at 3.
+        self.docs[token] = {"revision_id": self.create_revision, "content": content}
+        return {"data": {"document": {"document_id": token, "revision_id": self.create_revision}}}
 
     def fetch_doc(self, token):
         return {"data": {"document": dict(self.docs[token])}}
@@ -67,12 +69,12 @@ class FakeCli:
             raise self.update_error
         result = self.update_result or {
             "code": 0,
-            "data": {"document": {"revision_id": revision + 1}},
+            "data": {"document": {"revision_id": revision + 2}},
             "warnings": [],
         }
         if result.get("data", {}).get("result") == "partial_success" or result.get("warnings"):
             return result
-        self.docs[token]["revision_id"] = revision + 1
+        self.docs[token]["revision_id"] = revision + 2
         self.docs[token]["content"] = content
         return result
 
@@ -139,17 +141,34 @@ class PublisherTests(unittest.TestCase):
         self.publisher.conditional_update(entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"})
         expected = render_remote_page(
             "# 人工规则\n\n新资料",
-            {**metadata(), "source_revisions": {"source": "r2"}, "last_ai_revision_id": 2},
+            {**metadata(), "source_revisions": {"source": "r2"}, "last_ai_revision_id": 3},
         )
         self.assertEqual(self.cli.docs[entry().doc_token]["content"], expected)
 
-    def test_publish_new_records_initial_revision(self):
+    def test_publish_new_accepts_create_revision_and_records_corrected_value(self):
         zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
         result = self.publisher.publish_new(zero_entry, "# 正文", "content-root")
-        self.assertEqual(result.last_ai_revision_id, 1)
-        self.assertEqual(result.last_seen_revision_id, 1)
+        self.assertEqual(result.last_ai_revision_id, 5)
+        self.assertEqual(result.last_seen_revision_id, 5)
         parsed = parse_remote_page(self.cli.docs["doc-1"]["content"])
-        self.assertEqual(parsed.metadata["last_ai_revision_id"], 1)
+        self.assertEqual(parsed.metadata["last_ai_revision_id"], 5)
+
+    def test_publish_new_rejects_non_positive_create_revision(self):
+        self.cli = FakeCli(create_revision=0)
+        self.publisher = Publisher(self.cli, "root")
+        zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
+        with self.assertRaises(NeedsReview):
+            self.publisher.publish_new(zero_entry, "# 正文", "content-root")
+
+    def test_publish_new_rejects_partial_metadata_correction(self):
+        zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
+        self.cli.update_result = {
+            "code": 0,
+            "data": {"result": "partial_success", "document": {"revision_id": 5}},
+            "warnings": ["partial"],
+        }
+        with self.assertRaises(NeedsReview):
+            self.publisher.publish_new(zero_entry, "# 正文", "content-root")
 
     def test_conditional_update_records_predicted_revision(self):
         current = {"revision_id": 1, "content": page("# 人工规则")}
@@ -157,23 +176,22 @@ class PublisherTests(unittest.TestCase):
         result = self.publisher.conditional_update(
             entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"}
         )
-        self.assertEqual(result.last_ai_revision_id, 2)
-        self.assertEqual(result.last_seen_revision_id, 2)
+        self.assertEqual(result.last_ai_revision_id, 3)
+        self.assertEqual(result.last_seen_revision_id, 3)
         parsed = parse_remote_page(self.cli.docs[entry().doc_token]["content"])
-        self.assertEqual(parsed.metadata["last_ai_revision_id"], 2)
+        self.assertEqual(parsed.metadata["last_ai_revision_id"], 3)
 
-    def test_conditional_update_rejects_unexpected_revision(self):
+    def test_conditional_update_converges_on_unexpected_revision(self):
         current = {"revision_id": 1, "content": page("# 人工规则")}
         self.cli.docs[entry().doc_token] = dict(current)
-        self.cli.update_result = {
-            "code": 0,
-            "data": {"result": "success", "document": {"revision_id": 3}},
-            "warnings": [],
-        }
-        with self.assertRaises(NeedsReview):
-            self.publisher.conditional_update(
-                entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"}
-            )
+        self.publisher.revision_advance = 1
+        result = self.publisher.conditional_update(
+            entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"}
+        )
+        self.assertEqual(result.last_ai_revision_id, 3)
+        self.assertEqual(self.publisher.revision_advance, 2)
+        parsed = parse_remote_page(self.cli.docs[entry().doc_token]["content"])
+        self.assertEqual(parsed.metadata["last_ai_revision_id"], 3)
 
     def test_resource_bearing_page_requires_review(self):
         current = page("# 正文\n\n[资源](https://example.test/a)")
