@@ -1,5 +1,6 @@
 """Docx wiki publishing with revision preconditions and human-content safety."""
 
+import re
 from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
@@ -214,11 +215,20 @@ class Publisher:
         )
 
     def append_conflict(self, parent: str, record: Mapping[str, Any]) -> None:
-        current = self.cli.fetch_doc(parent).get("data", {}).get("document", {})
+        current_document = self.cli.fetch_doc(parent).get("data", {}).get("document", {})
+        current = {
+            "revision_id": current_document.get("revision_id"),
+            "content": current_document.get("content", "# AI_KB_CONFLICT_QUEUE_V1\n"),
+        }
+        before = self._conflict_records(current["content"])
         content = current.get("content", "# AI_KB_CONFLICT_QUEUE_V1\n")
         if not content.rstrip().endswith(f"[{record['key']}] {record['reason']}"):
             content = content.rstrip() + f"\n[{record['key']}] {record['reason']}\n"
         self.cli.update_doc(parent, int(current["revision_id"]), content)
+        verified_document = self.cli.fetch_doc(parent).get("data", {}).get("document", {})
+        after = self._conflict_records(verified_document.get("content", ""))
+        if after[:len(before)] != before or not after or after[-1] != (record["key"], record["reason"]):
+            raise NeedsReview("conflict queue readback did not preserve records")
 
     def _find_or_create(self, parent: str, title: str) -> tuple[str, bool]:
         existing = self._existing_token(parent, title)
@@ -284,3 +294,12 @@ class Publisher:
             if matches[0].get(key):
                 return matches[0][key]
         raise NeedsReview(f"created page has no usable node token: {title}")
+
+    @staticmethod
+    def _conflict_records(content: str) -> list[tuple[str, str]]:
+        records: list[tuple[str, str]] = []
+        for line in content.splitlines():
+            match = re.fullmatch(r"\[([^\]]+)\] (.+)", line.strip())
+            if match:
+                records.append((match.group(1), match.group(2)))
+        return records

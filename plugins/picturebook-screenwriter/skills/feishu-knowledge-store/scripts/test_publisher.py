@@ -311,6 +311,31 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaises(NeedsReview):
             self.publisher.conditional_update(entry(), current_document, page("# 新规则"), {"source": "r2"})
 
+    def test_conflict_records_ignores_framework_lines(self):
+        content = "# AI_KB_CONFLICT_QUEUE_V1\n\n（当前无待处理冲突）\n[s/p/worldview] reason\n"
+        self.assertEqual(
+            self.publisher._conflict_records(content),
+            [("s/p/worldview", "reason")],
+        )
+
+    def test_append_conflict_rejects_lost_record_after_write(self):
+        self.cli.docs["conflict-doc"] = {
+            "revision_id": 4,
+            "content": "# AI_KB_CONFLICT_QUEUE_V1\n",
+        }
+        original_update = self.cli.update_doc
+
+        def drop_update(token, revision, content):
+            result = original_update(token, revision, content)
+            self.cli.docs[token]["content"] = "# AI_KB_CONFLICT_QUEUE_V1\n\n（当前无待处理冲突）\n"
+            return result
+
+        self.cli.update_doc = drop_update
+        with self.assertRaises(NeedsReview):
+            self.publisher.append_conflict(
+                "conflict-doc", {"key": entry().key, "reason": "human conflict"}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
