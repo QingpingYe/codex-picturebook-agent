@@ -47,7 +47,7 @@
 **Interfaces:**
 - Produces: manifest version target `0.3.0`, Phase 5 artifact types, and public documentation that no longer claims art/export is unsupported.
 
-- [ ] **Step 1: Add the failing release-surface tests**
+- [x] **Step 1: Add the failing release-surface tests**
 
 Create `plugins/picturebook-screenwriter/tests/test_release_contract.py`:
 
@@ -100,13 +100,13 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v`
 
 Expected: FAIL/ERROR because the manifest, contract, and READMEs do not yet declare the Phase 5 release surface.
 
-- [ ] **Step 3: Update the public metadata and contract**
+- [x] **Step 3: Update the public metadata and contract**
 
 In `plugin.json`, set the top-level `version` and `description`, and set `defaultPrompt` inside the existing `interface` object:
 
@@ -155,7 +155,7 @@ In `config/plugin-contract.json`, extend `artifact_types` with:
 
 Preserve the existing six narrative artifact types and all existing contract sections.
 
-- [ ] **Step 4: Update both READMEs**
+- [x] **Step 4: Update both READMEs**
 
 In `plugins/picturebook-screenwriter/README.md`, move these from “暂不支持” to “已支持”:
 
@@ -174,13 +174,13 @@ In root `README.md`, update the capability list to include:
 - Self-contained HTML preview
 ```
 
-- [ ] **Step 5: Run the test and confirm it passes**
+- [x] **Step 5: Run the test and confirm it passes**
 
 Run: `python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v`
 
 Expected: 4 tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add README.md .\plugins\picturebook-screenwriter\README.md .\plugins\picturebook-screenwriter\.codex-plugin\plugin.json .\plugins\picturebook-screenwriter\config\plugin-contract.json .\plugins\picturebook-screenwriter\tests\test_release_contract.py
