@@ -5,6 +5,7 @@ from quality_gate import (
     SemanticJudgment,
     apply_judgments,
     build_report,
+    report_to_json,
     report_to_markdown,
 )
 
@@ -30,6 +31,21 @@ class QualityGateTests(unittest.TestCase):
         finding = Finding("R1", "project", "FAIL", "疑似红线", "角色不能飞行")
         result = apply_judgments([finding], [])
         self.assertEqual(result[0].severity, "FAIL")
+
+    def test_report_has_machine_readable_json(self):
+        finding = Finding("R1", "project", "FAIL", "违反角色红线", "角色不能飞行")
+        report = build_report([finding])
+        self.assertEqual(report_to_json(report), {
+            "status": "blocked",
+            "findings": [{
+                "id": "R1",
+                "source": "project",
+                "severity": "FAIL",
+                "message": "违反角色红线",
+                "evidence": "角色不能飞行",
+            }],
+            "blocked_reasons": ["违反角色红线"],
+        })
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """Shared quality report model for the pre-output gate."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Iterable
 
 
@@ -73,3 +73,10 @@ def report_to_markdown(report: QualityReport) -> str:
         lines.extend(["", "阻断原因："])
         lines.extend(f"- {reason}" for reason in report.blocked_reasons)
     return "\n".join(lines) + "\n"
+
+
+def report_to_json(report: QualityReport) -> dict[str, object]:
+    payload = asdict(report)
+    payload["findings"] = list(payload["findings"])
+    payload["blocked_reasons"] = list(payload["blocked_reasons"])
+    return payload
