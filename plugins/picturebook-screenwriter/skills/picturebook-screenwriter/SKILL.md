@@ -42,6 +42,17 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, o
 
 产物默认只在对话中呈现，不得默认落盘。只有用户明确批准确认门，或明确要求导出时，才允许写入工作区文件。写文件前必须说明目标路径、文件名和版本号。
 
+## Quality Gate
+
+确认门前必须汇总：
+
+1. `craft-benchmark-check` 的确定性指标。
+2. `pre_output-baseline/scripts/quality_gate.py` 的项目红线与语义判定。
+3. `wiki-ingest/scripts/wiki_lint.py` 的 Wiki lint 和权威知识状态。
+4. 如用户要求，`lexile-check` 的实测结果。
+
+项目权威 FAIL 阻断确认，必须先修订。工艺基准 FAIL 不自动阻断，但必须列出差值并请求用户确认。若用户确认接受，记录确认理由；不得把接受后的工艺偏差伪装为通过。
+
 ## Knowledge Dependency Gate
 
 创作或修订前必须装载目标项目的权威知识：构造 `AuthorityQuery` 并调用 `AuthorityLoader.load()`。若必需页面缺失或页面元数据与索引不一致，明确报告“权威知识缺失”，不得用本地缓存或猜测内容替代。

@@ -46,6 +46,22 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("正文末尾", text)
         self.assertIn("parse_dependency_record", text)
 
+    def test_entry_blocks_project_failures(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("项目权威 FAIL", text)
+        self.assertIn("阻断", text)
+
+    def test_entry_distinguishes_craft_warnings(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("工艺基准 FAIL", text)
+        self.assertIn("用户确认", text)
+
+    def test_entry_integrates_wiki_and_optional_lexile_gates(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("Wiki lint", text)
+        self.assertIn("lexile-check", text)
+        self.assertIn("实测", text)
+
     def test_plugin_advertises_authoritative_feishu_knowledge(self):
         import json
         manifest = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
