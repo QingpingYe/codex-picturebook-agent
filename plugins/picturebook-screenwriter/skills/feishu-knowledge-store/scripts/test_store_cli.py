@@ -33,15 +33,18 @@ def config(path: Path):
     return SimpleNamespace(
         identity="user",
         lock_ttl_minutes=45,
+        source=SimpleNamespace(space_id="preloaded-source", root_mode="space"),
         target=SimpleNamespace(root_token="root-token", space_id="target-space"),
     )
 
 
 class FakeCli:
     def __init__(self):
+        self.listed = []
         self.fetched = []
 
     def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
+        self.listed.append(space_id)
         if parent_node_token == "root-token":
             return [{"node_token": "node-page", "title": "s/p/worldview"}]
         return []
@@ -209,15 +212,24 @@ class StoreCliTests(unittest.TestCase):
     def test_prepare_command_delegates_to_sync_runner(self):
         run_dir = Path(self.tmp.name) / "run-1"
         write_manifest(run_dir)
+        cli = FakeCli()
+
+        def factory(config_path, environ=None):
+            return SimpleNamespace(
+                config=config(Path(config_path)), cli=cli,
+                publisher=FakePublisher(), control_plane=FakeControlPlane(),
+            )
+
         stdout = StringIO()
         exit_code = store_cli.main([
             "prepare", "--config", str(self.config_path), "--run-dir", str(run_dir),
-        ], stdout=stdout, components_factory=fake_factory)
+        ], stdout=stdout, components_factory=factory)
         manifest = run_dir / "wiki_staging" / "_manifest.json"
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, str(manifest))
         self.assertTrue((run_dir / "source_nodes.json").exists())
+        self.assertEqual(cli.listed, ["preloaded-source"])
 
     def test_conflict_append_acquires_lease_and_records_conflict(self):
         plane = FakeControlPlane()

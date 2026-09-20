@@ -43,11 +43,13 @@ class SyncReport:
 
 
 class SyncRunner:
-    def __init__(self, config_path, cli, publisher=None, control_plane=None) -> None:
+    def __init__(self, config_path, cli, publisher=None, control_plane=None,
+                 config=None) -> None:
         self.config_path = Path(config_path)
         self.cli = cli
         self.publisher = publisher
         self.control_plane = control_plane
+        self._config = config
         self.bootstrap_state = BootstrapState.REQUIRED
 
     def prepare(self, run_dir) -> Path:
@@ -126,6 +128,8 @@ class SyncRunner:
         return report
 
     def _load_config(self) -> Any:
+        if self._config is not None:
+            return self._config
         return load_config(self.config_path, self.config_path.parent, {})
 
     @staticmethod

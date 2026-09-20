@@ -131,19 +131,19 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
         elif args.command == "prepare":
             runner = SyncRunner(
                 args.config, components.cli, components.publisher,
-                components.control_plane,
+                components.control_plane, config=components.config,
             )
             payload = str(runner.prepare(args.run_dir))
         elif args.command == "publish":
             runner = SyncRunner(
                 args.config, components.cli, components.publisher,
-                components.control_plane,
+                components.control_plane, config=components.config,
             )
             payload = runner.publish(args.run_dir)
         elif args.command == "verify":
             runner = SyncRunner(
                 args.config, components.cli, components.publisher,
-                components.control_plane,
+                components.control_plane, config=components.config,
             )
             payload = runner.verify(args.run_dir)
         elif args.command == "lint-fixture":
