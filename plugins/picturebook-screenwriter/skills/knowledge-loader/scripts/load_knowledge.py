@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
-from typing import Any, Mapping
+from typing import Any, Literal
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 STORE_SCRIPTS = SCRIPT_DIR.parent.parent / "feishu-knowledge-store" / "scripts"
@@ -31,6 +31,7 @@ class KnowledgeEvidence:
     title: str
     content: str
     source_revisions: dict[str, str]
+    status: Literal["published", "needs_review", "archived"] = "published"
 
 
 @dataclass(frozen=True)
@@ -68,12 +69,9 @@ class KnowledgeLoader:
         candidates = []
         for entry in index.values():
             parts = entry.key.split("/")
-            if len(parts) != 3:
+            if len(parts) != 3 or parts[1] != query.project_id:
                 continue
-            if query.series_id:
-                if parts[0] != query.series_id or parts[1] != query.project_id:
-                    continue
-            elif query.project_id and query.project_id not in entry.key:
+            if query.series_id and parts[0] != query.series_id:
                 continue
             if query.page_types and parts[2] not in query.page_types:
                 continue
@@ -82,6 +80,9 @@ class KnowledgeLoader:
         items = []
         warnings = []
         for entry in candidates:
+            if entry.status == "archived":
+                warnings.append(f"{entry.key} 已归档，不能作为权威知识")
+                continue
             try:
                 raw = self.cli.fetch_doc(entry.doc_token)
                 document = raw.get("data", {}).get("document", {})
@@ -91,6 +92,10 @@ class KnowledgeLoader:
                     raise ValueError(
                         f"系统元数据与索引不一致：{entry.key}"
                     )
+                if page.metadata["last_ai_revision_id"] != entry.last_ai_revision_id:
+                    raise ValueError(f"页面与索引 last_ai_revision_id 不一致：{entry.key}")
+                if int(document["revision_id"]) != entry.last_seen_revision_id:
+                    raise ValueError(f"页面与索引 revision 不一致：{entry.key}")
                 score = sum(1 for term in query.terms if term in page.body)
                 if query.terms and score == 0:
                     continue
@@ -106,9 +111,10 @@ class KnowledgeLoader:
                 key=entry.key,
                 doc_token=entry.doc_token,
                 revision_id=int(document["revision_id"]),
-                title=entry.key.split("/")[-1],
+                title=entry.key,
                 content=page.body,
                 source_revisions=dict(entry.source_revisions),
+                status=entry.status,
             )
             for score, entry, page, document in items[:query.limit]
         )
@@ -134,6 +140,7 @@ def _bundle_to_dict(bundle: KnowledgeEvidenceBundle) -> dict[str, Any]:
                 "title": item.title,
                 "content": item.content,
                 "source_revisions": item.source_revisions,
+                "status": item.status,
             }
             for item in bundle.items
         ],

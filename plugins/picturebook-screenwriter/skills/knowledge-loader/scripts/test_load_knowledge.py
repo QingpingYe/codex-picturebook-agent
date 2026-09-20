@@ -1,5 +1,6 @@
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 SCRIPTS = Path(__file__).parent
@@ -10,13 +11,13 @@ from load_knowledge import KnowledgeEvidenceBundle, KnowledgeLoader, KnowledgeQu
 from page_codec import render_remote_page
 
 
-def remote_page(key: str, page_type: str, body: str) -> str:
+def remote_page(key: str, page_type: str, body: str, last_ai_revision_id: int = 1) -> str:
     return render_remote_page(body, {
         "key": key,
         "page_type": page_type,
         "source_node_tokens": ["source"],
         "source_revisions": {"source": "r1"},
-        "last_ai_revision_id": 1,
+        "last_ai_revision_id": last_ai_revision_id,
     })
 
 
@@ -41,11 +42,16 @@ class FakeCli:
     def fetch_doc(self, token):
         content_by_token = {
             "doc-world": remote_page(
-                "海外绘本/小老鼠迈尔斯/worldview", "worldview", "# 世界观\n\n小老鼠迈尔斯住在森林里。"),
+                "海外绘本/小老鼠迈尔斯/worldview", "worldview",
+                "# 世界观\n\n小老鼠迈尔斯住在森林里。", last_ai_revision_id=44),
             "doc-char": remote_page(
-                "海外绘本/小老鼠迈尔斯/characters", "characters", "# 角色\n\n铃铛是他的重要道具。"),
+                "海外绘本/小老鼠迈尔斯/characters", "characters",
+                "# 角色\n\n铃铛是他的重要道具。", last_ai_revision_id=45),
         }
-        return {"data": {"document": {"revision_id": 45, "content": content_by_token[token]}}}
+        revision_by_token = {"doc-world": 44, "doc-char": 45}
+        return {"data": {"document": {
+            "revision_id": revision_by_token[token], "content": content_by_token[token],
+        }}}
 
 
 class KnowledgeLoaderTests(unittest.TestCase):
@@ -78,6 +84,31 @@ class KnowledgeLoaderTests(unittest.TestCase):
         self.assertTrue(bundle.offline)
         self.assertIn("最后确认的本地缓存", bundle.warnings[0])
         self.assertEqual(bundle.fetched_at, "2026-09-17T10:00:00+08:00")
+
+    def test_loader_rejects_revision_skew_between_page_and_index(self):
+        plane = FakePlane()
+        skewed = replace(
+            plane.read_index()["海外绘本/小老鼠迈尔斯/worldview"],
+            last_ai_revision_id=44, last_seen_revision_id=45,
+        )
+        plane.read_index = lambda: {skewed.key: skewed}
+        loader = KnowledgeLoader(plane, FakeCli())
+        with self.assertRaisesRegex(ValueError, "revision"):
+            loader.load(KnowledgeQuery(project_id="小老鼠迈尔斯"))
+
+    def test_loader_uses_exact_project_segment(self):
+        loader = KnowledgeLoader(FakePlane(), FakeCli())
+        bundle = loader.load(KnowledgeQuery(project_id="小老鼠"))
+        self.assertEqual(bundle.items, ())
+
+    def test_loader_skips_archived_entries_with_warning(self):
+        plane = FakePlane()
+        old = plane.read_index()["海外绘本/小老鼠迈尔斯/worldview"]
+        plane.read_index = lambda: {old.key: replace(old, status="archived")}
+        loader = KnowledgeLoader(plane, FakeCli())
+        bundle = loader.load(KnowledgeQuery(project_id="小老鼠迈尔斯"))
+        self.assertEqual(bundle.items, ())
+        self.assertTrue(any("已归档" in warning for warning in bundle.warnings))
 
 
 if __name__ == "__main__":

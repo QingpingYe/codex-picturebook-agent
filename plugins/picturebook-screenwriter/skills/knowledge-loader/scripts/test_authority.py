@@ -55,8 +55,9 @@ class OtherSeriesControlPlane:
 
 class OtherSeriesCli:
     def fetch_doc(self, token):
+        revision_by_token = {"doc-a": 42, "doc-b": 43}
         return {"data": {"document": {
-            "revision_id": 43,
+            "revision_id": revision_by_token[token],
             "content": "# 世界观\n\n正文\n\n## 系统元数据（请勿编辑）\n```json\n{\"schema_version\":1,\"key\":\"海外绘本/小老鼠迈尔斯/worldview\",\"page_type\":\"worldview\",\"source_node_tokens\":[\"node-a\"],\"source_revisions\":{\"node-a\":\"17\"},\"last_ai_revision_id\":42}\n```\n",
         }}}
 
