@@ -25,6 +25,19 @@ class FakeControlPlane:
     def release_lock(self, lease):
         self.released += 1
 
+    def update_index(self, entries):
+        return {entry.key: entry for entry in entries}
+
+
+class RecordingPlane(FakeControlPlane):
+    def __init__(self):
+        super().__init__()
+        self.updated = []
+
+    def update_index(self, entries):
+        self.updated.extend(entries)
+        return {entry.key: entry for entry in self.updated}
+
 
 class FakePublisher:
     def __init__(self):
@@ -33,7 +46,7 @@ class FakePublisher:
 
     def initialize(self):
         self.initialized = True
-        return {}
+        return {"content": "content-root"}
 
     def publish_new(self, entry, body, parent):
         self.published.append((entry.key, body, parent))
@@ -130,6 +143,27 @@ class SyncRunnerTests(unittest.TestCase):
         report = runner.publish(self.run_dir)
         self.assertEqual(report["run_id"], "run-1")
         self.assertEqual(report["source"], {"document_count": 1, "container_count": 0})
+
+    def test_publish_uses_content_root_and_updates_index(self):
+        self._write_manifest()
+        plane = RecordingPlane()
+        publisher = FakePublisher()
+        publisher.initialize = lambda: {"content": "content-root"}
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(publisher.published[0][2], "content-root")
+        self.assertEqual([entry.key for entry in plane.updated], [
+            "海外绘本/小老鼠迈尔斯/worldview",
+        ])
+        self.assertEqual(report["published"], 1)
+
+    def test_publish_does_not_create_bootstrap_page(self):
+        self._write_manifest()
+        publisher = FakePublisher()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher,
+                            control_plane=FakeControlPlane())
+        runner.publish(self.run_dir)
+        self.assertFalse(any(key == "system/bootstrap" for key, *_ in publisher.published))
 
     def test_chinese_path_and_title_round_trip(self):
         self.run_dir = Path(self.tmp.name) / "中文运行目录" / "runs" / "run-1"

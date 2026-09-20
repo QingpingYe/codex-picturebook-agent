@@ -26,6 +26,7 @@ class SyncReport:
     failed: int
     run_id: str
     source: dict[str, int]
+    errors: list[str]
 
     def as_dict(self):
         return {
@@ -37,6 +38,7 @@ class SyncReport:
             "failed": self.failed,
             "run_id": self.run_id,
             "source": self.source,
+            "errors": self.errors,
         }
 
 
@@ -72,20 +74,22 @@ class SyncRunner:
         self.bootstrap_state = BootstrapState.IN_PROGRESS
         lease = self.control_plane.acquire_lock("sync-runner", datetime.now(timezone.utc))
         try:
-            self._persist_bootstrap_state(BootstrapState.IN_PROGRESS)
-            self.publisher.initialize()
+            tokens = self.publisher.initialize()
+            parent = tokens["content"]
             published = 0
             failed = 0
+            errors = []
             for raw in entries:
                 try:
                     entry = self._entry(raw)
                     body = self._candidate_body(run_dir, raw["path"])
-                    self.publisher.publish_new(entry, body, self._target_parent())
+                    published_entry = self.publisher.publish_new(entry, body, parent)
+                    self.control_plane.update_index([published_entry])
                     published += 1
-                except Exception:
+                except Exception as error:
                     failed += 1
+                    errors.append(f"{raw.get('key', '<unknown>')}: {error}")
             self.bootstrap_state = BootstrapState.COMPLETE
-            self._persist_bootstrap_state(BootstrapState.COMPLETE)
             if failed > 0:
                 self.bootstrap_state = BootstrapState.FAILED
                 raise SyncRunnerError("有候选页面发布失败")
@@ -93,12 +97,12 @@ class SyncRunner:
                 RunStatus.PUBLISHED, len(entries), published,
                 preserved=0, queued=0, failed=failed,
                 run_id=run_dir.name, source=self._source_summary(run_dir),
+                errors=errors,
             )
             self._write_json(run_dir / "sync_report.json", report.as_dict())
             return report.as_dict()
         except Exception:
             self.bootstrap_state = BootstrapState.FAILED
-            self._persist_bootstrap_state(BootstrapState.FAILED)
             raise
         finally:
             self.control_plane.release_lock(lease)
@@ -148,8 +152,8 @@ class SyncRunner:
             doc_token=raw.get("doc_token", raw["key"]),
             wiki_node_token=raw.get("wiki_node_token", raw["key"]),
             source_revisions=raw["source_revisions"],
-            last_ai_revision_id=1,
-            last_seen_revision_id=1,
+            last_ai_revision_id=0,
+            last_seen_revision_id=0,
             status="published",
         )
 
@@ -160,20 +164,6 @@ class SyncRunner:
 
     def _target_parent(self) -> str:
         return self._load_config().target.root_token
-
-    def _persist_bootstrap_state(self, state: str) -> None:
-        entry = IndexEntry(
-            key="system/bootstrap",
-            doc_token="bootstrap",
-            wiki_node_token="bootstrap",
-            source_revisions={"bootstrap": state},
-            last_ai_revision_id=1,
-            last_seen_revision_id=1,
-            status="published",
-        )
-        self.publisher.publish_new(entry, json.dumps({"state": state}, ensure_ascii=False),
-                                   self._target_parent())
-
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Picture Book Feishu knowledge sync runner")
