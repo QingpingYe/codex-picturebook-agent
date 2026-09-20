@@ -8,6 +8,8 @@ This repository is the active home for the Codex plugin. It packages:
 - Text craft methodology
 - Craft benchmark checks
 - Staging planner
+- Gated illustration workflow
+- Self-contained HTML preview
 - 多人协作飞书知识库同步与权威检索
 
 The original WorkBuddy expert files are kept locally as a reference archive and
@@ -44,6 +46,8 @@ The plugin supports:
 - Picture-book text craft methodology and baselines
 - Quantified self-review of page text
 - Spatial planning for page-by-page storyboards
+- Structured illustration prompts, explicit image-generation confirmation, and asset tracking
+- Self-contained HTML preview
 - Feishu authoritative knowledge retrieval and synchronized ingestion
 
 ## Feishu knowledge setup

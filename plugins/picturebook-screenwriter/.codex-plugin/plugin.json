@@ -1,7 +1,7 @@
 {
   "name": "picturebook-screenwriter",
-  "version": "0.2.0",
-  "description": "Picture book screenwriting workshop for Codex: role-switched editorial workflow, text craft methodology, craft benchmark checks, and staging planning.",
+  "version": "0.3.0",
+  "description": "Picture book screenwriting workshop for Codex: editorial workflow, quality gates, staging planning, and a gated illustration workflow.",
   "author": {
     "name": "YeQingping"
   },
@@ -16,7 +16,7 @@
   "interface": {
     "displayName": "Picture Book Screenwriter",
     "shortDescription": "绘本编剧工坊（飞书知识库版）",
-    "longDescription": "A compact Codex adaptation of the picture book screenwriting workshop with 多人协作飞书知识库同步与权威检索, editorial workflow, text craft methodology, benchmark checks, and staging planning.",
+    "longDescription": "A compact Codex adaptation of the picture book screenwriting workshop with 多人协作飞书知识库同步与权威检索, editorial workflow, text craft methodology, benchmark checks, staging planning, structured illustration prompts, explicitly confirmed image generation, and self-contained HTML 预览.",
     "developerName": "YeQingping",
     "category": "Productivity",
     "capabilities": [
@@ -26,7 +26,9 @@
     "defaultPrompt": [
       "帮我从零开始策划一个绘本故事",
       "检查这份绘本脚本的工艺指标",
-      "为逐页脚本规划分镜站位"
+      "为逐页脚本规划分镜站位",
+      "为已批准的绘本脚本生成结构化插画提示词",
+      "导出包含插画的自包含 HTML 预览"
     ],
     "brandColor": "#3B82F6"
   }
