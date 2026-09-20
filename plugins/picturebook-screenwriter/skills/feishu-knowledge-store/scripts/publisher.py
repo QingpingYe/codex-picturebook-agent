@@ -168,6 +168,14 @@ class Publisher:
             self.revision_advance = actual_revision - revision
         if final_revision is None:
             raise NeedsReview("revision did not converge to metadata value after retries")
+        verified = self.fetch_current(entry.doc_token)
+        verified_page = parse_remote_page(verified["content"])
+        if verified_page.body != merged.body:
+            raise NeedsReview("updated page body did not match merged content")
+        if verified_page.metadata["last_ai_revision_id"] != final_revision:
+            raise NeedsReview("updated page metadata revision did not match write result")
+        if verified_page.metadata["source_revisions"] != dict(source_revisions):
+            raise NeedsReview("updated page source revisions did not match merge decision")
         return replace(
             entry,
             source_revisions=dict(source_revisions),

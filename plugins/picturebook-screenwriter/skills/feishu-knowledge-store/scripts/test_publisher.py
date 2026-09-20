@@ -195,6 +195,24 @@ class PublisherTests(unittest.TestCase):
         )
         self.assertEqual(self.cli.docs[entry().doc_token]["content"], expected)
 
+    def test_conditional_update_rejects_metadata_drift_after_write(self):
+        current = {"revision_id": 1, "content": page("# 人工规则")}
+        self.cli.docs[entry().doc_token] = dict(current)
+        original_update = self.cli.update_doc
+
+        def drift_update(token, revision, content):
+            result = original_update(token, revision, content)
+            self.cli.docs[token]["content"] = render_remote_page(
+                "# 人工规则\n\n新资料", {**metadata(), "last_ai_revision_id": 99}
+            )
+            return result
+
+        self.cli.update_doc = drift_update
+        with self.assertRaises(NeedsReview):
+            self.publisher.conditional_update(
+                entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"}
+            )
+
     def test_publish_new_accepts_create_revision_and_records_corrected_value(self):
         zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
         result = self.publisher.publish_new(zero_entry, "# 正文", "content-root")
