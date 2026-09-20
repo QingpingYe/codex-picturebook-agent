@@ -9,6 +9,7 @@
     "wiki-ingest",
     "feishu-knowledge-store",
     "knowledge-loader",
+    "lexile-check",
     "story-planning",
     "pre_create-baseline",
     "in_create-baseline",
@@ -64,6 +65,18 @@
       "trigger": "explicit_user_request",
       "write_policy": "dialog_only"
     }
+  },
+  "quality_gate": {
+    "confirmation_package": [
+      "draft",
+      "metrics",
+      "findings",
+      "blocked_reasons"
+    ],
+    "project_authority": "FAIL_blocks_confirmation",
+    "craft_benchmark": "FAIL_requires_user_confirmation",
+    "wiki_lint": "read_only",
+    "lexile_check": "optional_measured_only"
   },
   "write_policy": {
     "default": "dialog_only",

@@ -70,6 +70,28 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn("确认门", text)
         self.assertIn("明确要求导出", text)
 
+    def test_contract_declares_lexile_check_skill(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        self.assertIn("lexile-check", contract["skills"])
+
+    def test_contract_declares_quality_gate_boundary(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            contract["quality_gate"],
+            {
+                "confirmation_package": [
+                    "draft",
+                    "metrics",
+                    "findings",
+                    "blocked_reasons",
+                ],
+                "project_authority": "FAIL_blocks_confirmation",
+                "craft_benchmark": "FAIL_requires_user_confirmation",
+                "wiki_lint": "read_only",
+                "lexile_check": "optional_measured_only",
+            },
+        )
+
     def test_entry_skill_forbids_implicit_file_writes(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
         self.assertIn("不得默认落盘", text)
