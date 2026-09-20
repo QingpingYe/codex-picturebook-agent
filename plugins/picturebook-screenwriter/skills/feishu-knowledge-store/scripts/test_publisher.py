@@ -212,6 +212,26 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(result.wiki_node_token, "node-1")
         self.assertEqual(result.last_ai_revision_id, 5)
 
+    def test_publish_new_rejects_existing_logical_key_page(self):
+        self.cli = FakeCli()
+        self.cli.nodes["content-root"] = [{"title": entry().key, "node_token": "node-old"}]
+        self.publisher = Publisher(self.cli, "root", "target-space")
+        with self.assertRaises(NeedsReview):
+            self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(self.cli.created_titles, [])
+
+    def test_publish_new_rejects_duplicate_created_by_rival(self):
+        class DuplicateCreatingCli(FakeCli):
+            def create_doc(self, parent, title, content=""):
+                result = super().create_doc(parent, title, content)
+                self.nodes[parent].append({"title": title, "node_token": "node-rival"})
+                return result
+
+        self.cli = DuplicateCreatingCli()
+        self.publisher = Publisher(self.cli, "root", "target-space")
+        with self.assertRaises(NeedsReview):
+            self.publisher.publish_new(entry(), "# 正文", "content-root")
+
     def test_fetch_current_returns_validated_revision_and_content(self):
         current = page("# 正文")
         self.cli.docs[entry().doc_token] = {"revision_id": 9, "content": current}

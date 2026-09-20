@@ -109,6 +109,13 @@ class Publisher:
 
     def publish_new(self, entry: IndexEntry, body: str, parent: str) -> IndexEntry:
         title = entry.key
+        existing_nodes = [
+            node
+            for node in self.cli.list_nodes(self.space_id, parent_node_token=parent)
+            if node.get("title") == title
+        ]
+        if existing_nodes:
+            raise NeedsReview(f"logical key page already exists: {title}")
         page = render_remote_page(body, self._metadata(entry, revision=0))
         result = self.cli.create_doc(parent, title, page)
         document = result.get("data", {}).get("document", {})
