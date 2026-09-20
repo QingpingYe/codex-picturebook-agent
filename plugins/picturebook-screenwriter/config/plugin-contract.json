@@ -33,7 +33,11 @@
     "worldview",
     "characters",
     "outline",
-    "script"
+    "script",
+    "illustration_prompt_payload",
+    "image_asset",
+    "asset_registry",
+    "html_preview"
   ],
   "workflow_states": [
     "briefing",
