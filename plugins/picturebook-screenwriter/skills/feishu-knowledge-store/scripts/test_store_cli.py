@@ -6,6 +6,8 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+from models import IndexEntry
+
 SCRIPTS = Path(__file__).parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -36,11 +38,29 @@ def config(path: Path):
 
 
 class FakeCli:
+    def __init__(self):
+        self.fetched = []
+
     def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
-        return [{"title": "节点", "node_token": "node-1"}]
+        if parent_node_token == "root-token":
+            return [{"node_token": "node-page", "title": "s/p/worldview"}]
+        return []
 
     def preflight(self, target_root_token):
         return {"identity": "user", "root": target_root_token}
+
+    def fetch_doc(self, doc_token):
+        self.fetched.append(doc_token)
+        content_by_token = {
+            "index-doc": "# AI_KB_INDEX_V1\n```json\n{\"schema_version\":1,\"entries\":[]}\n```\n",
+            "conflict-doc": "# AI_KB_CONFLICT_QUEUE_V1\n",
+            "page-doc": "# 世界观\n\n正文\n",
+        }
+        revision_by_token = {"index-doc": 2, "conflict-doc": 3, "page-doc": 4}
+        return {"data": {"document": {
+            "revision_id": revision_by_token[doc_token],
+            "content": content_by_token[doc_token],
+        }}}
 
 
 class FakePublisher:
@@ -78,6 +98,16 @@ class FakeControlPlane:
 
     def read_lock(self):
         return 7, {"holder": None, "run_id": None}
+
+    def read_index(self):
+        return {
+            "s/p/worldview": IndexEntry(
+                key="s/p/worldview", doc_token="page-doc",
+                wiki_node_token="node-page", source_revisions={"node": "1"},
+                last_ai_revision_id=4, last_seen_revision_id=4,
+                status="published",
+            )
+        }
 
 
 def fake_factory(config_path, environ=None):
@@ -228,6 +258,29 @@ class StoreCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertEqual(plane.acquired, [])
         self.assertEqual(publisher.appended, [])
+
+    def test_lint_fixture_writes_tree_index_conflict_and_pages(self):
+        cli = FakeCli()
+
+        def factory(config_path, environ=None):
+            return SimpleNamespace(
+                config=config(Path(config_path)), cli=cli,
+                publisher=FakePublisher(), control_plane=FakeControlPlane(),
+            )
+
+        out = Path(self.tmp.name) / "fixture"
+        stdout = StringIO()
+        exit_code = store_cli.main([
+            "lint-fixture", "--config", str(self.config_path), "--out", str(out),
+        ], stdout=stdout, components_factory=factory)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["out"], str(out))
+        self.assertTrue((out / "tree.json").exists())
+        self.assertTrue((out / "index.md").exists())
+        self.assertTrue((out / "conflict.md").exists())
+        self.assertTrue((out / "pages" / "s__p__worldview.md").exists())
+        self.assertEqual(cli.fetched, ["index-doc", "conflict-doc", "page-doc"])
 
 
 if __name__ == "__main__":

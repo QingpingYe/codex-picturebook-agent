@@ -52,7 +52,54 @@ def build_parser() -> argparse.ArgumentParser:
     conflict.add_argument("--key", required=True)
     conflict.add_argument("--reason", required=True)
     conflict.add_argument("--holder")
+    fixture = commands.add_parser("lint-fixture")
+    fixture.add_argument("--config", required=True)
+    fixture.add_argument("--out", required=True)
     return parser
+
+
+def export_lint_fixture(components: Components, out: str | Path) -> Path:
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    config = components.config
+    root = config.target.root_token
+    nodes = [{"node_token": root, "title": "<root>", "parent_node_token": None}]
+
+    def walk(parent_node_token: str) -> None:
+        for node in components.cli.list_nodes(config.target.space_id, parent_node_token=parent_node_token):
+            node_token = next(
+                value for key in ("node_token", "obj_token", "token")
+                if (value := node.get(key))
+            )
+            nodes.append({
+                "node_token": node_token,
+                "title": node.get("title", ""),
+                "parent_node_token": parent_node_token,
+            })
+            walk(node_token)
+
+    walk(root)
+    (out / "tree.json").write_text(
+        json.dumps(nodes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
+
+    def content(token: str) -> str:
+        return components.cli.fetch_doc(token)["data"]["document"]["content"]
+
+    tokens = components.publisher.resolve_control_plane()
+    index_document = content(tokens["index"])
+    (out / "index.md").write_text(index_document, encoding="utf-8")
+    conflict_document = content(tokens["conflict"])
+    (out / "conflict.md").write_text(conflict_document, encoding="utf-8")
+
+    pages = out / "pages"
+    pages.mkdir(parents=True, exist_ok=True)
+    index = components.control_plane.read_index()
+    for entry in index.values():
+        (pages / f"{entry.key.replace('/', '__')}.md").write_text(
+            content(entry.doc_token), encoding="utf-8",
+        )
+    return out
 
 
 def main(argv=None, stdout=None, components_factory=None) -> int:
@@ -99,6 +146,8 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
                 components.control_plane,
             )
             payload = runner.verify(args.run_dir)
+        elif args.command == "lint-fixture":
+            payload = {"out": str(export_lint_fixture(components, args.out))}
         else:
             tokens = components.publisher.resolve_control_plane()
             payload = components.publisher.fetch_current(tokens["conflict"])
