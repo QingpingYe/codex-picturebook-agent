@@ -924,7 +924,7 @@ git commit -m "feat: add package inventory validation"
 **Interfaces:**
 - Produces: one repeatable release gate covering offline checks, live checks, versioning, and marketplace installation.
 
-- [ ] **Step 1: Add failing checklist tests**
+- [x] **Step 1: Add failing checklist tests**
 
 Append to `plugins/picturebook-screenwriter/tests/test_release_contract.py`:
 
@@ -951,13 +951,13 @@ class ReleaseChecklistTests(unittest.TestCase):
         self.assertIn("python .\\scripts\\package_check.py", text)
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v`
 
 Expected: FAIL because `docs/RELEASE.md` and governance commands are not documented.
 
-- [ ] **Step 3: Create the release checklist**
+- [x] **Step 3: Create the release checklist**
 
 Create `docs/RELEASE.md`:
 
@@ -1010,7 +1010,7 @@ Create `docs/RELEASE.md`:
 5. Record acceptance results and blockers before publishing to the marketplace.
 ````
 
-- [ ] **Step 4: Document local governance commands**
+- [x] **Step 4: Document local governance commands**
 
 Add a “Release governance” section to root `README.md`:
 
@@ -1027,7 +1027,7 @@ See `docs/RELEASE.md` before publishing.
 
 Add the same two commands to the plugin README verification section.
 
-- [ ] **Step 5: Run release and structure checks**
+- [x] **Step 5: Run release and structure checks**
 
 ```powershell
 python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v
@@ -1038,7 +1038,7 @@ python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugi
 
 Expected: all checks pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add docs\RELEASE.md README.md .\plugins\picturebook-screenwriter\README.md .\plugins\picturebook-screenwriter\tests\test_release_contract.py

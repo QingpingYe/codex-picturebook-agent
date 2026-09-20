@@ -76,6 +76,15 @@ python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\craft-b
 node .\plugins\picturebook-screenwriter\skills\staging-planner\scripts\run_regression.js
 ```
 
+## Release governance
+
+```powershell
+python .\scripts\governance_check.py
+python .\scripts\package_check.py
+```
+
+See `docs/RELEASE.md` before publishing.
+
 ## Feishu preflight
 
 Before the first live sync, set the local config path and verify user authentication, source access, and target access:

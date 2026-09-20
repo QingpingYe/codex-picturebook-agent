@@ -70,6 +70,8 @@ codex plugin add picturebook-screenwriter@picturebook-local
 python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
 python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\craft-benchmark-check\scripts -p "test_*.py" -v
 node .\plugins\picturebook-screenwriter\skills\staging-planner\scripts\run_regression.js
+python .\scripts\governance_check.py
+python .\scripts\package_check.py
 ```
 
 Windows 上如果 `python` 指向 Microsoft Store 存根，请先使用可用的 Python 3.10+ 解释器。

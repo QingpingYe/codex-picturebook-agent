@@ -70,5 +70,27 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertIn("Self-contained HTML preview", text)
 
 
+class ReleaseChecklistTests(unittest.TestCase):
+    def test_release_checklist_names_all_gates(self):
+        text = (ROOT.parent.parent / "docs" / "RELEASE.md").read_text(encoding="utf-8")
+        for gate in (
+            "test_*.py",
+            "generate.test.js",
+            "run_regression.js",
+            "governance_check.py",
+            "package_check.py",
+            "validate_plugin.py",
+            "live Feishu",
+            "marketplace",
+        ):
+            with self.subTest(gate=gate):
+                self.assertIn(gate, text)
+
+    def test_readme_documents_governance_commands(self):
+        text = (ROOT.parent.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn("python .\\scripts\\governance_check.py", text)
+        self.assertIn("python .\\scripts\\package_check.py", text)
+
+
 if __name__ == "__main__":
     unittest.main()
