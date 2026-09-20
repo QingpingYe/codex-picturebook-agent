@@ -1056,7 +1056,7 @@ git commit -m "docs: add release checklist"
 **Interfaces:**
 - Produces: a manual acceptance script for two Feishu users, with offline and live boundaries clearly separated.
 
-- [ ] **Step 1: Add the failing documentation test**
+- [x] **Step 1: Add the failing documentation test**
 
 Append to `plugins/picturebook-screenwriter/tests/test_release_contract.py`:
 
@@ -1083,13 +1083,13 @@ class LiveAcceptanceTests(unittest.TestCase):
                 self.assertIn(evidence, text)
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v`
 
 Expected: FAIL/ERROR because the live acceptance document does not exist.
 
-- [ ] **Step 3: Write the live acceptance document**
+- [x] **Step 3: Write the live acceptance document**
 
 Create `docs/superpowers/plans/2026-09-18-06-live-acceptance.md`:
 
@@ -1133,13 +1133,13 @@ This document is a manual gate. It is not part of the offline test suite and mus
 The release may proceed only after all blockers are resolved and acceptance results are recorded.
 ```
 
-- [ ] **Step 4: Run release tests**
+- [x] **Step 4: Run release tests**
 
 Run: `python .\plugins\picturebook-screenwriter\tests\test_release_contract.py -v`
 
 Expected: all release-contract tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add docs\superpowers\plans\2026-09-18-06-live-acceptance.md .\plugins\picturebook-screenwriter\tests\test_release_contract.py

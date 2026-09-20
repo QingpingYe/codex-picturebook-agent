@@ -92,5 +92,27 @@ class ReleaseChecklistTests(unittest.TestCase):
         self.assertIn("python .\\scripts\\package_check.py", text)
 
 
+class LiveAcceptanceTests(unittest.TestCase):
+    def test_live_acceptance_names_required_evidence(self):
+        path = (
+            ROOT.parent.parent
+            / "docs"
+            / "superpowers"
+            / "plans"
+            / "2026-09-18-06-live-acceptance.md"
+        )
+        text = path.read_text(encoding="utf-8")
+        for evidence in (
+            "User A",
+            "User B",
+            "revision_id",
+            "human edit survives",
+            "only one lease",
+            "explicit user approval",
+        ):
+            with self.subTest(evidence=evidence):
+                self.assertIn(evidence, text)
+
+
 if __name__ == "__main__":
     unittest.main()
