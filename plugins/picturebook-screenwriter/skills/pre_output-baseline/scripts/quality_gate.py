@@ -14,6 +14,14 @@ class Finding:
 
 
 @dataclass(frozen=True)
+class SemanticJudgment:
+    finding_id: str
+    verdict: str
+    rationale: str
+    evidence: str
+
+
+@dataclass(frozen=True)
 class QualityReport:
     status: str
     findings: tuple[Finding, ...]
@@ -32,6 +40,29 @@ def build_report(findings: Iterable[Finding]) -> QualityReport:
         else "passed"
     )
     return QualityReport(status, values, blocked)
+
+
+def apply_judgments(
+    findings: Iterable[Finding],
+    judgments: Iterable[SemanticJudgment],
+) -> tuple[Finding, ...]:
+    by_id = {judgment.finding_id: judgment for judgment in judgments}
+    result = []
+    for finding in findings:
+        judgment = by_id.get(finding.id)
+        if judgment is None:
+            result.append(finding)
+            continue
+        if judgment.verdict not in {"PASS", "WARN", "FAIL"}:
+            raise ValueError(f"invalid verdict: {judgment.verdict}")
+        result.append(Finding(
+            finding.id,
+            finding.source,
+            judgment.verdict,
+            f"{finding.message}；语义判定：{judgment.rationale}",
+            judgment.evidence or finding.evidence,
+        ))
+    return tuple(result)
 
 
 def report_to_markdown(report: QualityReport) -> str:
