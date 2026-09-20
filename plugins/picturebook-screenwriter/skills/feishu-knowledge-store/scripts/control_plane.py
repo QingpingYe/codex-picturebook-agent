@@ -2,9 +2,9 @@
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from lark_cli import RevisionConflict
 from models import IndexEntry
@@ -123,6 +123,28 @@ class ControlPlane:
                 raise ControlPlaneCorrupt("duplicate logical key during rebuild")
             rebuilt[entry.key] = entry
         return rebuilt
+
+    def update_index(self, entries: Iterable[IndexEntry]) -> dict[str, IndexEntry]:
+        merged = self.read_index()
+        for entry in entries:
+            merged[entry.key] = entry
+        payload = {
+            "schema_version": 1,
+            "entries": [asdict(entry) for entry in sorted(merged.values(), key=lambda item: item.key)],
+        }
+        rendered = _render_control("# AI_KB_INDEX_V1", payload)
+        revision, _ = self._fetch(self.control_tokens["index"])
+        result = self.cli.update_doc(self.control_tokens["index"], revision, rendered)
+        has_warnings = isinstance(result, Mapping) and result.get("warnings")
+        is_partial = isinstance(result, Mapping) and result.get("data", {}).get("result") == "partial_success"
+        if has_warnings or is_partial:
+            raise ControlPlaneCorrupt("index update returned warnings or partial success")
+        new_revision = self._revision_from_update_result(result)
+        verified_revision, verified_content = self._fetch(self.control_tokens["index"])
+        verified = _parse_control(verified_content, "# AI_KB_INDEX_V1")
+        if verified_revision != new_revision or verified != payload:
+            raise ControlPlaneCorrupt("index readback did not match the expected entries")
+        return self.read_index()
 
     def _read_lock(self) -> tuple[int, dict[str, Any]]:
         revision, content = self._fetch(self.control_tokens["lock"])

@@ -10,6 +10,7 @@ if str(SCRIPTS) not in sys.path:
 
 from control_plane import ControlPlane, ControlPlaneCorrupt, LockHeld, LeaseOwnershipError
 from lark_cli import RevisionConflict
+from models import IndexEntry
 
 FIXED_NOW = datetime(2026, 9, 17, 3, 0, tzinfo=timezone.utc)
 
@@ -55,6 +56,33 @@ class FakeCli:
 
 
 class ControlPlaneTests(unittest.TestCase):
+    def test_update_index_merges_entries_and_verifies_readback(self):
+        cli = FakeCli()
+        plane = ControlPlane(cli, control_tokens())
+        updated = IndexEntry(
+            key="s/p/worldview", doc_token="doc-world", wiki_node_token="node-world",
+            source_revisions={"source": "r2"}, last_ai_revision_id=9,
+            last_seen_revision_id=9, status="published",
+        )
+        result = plane.update_index([updated])
+        self.assertEqual(result["s/p/worldview"], updated)
+        self.assertEqual(cli.docs["index-doc"]["revision_id"], 3)
+
+    def test_update_index_detects_postwrite_index_change(self):
+        class RacyIndexCli(FakeCli):
+            def update_doc(self, token, revision, content):
+                result = super().update_doc(token, revision, content)
+                self.docs[token]["content"] = index_content()
+                return result
+
+        plane = ControlPlane(RacyIndexCli(), control_tokens())
+        with self.assertRaises(ControlPlaneCorrupt):
+            plane.update_index([IndexEntry(
+                key="s/p/worldview", doc_token="doc-world", wiki_node_token="node-world",
+                source_revisions={"source": "r2"}, last_ai_revision_id=9,
+                last_seen_revision_id=9, status="published",
+            )])
+
     def test_first_writer_acquires_lock_at_revision(self):
         plane = ControlPlane(FakeCli(lock_revision=7, lock_content=empty_lock()), control_tokens())
         lease = plane.acquire_lock("alice@host", FIXED_NOW)
