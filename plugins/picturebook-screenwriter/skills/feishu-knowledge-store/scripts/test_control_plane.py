@@ -56,6 +56,11 @@ class FakeCli:
 
 
 class ControlPlaneTests(unittest.TestCase):
+    def test_read_lock_is_public(self):
+        revision, payload = ControlPlane(FakeCli(), control_tokens()).read_lock()
+        self.assertEqual(revision, 1)
+        self.assertIsNone(payload["holder"])
+
     def test_update_index_merges_entries_and_verifies_readback(self):
         cli = FakeCli()
         plane = ControlPlane(cli, control_tokens())

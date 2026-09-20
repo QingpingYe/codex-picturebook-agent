@@ -56,6 +56,9 @@ class ControlPlane:
             result[entry.key] = entry
         return result
 
+    def read_lock(self) -> tuple[int, dict[str, Any]]:
+        return self._read_lock()
+
     def acquire_lock(self, holder: str, now: datetime) -> Lease:
         if not isinstance(holder, str) or not holder.strip():
             raise ValueError("holder must be non-empty")
