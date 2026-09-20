@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from config import load_config
 from control_plane import ControlPlane
 from lark_cli import LarkCli
 from publisher import Publisher
+from sync_runner import SyncRunner
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,15 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("preflight", "resolve", "lock-status", "conflict-list"):
         command = commands.add_parser(name)
         command.add_argument("--config", required=True)
+    for name in ("prepare", "publish", "verify"):
+        command = commands.add_parser(name)
+        command.add_argument("--config", required=True)
+        command.add_argument("--run-dir", required=True)
+    conflict = commands.add_parser("conflict-append")
+    conflict.add_argument("--config", required=True)
+    conflict.add_argument("--key", required=True)
+    conflict.add_argument("--reason", required=True)
+    conflict.add_argument("--holder")
     return parser
 
 
@@ -57,6 +68,37 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
         elif args.command == "lock-status":
             revision_id, payload = components.control_plane.read_lock()
             payload = {"revision_id": revision_id, **payload}
+        elif args.command == "conflict-append":
+            if not args.holder:
+                return 2
+            tokens = components.publisher.resolve_control_plane()
+            lease = components.control_plane.acquire_lock(
+                args.holder, datetime.now(timezone.utc),
+            )
+            try:
+                record = {"key": args.key, "reason": args.reason}
+                components.publisher.append_conflict(tokens["conflict"], record)
+            finally:
+                components.control_plane.release_lock(lease)
+            payload = record
+        elif args.command == "prepare":
+            runner = SyncRunner(
+                args.config, components.cli, components.publisher,
+                components.control_plane,
+            )
+            payload = str(runner.prepare(args.run_dir))
+        elif args.command == "publish":
+            runner = SyncRunner(
+                args.config, components.cli, components.publisher,
+                components.control_plane,
+            )
+            payload = runner.publish(args.run_dir)
+        elif args.command == "verify":
+            runner = SyncRunner(
+                args.config, components.cli, components.publisher,
+                components.control_plane,
+            )
+            payload = runner.verify(args.run_dir)
         else:
             tokens = components.publisher.resolve_control_plane()
             payload = components.publisher.fetch_current(tokens["conflict"])

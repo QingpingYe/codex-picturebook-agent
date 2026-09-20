@@ -36,6 +36,9 @@ def config(path: Path):
 
 
 class FakeCli:
+    def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
+        return [{"title": "节点", "node_token": "node-1"}]
+
     def preflight(self, target_root_token):
         return {"identity": "user", "root": target_root_token}
 
@@ -46,6 +49,7 @@ class FakePublisher:
             "index": "index-doc", "lock": "lock-doc", "conflict": "conflict-doc",
         }
         self.error = error
+        self.appended = []
 
     def resolve_control_plane(self):
         if self.error:
@@ -55,8 +59,23 @@ class FakePublisher:
     def fetch_current(self, doc_token):
         return {"revision_id": 3, "content": "# AI_KB_CONFLICT_QUEUE_V1\n"}
 
+    def append_conflict(self, parent, record):
+        self.appended.append((parent, record))
+        return (parent, record)
+
 
 class FakeControlPlane:
+    def __init__(self):
+        self.acquired = []
+        self.released = []
+
+    def acquire_lock(self, holder, now):
+        self.acquired.append(holder)
+        return "lease"
+
+    def release_lock(self, lease):
+        self.released.append(lease)
+
     def read_lock(self):
         return 7, {"holder": None, "run_id": None}
 
@@ -68,6 +87,20 @@ def fake_factory(config_path, environ=None):
         publisher=FakePublisher(),
         control_plane=FakeControlPlane(),
     )
+
+
+def write_manifest(run_dir: Path) -> None:
+    staging = run_dir / "wiki_staging"
+    staging.mkdir(parents=True, exist_ok=True)
+    (staging / "worldview.md").write_text("---\ntitle: 世界观\n---\n# 世界观\n", encoding="utf-8")
+    (staging / "_manifest.json").write_text(json.dumps({
+        "version": 9, "series": {}, "root": [],
+        "entries": [{
+            "path": "worldview.md", "key": "s/p/worldview",
+            "source_revisions": {"node": "1"}, "page_type": "worldview",
+            "series_id": "s", "project_id": "p",
+        }],
+    }), encoding="utf-8")
 
 
 class StoreCliTests(unittest.TestCase):
@@ -142,6 +175,59 @@ class StoreCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 1)
         self.assertIn("missing system page", payload["error"])
+
+    def test_prepare_command_delegates_to_sync_runner(self):
+        run_dir = Path(self.tmp.name) / "run-1"
+        write_manifest(run_dir)
+        stdout = StringIO()
+        exit_code = store_cli.main([
+            "prepare", "--config", str(self.config_path), "--run-dir", str(run_dir),
+        ], stdout=stdout, components_factory=fake_factory)
+        manifest = run_dir / "wiki_staging" / "_manifest.json"
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, str(manifest))
+        self.assertTrue((run_dir / "source_nodes.json").exists())
+
+    def test_conflict_append_acquires_lease_and_records_conflict(self):
+        plane = FakeControlPlane()
+        publisher = FakePublisher()
+
+        def factory(config_path, environ=None):
+            return SimpleNamespace(
+                config=config(Path(config_path)), cli=FakeCli(),
+                publisher=publisher, control_plane=plane,
+            )
+
+        stdout = StringIO()
+        exit_code = store_cli.main([
+            "conflict-append", "--config", str(self.config_path),
+            "--key", "s/p/worldview", "--reason", "human conflict", "--holder", "human@example",
+        ], stdout=stdout, components_factory=factory)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, {"key": "s/p/worldview", "reason": "human conflict"})
+        self.assertEqual(publisher.appended, [("conflict-doc", payload)])
+        self.assertEqual(plane.acquired, ["human@example"])
+        self.assertEqual(plane.released, ["lease"])
+
+    def test_conflict_append_without_holder_does_not_write(self):
+        plane = FakeControlPlane()
+        publisher = FakePublisher()
+
+        def factory(config_path, environ=None):
+            return SimpleNamespace(
+                config=config(Path(config_path)), cli=FakeCli(),
+                publisher=publisher, control_plane=plane,
+            )
+
+        exit_code = store_cli.main([
+            "conflict-append", "--config", str(self.config_path),
+            "--key", "s/p/worldview", "--reason", "human conflict",
+        ], stdout=StringIO(), components_factory=factory)
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(plane.acquired, [])
+        self.assertEqual(publisher.appended, [])
 
 
 if __name__ == "__main__":
