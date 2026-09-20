@@ -754,7 +754,7 @@ git commit -m "feat: add governance checker"
   - `build_package_report(root: Path) -> PackageReport`
   - CLI: `python scripts/package_check.py`
 
-- [ ] **Step 1: Write failing package tests**
+- [x] **Step 1: Write failing package tests**
 
 Create `scripts/test_package_check.py`:
 
@@ -810,13 +810,13 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `python .\scripts\test_package_check.py -v`
 
 Expected: ERROR because `package_check.py` does not exist.
 
-- [ ] **Step 3: Implement package validation**
+- [x] **Step 3: Implement package validation**
 
 Create `scripts/package_check.py`:
 
@@ -895,7 +895,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Run tests and CLI**
+- [x] **Step 4: Run tests and CLI**
 
 ```powershell
 python .\scripts\test_package_check.py -v
@@ -904,7 +904,7 @@ python .\scripts\package_check.py
 
 Expected: 3 tests pass and the CLI exits 0 on the real repository.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add .\scripts\package_check.py .\scripts\test_package_check.py
