@@ -62,6 +62,18 @@ def _skipped(section: str, reason: str) -> dict:
     return {"section": section, "reason": reason}
 
 
+def _render_cards(cards: list[dict], title_field: str) -> str:
+    return "".join(
+        f"""
+        <article class="card">
+          <h2>{html.escape(str(card[title_field]))}</h2>
+          <p>{html.escape(str(card['description']))}</p>
+        </article>
+        """
+        for card in cards
+    )
+
+
 def build_html(payload: dict, output_dir: Path) -> ExportResult:
     _require(payload, "project_metadata")
     _require(payload, "pages")
@@ -148,6 +160,19 @@ def build_html(payload: dict, output_dir: Path) -> ExportResult:
         """
         for page in pages
     )
+    optional_sections = []
+    if characters:
+        optional_sections.append(
+            f'<section aria-label="characters">{_render_cards(characters, "name")}</section>'
+        )
+    if locations:
+        optional_sections.append(
+            f'<section aria-label="locations">{_render_cards(locations, "name")}</section>'
+        )
+    if themes:
+        optional_sections.append(
+            f'<section aria-label="themes">{_render_cards(themes, "title")}</section>'
+        )
     output_path = Path(output_dir).resolve() / (
         f"{metadata['project_id']}_ep{metadata['episode']}_storyboard.html"
     )
@@ -172,6 +197,7 @@ def build_html(payload: dict, output_dir: Path) -> ExportResult:
       <p>{html.escape(str(metadata['target_age']))} · Episode {html.escape(str(metadata['episode']))}</p>
     </header>
     {''.join(overview_parts)}
+    {''.join(optional_sections)}
     <section aria-label="storyboard">{storyboard_cards}</section>
   </main>
   <script>

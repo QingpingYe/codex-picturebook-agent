@@ -45,6 +45,10 @@ function resolveApiKey(args, env = process.env) {
   return args.apiKey || env.PICTUREBOOK_SFACAI_KEY || null;
 }
 
+function apiPath(referenceCount) {
+  return referenceCount > 0 ? "/v1/images/edits" : "/v1/images/generations";
+}
+
 function metadataPath(outputPath) {
   return path.join(path.dirname(path.resolve(outputPath)), "_metadata.json");
 }
@@ -95,23 +99,38 @@ function imageDimensions(buffer, requestedSize) {
 }
 
 async function requestImage(args, apiKey) {
-  const form = new FormData();
-  form.append("model", MODEL);
-  form.append("prompt", args.prompt);
-  form.append("size", args.size);
-  form.append("quality", args.quality);
-  form.append("n", "1");
+  const endpoint = apiPath(args.refs.length);
+  let body;
+  if (args.refs.length === 0) {
+    body = JSON.stringify({
+      model: MODEL,
+      prompt: args.prompt,
+      size: args.size,
+      quality: args.quality,
+      n: 1,
+    });
+  } else {
+    const form = new FormData();
+    form.append("model", MODEL);
+    form.append("prompt", args.prompt);
+    form.append("size", args.size);
+    form.append("quality", args.quality);
+    form.append("n", "1");
 
-  for (const ref of args.refs) {
-    const refPath = path.resolve(ref);
-    if (!fs.existsSync(refPath)) throw new Error(`reference image not found: ${ref}`);
-    form.append("image", new Blob([fs.readFileSync(refPath)]), path.basename(refPath));
+    for (const ref of args.refs) {
+      const refPath = path.resolve(ref);
+      if (!fs.existsSync(refPath)) throw new Error(`reference image not found: ${ref}`);
+      form.append("image", new Blob([fs.readFileSync(refPath)]), path.basename(refPath));
+    }
+    body = form;
   }
 
-  const response = await fetch(`${BASE_URL}/v1/images/edits`, {
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
+    headers: args.refs.length === 0
+      ? { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }
+      : { Authorization: `Bearer ${apiKey}` },
+    body,
   });
 
   if (!response.ok) {
@@ -151,4 +170,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, resolveApiKey };
+module.exports = { apiPath, parseArgs, resolveApiKey };
