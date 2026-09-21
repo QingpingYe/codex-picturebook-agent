@@ -7,10 +7,20 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from models import KnowledgeConfig, SourceConfig, TargetConfig
+from config_paths import resolve_config_path
 
 
 class ConfigError(ValueError):
     """Raised when a knowledge-store configuration is unsafe or invalid."""
+
+    status = "invalid_config"
+
+    def to_dict(self) -> dict:
+        return {"status": self.status, "error": str(self)}
+
+
+class PlaceholderTargetTokenError(ConfigError):
+    status = "placeholder_target_token"
 
 
 _FIELDS = {
@@ -22,24 +32,26 @@ _FIELDS = {
 }
 _SOURCE_FIELDS = {"space_id", "root_mode", "wiki_url"}
 _TARGET_FIELDS = {"space_id", "root_token"}
-_DEFAULT_CONFIG_NAME = "feishu-knowledge-base.json"
+_PLACEHOLDER_TARGET_TOKEN = "REPLACE_WITH_TARGET_ROOT_TOKEN"
 _WINDOWS_CLI_FALLBACK = Path(r"D:\lark-cli\lark-cli.exe")
 
 
 def load_config(
     config_path: str | os.PathLike[str] | None,
-    workspace: str | os.PathLike[str],
+    workspace: str | os.PathLike[str] | None = None,
     environ: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
 ) -> KnowledgeConfig:
-    """Load exactly version-one config, preferring the environment path.
+    """Load exactly schema-v2 config, using explicit paths first.
 
     ``which`` is injectable solely to make portable candidate resolution testable.
     """
     environment = os.environ if environ is None else environ
-    selected = environment.get("PICTUREBOOK_KB_CONFIG") or config_path
-    if selected is None:
-        selected = Path(workspace) / _DEFAULT_CONFIG_NAME
+    if config_path is None:
+        resolved = resolve_config_path(None, workspace, environment)
+        selected = resolved.path
+    else:
+        selected = Path(config_path)
     path = Path(selected)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -72,6 +84,10 @@ def load_config(
         raise ConfigError("source.root_mode must be 'space' or 'node'")
     target_space_id = _nonempty_string(target["space_id"], "target.space_id")
     target_root_token = _nonempty_string(target["root_token"], "target.root_token")
+    if target_root_token == _PLACEHOLDER_TARGET_TOKEN:
+        raise PlaceholderTargetTokenError(
+            "target.root_token must not remain the placeholder value"
+        )
     if raw["identity"] != "user":
         raise ConfigError("identity must be 'user'")
     ttl = raw["lock_ttl_minutes"]

@@ -21,7 +21,7 @@ def config_json(values):
         },
         "target": {
             "space_id": "7686313522543774944",
-            "root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN",
+            "root_token": "root-token",
         },
         "identity": "user",
         "lock_ttl_minutes": 45,
@@ -39,11 +39,23 @@ class ConfigTests(unittest.TestCase):
             arguments = (str(self.tmp / "config.json"), self.tmp, environ)
             return load_config(*arguments) if which is None else load_config(*arguments, which=which)
 
-    def test_environment_path_wins(self):
+    def test_environment_is_used_without_explicit_config(self):
         path = self.tmp / "from-environment.json"
-        config = self.load(config_json({}), {"PICTUREBOOK_KB_CONFIG": str(path)})
-        self.assertEqual(config.target.root_token, "REPLACE_WITH_TARGET_ROOT_TOKEN")
+        with patch("config_paths.Path.is_file", return_value=True), \
+             patch("config.Path.read_text", return_value=config_json({})):
+            config = load_config(None, self.tmp, {"PICTUREBOOK_KB_CONFIG": str(path)})
+        self.assertEqual(config.target.root_token, "root-token")
         self.assertEqual(config.source.root_mode, "space")
+
+    def test_placeholder_target_token_is_rejected(self):
+        placeholder = {
+            "target": {
+                "space_id": "7686313522543774944",
+                "root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN",
+            }
+        }
+        with self.assertRaisesRegex(ConfigError, "placeholder"):
+            self.load(config_json(placeholder), {})
 
     def test_bot_identity_is_rejected(self):
         with self.assertRaisesRegex(ConfigError, "identity must be 'user'"):
