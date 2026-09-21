@@ -89,7 +89,11 @@ class ConfigTests(unittest.TestCase):
     def test_cli_candidates_follow_portable_order_without_duplicates(self):
         config = self.load(config_json({}), {"LARK_CLI_PATH": "lark-cli"}, which=lambda _: "lark-cli")
         self.assertEqual(config.cli_candidates[0], Path("lark-cli"))
-        self.assertEqual(len(config.cli_candidates), 2)
+        self.assertEqual(len(config.cli_candidates), 1)
+
+    def test_config_cli_candidates_exclude_machine_drive_fallback(self):
+        config = self.load(config_json({}), {}, which=lambda _: None)
+        self.assertEqual(config.cli_candidates, ())
 
 
 if __name__ == "__main__":

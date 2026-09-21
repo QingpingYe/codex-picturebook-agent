@@ -33,8 +33,6 @@ _FIELDS = {
 _SOURCE_FIELDS = {"space_id", "root_mode", "wiki_url"}
 _TARGET_FIELDS = {"space_id", "root_token"}
 _PLACEHOLDER_TARGET_TOKEN = "REPLACE_WITH_TARGET_ROOT_TOKEN"
-_WINDOWS_CLI_FALLBACK = Path(r"D:\lark-cli\lark-cli.exe")
-
 
 def load_config(
     config_path: str | os.PathLike[str] | None,
@@ -95,7 +93,7 @@ def load_config(
         raise ConfigError("lock_ttl_minutes must be an integer from 15 to 120")
 
     candidates: list[Path] = []
-    for candidate in (environment.get("LARK_CLI_PATH"), which("lark-cli"), str(_WINDOWS_CLI_FALLBACK)):
+    for candidate in (environment.get("LARK_CLI_PATH"), which("lark-cli")):
         if candidate:
             candidate_path = Path(candidate)
             if candidate_path not in candidates:

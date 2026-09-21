@@ -29,7 +29,7 @@ class Runner:
 
 
 class LarkCliBootstrapTests(unittest.TestCase):
-    def test_default_candidates_include_common_windows_c_locations(self):
+    def test_default_candidates_include_portable_windows_locations(self):
         environ = {
             "LARK_CLI_PATH": r"C:\Explicit\lark-cli.exe",
             "APPDATA": r"C:\Users\writer\AppData\Roaming",
@@ -45,9 +45,17 @@ class LarkCliBootstrapTests(unittest.TestCase):
             Path(r"C:\Users\writer\AppData\Roaming\npm\lark-cli.cmd"),
             Path(r"C:\Users\writer\AppData\Roaming\npm\node_modules\@larksuite\cli\bin\lark-cli.exe"),
             Path(r"C:\Program Files\nodejs\lark-cli.cmd"),
-            Path(r"C:\lark-cli\lark-cli.exe"),
-            Path(r"D:\lark-cli\lark-cli.exe"),
         ])
+
+    def test_bootstrap_platform_candidates_exclude_author_drive_letters(self):
+        candidates = default_cli_candidates({
+            "APPDATA": r"C:\Users\writer\AppData\Roaming",
+            "ProgramFiles": r"C:\Program Files",
+            "HOME": r"C:\Users\writer",
+        }, which=lambda _: None)
+        text = "\n".join(str(path) for path in candidates)
+        self.assertNotIn("C:\\lark-cli", text)
+        self.assertNotIn("D:\\lark-cli", text)
 
     def test_existing_supported_cli_is_used_without_install(self):
         runner = Runner(Completed("lark-cli version 1.0.95\n"))

@@ -15,7 +15,6 @@ from lark_cli import LarkCli
 
 
 SUPPORTED_VERSIONS = {"1.0.95", "1.0.96"}
-WINDOWS_CLI_FALLBACK = Path(r"D:\lark-cli\lark-cli.exe")
 INSTALL_COMMAND = ("npx", "@larksuite/cli@latest", "install")
 _VERSION = re.compile(r"lark-cli.*?([0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
 
@@ -122,10 +121,6 @@ def _platform_candidates(environment: Mapping[str, str]) -> tuple[Path, ...]:
         program_files = environment.get("ProgramFiles")
         if program_files:
             candidates.append(Path(program_files) / "nodejs" / "lark-cli.cmd")
-        candidates.extend((
-            Path(r"C:\lark-cli\lark-cli.exe"),
-            WINDOWS_CLI_FALLBACK,
-        ))
         return tuple(candidates)
 
     home = environment.get("HOME")
