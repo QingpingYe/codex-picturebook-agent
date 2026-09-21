@@ -9,6 +9,7 @@ from typing import Any
 
 from models import IndexEntry
 from config import load_config
+from config_paths import resolve_config_path
 from runner_status import BootstrapState, RunStatus
 
 
@@ -44,8 +45,10 @@ class SyncReport:
 
 class SyncRunner:
     def __init__(self, config_path, cli, publisher=None, control_plane=None,
-                 config=None) -> None:
-        self.config_path = Path(config_path)
+                 config=None, workspace=None, environ=None) -> None:
+        self.config_path = Path(config_path) if config_path is not None else None
+        self.workspace = Path(workspace) if workspace is not None else Path.cwd()
+        self.environ = environ
         self.cli = cli
         self.publisher = publisher
         self.control_plane = control_plane
@@ -130,7 +133,10 @@ class SyncRunner:
     def _load_config(self) -> Any:
         if self._config is not None:
             return self._config
-        return load_config(self.config_path, self.config_path.parent, {})
+        if self.config_path is None:
+            resolved = resolve_config_path(None, self.workspace, self.environ)
+            self.config_path = resolved.path
+        return load_config(self.config_path, self.workspace, self.environ)
 
     @staticmethod
     def _load_json(path: Path) -> dict[str, Any]:
@@ -178,10 +184,11 @@ class SyncRunner:
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Picture Book Feishu knowledge sync runner")
     parser.add_argument("command", choices=("prepare", "publish", "verify"))
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--config")
+    parser.add_argument("--workspace")
     parser.add_argument("--run-dir", required=True)
     args = parser.parse_args(argv)
-    runner = SyncRunner(args.config, None)
+    runner = SyncRunner(args.config, None, workspace=args.workspace)
     if args.command == "prepare":
         result = runner.prepare(args.run_dir)
         print(result)

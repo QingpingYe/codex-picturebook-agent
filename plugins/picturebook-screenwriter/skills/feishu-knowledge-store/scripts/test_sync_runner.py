@@ -129,6 +129,20 @@ class SyncRunnerTests(unittest.TestCase):
         self.assertTrue((self.run_dir / "source_nodes.json").exists())
         self.assertTrue((self.run_dir / "wiki_staging" / "_manifest.json").exists())
 
+    def test_prepare_discovers_workspace_config_without_explicit_config(self):
+        self._write_manifest()
+        workspace_config = Path(self.tmp.name) / "feishu-knowledge-base.json"
+        workspace_config.write_text(
+            self.config_path.read_text(encoding="utf-8"), encoding="utf-8",
+        )
+        runner = SyncRunner(
+            None, FakeCli(), publisher=FakePublisher(),
+            control_plane=FakeControlPlane(),
+            workspace=Path(self.tmp.name), environ={},
+        )
+        runner.prepare(self.run_dir)
+        self.assertEqual(runner.config_path, workspace_config)
+
     def test_node_mode_with_no_children_is_rejected(self):
         self._write_manifest()
         config = json.loads(self.config_path.read_text(encoding="utf-8"))
