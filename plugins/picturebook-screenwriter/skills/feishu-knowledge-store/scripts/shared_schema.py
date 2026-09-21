@@ -9,9 +9,12 @@ class SchemaError(ValueError):
 
 COMMON_TYPES = frozenset({
     "ip-overview",
-    "creation-standards",
     "quality-rubric",
     "market-research",
+})
+
+DUAL_SCOPE_TYPES = frozenset({
+    "creation-standards",
 })
 
 SYSTEM_TYPES = frozenset({
@@ -31,7 +34,7 @@ PROJECT_TYPES = frozenset({
     "references",
 })
 
-PAGE_TYPES = COMMON_TYPES | SYSTEM_TYPES | PROJECT_TYPES
+PAGE_TYPES = COMMON_TYPES | DUAL_SCOPE_TYPES | SYSTEM_TYPES | PROJECT_TYPES
 
 
 def normalize_series_id(page_type: str, series_id: str) -> str:

@@ -17,7 +17,25 @@ from shared_schema import (
 
 class SharedSchemaTests(unittest.TestCase):
     def test_common_page_project_id_is_common(self):
-        self.assertEqual(normalize_project_id("creation-standards", ""), "common")
+        self.assertEqual(normalize_project_id("ip-overview", ""), "common")
+
+    def test_creation_standards_is_dual_scope(self):
+        self.assertEqual(normalize_project_id("creation-standards", "common"), "common")
+        self.assertEqual(normalize_project_id("creation-standards", "小老鼠迈尔斯"), "小老鼠迈尔斯")
+
+    def test_creation_standards_requires_project_id(self):
+        with self.assertRaises(SchemaError):
+            normalize_project_id("creation-standards", "")
+
+    def test_creation_standards_logical_keys_at_both_levels(self):
+        self.assertEqual(
+            logical_key("海外绘本", "common", "creation-standards"),
+            "海外绘本/common/creation-standards",
+        )
+        self.assertEqual(
+            logical_key("海外绘本", "小老鼠迈尔斯", "creation-standards"),
+            "海外绘本/小老鼠迈尔斯/creation-standards",
+        )
 
     def test_project_page_project_id_is_preserved(self):
         self.assertEqual(normalize_project_id("worldview", "小老鼠迈尔斯"), "小老鼠迈尔斯")

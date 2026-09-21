@@ -11,7 +11,7 @@
 ```yaml
 title: "{页面标题}"              # 必填
 series_id: "海外绘本"            # 必填
-project_id: "{项目标识}"         # 项目级必填，common/ 和 index/log 为空
+project_id: "{项目标识}"         # 项目级必填；系列通用页型写 common；index/log 为空
 page_type: "{页面类型}"          # 必填：枚举值见各模板
 source_feishu_url: "{飞书源URL}" # 必填，多个源用逗号分隔
 source_feishu_title: "{飞书源标题}"  # 必填
@@ -51,6 +51,7 @@ source_revision_parts:                   # 必填：与来源节点 token 一一
 
 ```yaml
 page_type: "ip-overview"
+project_id: "common"
 ```
 
 **必须章节：**
@@ -66,7 +67,12 @@ page_type: "ip-overview"
 
 ```yaml
 page_type: "creation-standards"
+project_id: "common"
 ```
+
+> **双作用域页型**：`creation-standards` 既可放系列通用（`common/`），也可放项目专用
+> （`{project}/`）。两级页面各自维护独立的来源版本向量与 revision，互不覆盖；同一事项
+> 冲突时项目专用优先。
 
 **必须章节：**
 - 通用结构规范（页数、段落分配）
@@ -81,6 +87,7 @@ page_type: "creation-standards"
 
 ```yaml
 page_type: "quality-rubric"
+project_id: "common"
 ```
 
 **必须章节：**
@@ -94,6 +101,7 @@ page_type: "quality-rubric"
 
 ```yaml
 page_type: "market-research"
+project_id: "common"
 ```
 
 **必须章节：**

@@ -1,6 +1,6 @@
 # WorkBuddy 飞书知识库兼容协议
 
-**协议版本：** 1.2.1（2026-09-20 勘误：知识内容平铺部署、页面标题口径、首发 revision 修正闭环、冲突队列框架行、锁唯一性作用域）
+**协议版本：** 1.3.0（2026-09-20 变更：`creation-standards` 升级为双作用域页型，允许系列通用与项目专用并存；项目专用优先）
 **适用对象：** WorkBuddy 专家团及后续所有直接读写「绘本创作知识库（AI）」的自动化系统  
 **兼容基准：** `picturebook-screenwriter` 插件的 `wiki-ingest`、`feishu-knowledge-store`、`knowledge-loader` 实现  
 **生效原则：** 本文档描述的是远端契约。任何实现只要遵守这些格式、状态和并发规则，就可以与 Codex 插件互通；具体使用 lark-cli 还是其他 Feishu API 客户端不是兼容性的必要条件。
@@ -67,9 +67,9 @@ AI 知识库的固定目录结构：
 | 范围 | page_type | 页面标题 |
 | --- | --- | --- |
 | 系列通用 | `ip-overview` | IP 总览 |
-| 系列通用 | `creation-standards` | 创作规范 |
 | 系列通用 | `quality-rubric` | 质量评级标准 |
 | 系列通用 | `market-research` | 市场调研 |
+| 双作用域 | `creation-standards` | 创作规范 |
 | 项目知识 | `worldview` | 世界观 |
 | 项目知识 | `characters` | 角色人设 |
 | 项目知识 | `content-spec` | 内容规格 |
@@ -81,6 +81,16 @@ AI 知识库的固定目录结构：
 | 项目知识 | `references` | 参考索引 |
 
 当前解析器还接受若干历史别名，但 WorkBuddy 不得新建历史别名页面。遇到旧页面时，先保持原逻辑键，由人工确认后再迁移。
+
+**双作用域页型规则：**
+
+1. `creation-standards` 可同时存在于 `{series}/common/creation-standards`（系列通用创作规范）和
+   `{series}/{project_id}/creation-standards`（项目专用创作规范）。
+2. 当项目专用创作规范与系列通用创作规范对同一事项给出不同要求时，**以项目专用为准**。
+3. 系列通用与项目专用的 `creation-standards` 是两张独立页面，各自维护各自的来源版本向量与 revision，
+   互不覆盖。
+4. 不存在 `creation-standards` 专用页型的系列（即没有 `{series}/common/creation-standards`）时，
+   项目专用页面仍然合法。
 
 ## 3. 知识页格式
 

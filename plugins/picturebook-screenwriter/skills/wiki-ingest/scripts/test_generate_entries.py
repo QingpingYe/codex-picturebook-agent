@@ -36,9 +36,9 @@ class TestCrossFileDup(unittest.TestCase):
 
     def test_canonical_duplicate_fails(self):
         _file(self.d, "common/a.md", "[common/creation-standards] 创作规范与标准",
-              "creation-standards")
+              "creation-standards", project="common")
         _file(self.d, "common/b.md", "[common/creation-standards] 创作规范与标准",
-              "creation-standards")
+              "creation-standards", project="common")
         files = ge.discover_files(self.d)
         issues = ge.check_cross_file_dups(files)
         self.assertEqual(len(issues), 2)  # 两文件各挂一条 FAIL
@@ -46,9 +46,10 @@ class TestCrossFileDup(unittest.TestCase):
 
     def test_raw_vs_bracketed_same_title_fails(self):
         # 裸标题与规范括号标题指向同一逻辑条目
-        _file(self.d, "common/a.md", "创作规范与标准", "creation-standards")
+        _file(self.d, "common/a.md", "创作规范与标准", "creation-standards",
+              project="common")
         _file(self.d, "common/b.md", "[common/creation-standards] 创作规范与标准",
-              "creation-standards")
+              "creation-standards", project="common")
         files = ge.discover_files(self.d)
         issues = ge.check_cross_file_dups(files)
         self.assertEqual(len(issues), 2)
@@ -61,7 +62,8 @@ class TestCrossFileDup(unittest.TestCase):
         self.assertEqual(issues, [])
 
     def test_unique_titles_pass(self):
-        _file(self.d, "common/a.md", "同名标题", "creation-standards")
+        _file(self.d, "common/a.md", "同名标题", "creation-standards",
+              project="common")
         _file(self.d, "common/b.md", "同名标题", "ip-overview")
         files = ge.discover_files(self.d)
         issues = ge.check_cross_file_dups(files)
@@ -76,11 +78,35 @@ class TestCrossFileDup(unittest.TestCase):
                             for level, reason in issues))
 
     def test_main_validate_only_exits_1_on_dup(self):
-        _file(self.d, "common/a.md", "创作规范与标准", "creation-standards")
+        _file(self.d, "common/a.md", "创作规范与标准", "creation-standards",
+              project="common")
         _file(self.d, "common/b.md", "[common/creation-standards] 创作规范与标准",
-              "creation-standards")
+              "creation-standards", project="common")
         rc = ge.main(["--validate-only", "--staging-dir", self.d])
         self.assertEqual(rc, 1)
+
+    def test_missing_project_id_fails_during_validation(self):
+        candidate = _file(self.d, "common/a.md", "创作规范与标准",
+                          "creation-standards")
+        issues = ge.validate_file(candidate)
+        self.assertTrue(any(
+            level == "FAIL" and "project_id" in reason
+            for level, reason in issues
+        ))
+
+    def test_common_creation_standards_passes_validation(self):
+        candidate = _file(self.d, "common/a.md", "创作规范与标准",
+                          "creation-standards", project="common")
+        issues = ge.validate_file(candidate)
+        self.assertFalse([level for level, _ in issues if level == "FAIL"])
+
+    def test_duplicate_check_reports_undeterminable_keys(self):
+        _file(self.d, "common/a.md", "创作规范与标准", "creation-standards")
+        _file(self.d, "common/b.md", "另一份创作规范", "creation-standards")
+        files = ge.discover_files(self.d)
+        issues = ge.check_cross_file_dups(files)
+        self.assertEqual(len(issues), 2)
+        self.assertTrue(all(level == "FAIL" for level, _ in issues))
 
 
 class TestManifest(unittest.TestCase):
@@ -105,7 +131,8 @@ class TestManifest(unittest.TestCase):
 
     def test_manifest_uses_common_for_series_level_pages(self):
         candidate = _file(self.tmp.name, "common/creation-standards.md",
-                          title="创作规范", page_type="creation-standards")
+                          title="创作规范", page_type="creation-standards",
+                          project="common")
         manifest = ge.build_manifest(self.d, {candidate: []})
         entry = manifest["entries"][0]
         self.assertEqual(entry["key"], "海外绘本/common/creation-standards")

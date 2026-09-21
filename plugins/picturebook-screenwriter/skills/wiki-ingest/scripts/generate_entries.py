@@ -25,7 +25,15 @@ STORE_SCRIPTS = Path(__file__).resolve().parents[2] / "feishu-knowledge-store" /
 if str(STORE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(STORE_SCRIPTS))
 
-from shared_schema import logical_key, normalize_project_id, normalize_series_id
+from shared_schema import (
+    COMMON_TYPES,
+    DUAL_SCOPE_TYPES,
+    PROJECT_TYPES,
+    SYSTEM_TYPES,
+    logical_key,
+    normalize_project_id,
+    normalize_series_id,
+)
 
 # --- Config ---
 STAGING_DIR = "wiki_staging"
@@ -45,9 +53,6 @@ VALID_PAGE_TYPES = [
     "story-fingerprint-spec", "references",
     "index", "log",
 ]
-
-COMMON_TYPES = ("ip-overview", "creation-standards", "quality-rubric", "market-research")
-
 
 def candidate_key(frontmatter: dict[str, object]) -> str:
     """Return the stable logical key used by duplicate and sync layers."""
@@ -184,15 +189,15 @@ def validate_file(filepath):
     except ValueError as exc:
         issues.append(("FAIL", f"Invalid source revision vector: {exc}"))
 
-    # Project-level pages need project_id
-    is_system = pt in ("index", "log")
-    is_common = pt in COMMON_TYPES
-
-    if not is_system and not is_common:
+    if pt in PROJECT_TYPES or pt in DUAL_SCOPE_TYPES:
         pid = fm.get("project_id", "")
         if not pid:
-            issues.append(("WARN", f"Project-level page '{pt}' missing project_id"))
-    elif is_system:
+            allowed = "项目标识" if pt in PROJECT_TYPES else "common 或项目标识"
+            issues.append(
+                ("FAIL",
+                 f"页型 '{pt}' 必须显式声明 project_id（{allowed}）")
+            )
+    elif pt in SYSTEM_TYPES:
         if fm.get("project_id"):
             issues.append(("WARN", f"System page '{pt}' should have empty project_id"))
 
@@ -315,13 +320,15 @@ def check_cross_file_dups(files):
     同步硬闸的前置防线：staging 内两个文件指向同一逻辑条目时，任何写入都是错的。
     """
     groups = {}
+    invalid = []
     for fpath in files:
         try:
             with open(fpath, "r", encoding="utf-8") as f:
                 content = f.read()
             fm, _end = extract_frontmatter(content)
             key = candidate_key(fm)
-        except (OSError, KeyError):
+        except (OSError, KeyError, ValueError) as exc:
+            invalid.append((fpath, exc))
             continue
         groups.setdefault(key, []).append(fpath)
 
@@ -331,6 +338,9 @@ def check_cross_file_dups(files):
             if len(files) > 1 else os.path.dirname(files[0])
     else:
         base = ""
+    for fpath, exc in invalid:
+        issues.append(("FAIL",
+                       f"无法推导逻辑键（{exc}）: {os.path.relpath(fpath, base)}"))
     for key, paths in groups.items():
         if len(paths) > 1:
             rels = [os.path.relpath(p, base) for p in paths]
