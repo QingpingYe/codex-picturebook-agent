@@ -89,17 +89,18 @@ class AuthorityCliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "runtime_error")
 
     def test_missing_config_is_actionable(self):
-        empty_workspace = self.root / "empty-workspace"
-        empty_workspace.mkdir()
-        stdout = StringIO()
-        exit_code = main([
-            "load", "--project-id", "p", "--series-id", "s",
-            "--page-types", "worldview", "--workspace", str(empty_workspace),
-        ], stdout=stdout, components_factory=lambda *args, **kwargs: None)
-        payload = json.loads(stdout.getvalue())
-        self.assertEqual(exit_code, 1)
-        self.assertEqual(payload["status"], "missing_config")
-        self.assertIn("searched", payload)
+        with tempfile.TemporaryDirectory() as empty_root:
+            empty_workspace = Path(empty_root) / "workspace"
+            empty_workspace.mkdir()
+            stdout = StringIO()
+            exit_code = main([
+                "load", "--project-id", "p", "--series-id", "s",
+                "--page-types", "worldview", "--workspace", str(empty_workspace),
+            ], stdout=stdout, components_factory=lambda *args, **kwargs: None)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(payload["status"], "missing_config")
+            self.assertIn("searched", payload)
 
     def test_authority_gap_does_not_fall_back_to_cache(self):
         cache_dir = self.root / ".picturebook-screenwriter" / "cache" / "tester"
