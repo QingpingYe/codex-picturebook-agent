@@ -101,6 +101,41 @@ class AuthorityCliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "missing_config")
         self.assertIn("searched", payload)
 
+    def test_authority_gap_does_not_fall_back_to_cache(self):
+        cache_dir = self.root / ".picturebook-screenwriter" / "cache" / "tester"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "knowledge-bundle.json").write_text(json.dumps({
+            "items": [{
+                "key": "海外绘本/小老鼠迈尔斯/worldview", "doc_token": "doc-world",
+                "revision_id": 42, "title": "worldview", "content": "正文",
+                "source_revisions": {"source": "r1"}, "status": "published",
+            }],
+            "warnings": [], "offline": False,
+            "fetched_at": "2026-09-20T10:00:00+08:00",
+        }), encoding="utf-8")
+
+        class EmptyPlane:
+            def read_index(self):
+                return {}
+
+        def factory(config_path, environ=None, workspace=None):
+            return SimpleNamespace(
+                config=SimpleNamespace(cli_candidates=("lark-cli",)),
+                cli=FakeCli(), publisher=None, control_plane=EmptyPlane(),
+            )
+
+        stdout = StringIO()
+        exit_code = main([
+            "load", "--project-id", "小老鼠迈尔斯", "--series-id", "海外绘本",
+            "--page-types", "worldview", "--workspace", str(self.root),
+            "--config", str(self.config_path), "--allow-offline-cache",
+        ], stdout=stdout, components_factory=factory,
+            cli_probe=lambda **kwargs: {"status": "available"},
+            getuser=lambda: "tester")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertIn("缺少权威知识页", payload["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

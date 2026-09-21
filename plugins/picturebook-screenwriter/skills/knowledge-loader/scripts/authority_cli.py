@@ -13,7 +13,7 @@ for scripts_path in (STORE_SCRIPTS, SCRIPT_DIR):
     if str(scripts_path) not in sys.path:
         sys.path.insert(0, str(scripts_path))
 
-from authority import AuthorityLoader, AuthorityQuery
+from authority import AuthorityGapError, AuthorityLoader, AuthorityQuery
 from cache import KnowledgeCache
 from config import load_config
 from config_paths import resolve_config_path
@@ -84,6 +84,8 @@ def main(argv=None, stdout=None, components_factory=None, cli_probe=None,
             )
             bundle = loader.load(query, allow_offline_cache=args.allow_offline_cache)
         except Exception as error:
+            if isinstance(error, AuthorityGapError):
+                raise
             if not (args.allow_offline_cache and cached_bundle is not None):
                 raise
             bundle = KnowledgeEvidenceBundle(

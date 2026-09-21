@@ -182,6 +182,17 @@ class AuthorityCacheTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "network down"):
             strict.load(AuthorityQuery("小老鼠迈尔斯", "海外绘本", ("worldview",)))
 
+    def test_authority_gap_does_not_replace_existing_cache(self):
+        class EmptyPlane:
+            def read_index(self):
+                return {}
+
+        cache = RecordingCache()
+        loader = AuthorityLoader(EmptyPlane(), FakeCli(), cache_store=cache)
+        with self.assertRaises(AuthorityGapError):
+            loader.load(AuthorityQuery("小老鼠迈尔斯", "海外绘本", ("worldview",)))
+        self.assertIsNone(cache.saved)
+
 
 if __name__ == "__main__":
     unittest.main()

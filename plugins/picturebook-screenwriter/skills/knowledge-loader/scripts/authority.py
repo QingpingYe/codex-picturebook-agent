@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from load_knowledge import KnowledgeLoader, KnowledgeQuery
+from load_knowledge import KnowledgeLoader, KnowledgeQuery, bundle_to_dict
 
 
 class AuthorityGapError(RuntimeError):
@@ -21,8 +21,9 @@ class AuthorityLoader:
                  cached_bundle=None) -> None:
         self.loader = KnowledgeLoader(
             control_plane, cli,
-            cache_store=cache_store, cached_bundle=cached_bundle,
+            cached_bundle=cached_bundle,
         )
+        self.cache_store = cache_store
 
     def load(self, query: AuthorityQuery, allow_offline_cache: bool = False):
         bundle = self.loader.load(KnowledgeQuery(
@@ -35,4 +36,6 @@ class AuthorityLoader:
         missing = [page_type for page_type in query.page_types if page_type not in found]
         if missing:
             raise AuthorityGapError("缺少权威知识页：" + "、".join(missing))
+        if not bundle.offline and self.cache_store is not None:
+            self.cache_store.save(bundle_to_dict(bundle))
         return bundle
