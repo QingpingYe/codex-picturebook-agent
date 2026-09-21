@@ -12,11 +12,12 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 1. **Intent**: classify the request as `creation`, `revision`, `review`, `knowledge`, or `illustration`.
 2. **Brief gate**: for creation and revision, collect missing essentials before drafting: audience age band, target page count, language, story premise, tone, and any constraints. Ask at most three questions at once.
 3. **Knowledge loading**: read `../text-craft/SKILL.md` and the relevant references before drafting. For creation and revision, also invoke `../knowledge-loader/SKILL.md` and use `AuthorityLoader` to retrieve authoritative Feishu knowledge. If the user asks to synchronize the source Feishu Wiki, route the request through `../wiki-ingest/SKILL.md` and then `../feishu-knowledge-store/SKILL.md`.
-4. **Writing**: draft one of the six artifact types, using its dependency token: `positioning`, `topic_plan`, `worldview`, `characters`, `outline`, or `script`.
-5. **Pre-output check**: for page-by-page scripts, invoke `../craft-benchmark-check/SKILL.md`.
-6. **Quality review**: review the draft against craft principles and the benchmark report. Fix deterministic issues before showing the draft.
-7. **确认门**：用中文呈现草稿和基准摘要，等待用户批准后才允许保存文件。
-8. **Landing**: save only after explicit approval. Use versioned Markdown files in the current workspace, such as `picturebook/positioning_v1.md`.
+4. **Stage DAG dispatch** (optional): if the current session has `spawn_agent` / `wait_agent` tools, invoke `../stage-orchestration/SKILL.md` to dispatch stages in parallel. This replaces inline steps 5-6 with parallel subagent execution.
+5. **Writing**: draft one of the six artifact types, using its dependency token: `positioning`, `topic_plan`, `worldview`, `characters`, `outline`, or `script`.
+6. **Pre-output check**: for page-by-page scripts, invoke `../craft-benchmark-check/SKILL.md`.
+7. **Quality review**: review the draft against craft principles and the benchmark report. Fix deterministic issues before showing the draft.
+8. **确认门**：用中文呈现草稿和基准摘要，等待用户批准后才允许保存文件。
+9. **Landing**: save only after explicit approval. Use versioned Markdown files in the current workspace, such as `picturebook/positioning_v1.md`.
 
 ## Editorial Slots
 
