@@ -30,7 +30,10 @@ def build_components(config_path=None, environ=None, workspace=None) -> Componen
     resolved = resolve_config_path(config_path, workspace, environ)
     config = load_config(resolved.path, resolved.path.parent, environ)
     cli = LarkCli(config.cli_candidates[0], identity=config.identity)
-    publisher = Publisher(cli, config.target.root_token, config.target.space_id)
+    publisher = Publisher(
+        cli, config.target.root_token, config.target.space_id,
+        root_mode=config.target.root_mode,
+    )
     tokens = publisher.resolve_control_plane()
     control_plane = ControlPlane(
         cli,
@@ -168,7 +171,10 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
             workspace=Path(args.workspace) if args.workspace else None,
         )
         if args.command == "preflight":
-            payload = components.cli.preflight(components.config.target.root_token)
+            payload = components.cli.preflight(
+                components.config.target.root_token,
+                root_mode=components.config.target.root_mode,
+            )
         elif args.command == "resolve":
             payload = components.publisher.resolve_control_plane()
         elif args.command == "lock-status":

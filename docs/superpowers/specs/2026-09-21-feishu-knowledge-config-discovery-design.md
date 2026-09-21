@@ -57,6 +57,11 @@ The schema remains version 2. The canonical file name remains:
 feishu-knowledge-base.json
 ```
 
+The target root supports two modes:
+
+- `target.root_mode: "space"` means the four system containers live at the Wiki space root. `target.root_token` must be omitted.
+- `target.root_mode: "node"` means the four system containers live under a specific Wiki node. `target.root_token` must contain that node token.
+
 Users may choose one of three supported ownership models:
 
 1. **Shared workspace:** place one schema-v2 file at the root of a series workspace. Project subdirectories inherit it through the ancestor chain.

@@ -21,6 +21,7 @@ Revision: v2, portable multi-user discovery
 ## Global Constraints
 
 - Configuration schema remains schema version 2.
+- Target roots support `root_mode: "space"` without a root token, or `root_mode: "node"` with an explicit root token.
 - Discovery order is explicit `--config`, `PICTUREBOOK_KB_CONFIG`, nearest workspace ancestor, platform-standard user directories, then deprecated `~/.picturebook-screenwriter`.
 - Workspace chain discovery does not recurse downward into child directories.
 - User paths resolve from injected `APPDATA`, `XDG_CONFIG_HOME`, `HOME`, and platform rules, not from an author's real home directory.

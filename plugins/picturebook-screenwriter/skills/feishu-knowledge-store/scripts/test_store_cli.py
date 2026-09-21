@@ -35,7 +35,7 @@ def config(path: Path):
         identity="user",
         lock_ttl_minutes=45,
         source=SimpleNamespace(space_id="preloaded-source", root_mode="space"),
-        target=SimpleNamespace(root_token="root-token", space_id="target-space"),
+        target=SimpleNamespace(root_token="root-token", space_id="target-space", root_mode="node"),
     )
 
 
@@ -50,7 +50,7 @@ class FakeCli:
             return [{"node_token": "node-page", "title": "s/p/worldview"}]
         return []
 
-    def preflight(self, target_root_token):
+    def preflight(self, target_root_token, root_mode="node"):
         return {"identity": "user", "root": target_root_token}
 
     def fetch_doc(self, doc_token):

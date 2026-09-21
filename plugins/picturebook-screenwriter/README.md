@@ -40,6 +40,8 @@ Resolution order:
 
 A project subdirectory inherits a config from its nearest ancestor. Do not commit a real configuration to a repository, and do not store one in a plugin cache. `config-status` reports `origin`, `path`, and `searched` so the selected file is explicit.
 
+Target Wiki roots support two modes. Use `target.root_mode: "space"` when the four system containers live at the Wiki space root; omit `target.root_token` in this mode. Use `target.root_mode: "node"` when they live under a specific Wiki node and set `target.root_token` to that node token. The example uses space mode with generic placeholders.
+
 ## Feishu runtime commands
 
 配置文件使用 schema v2，明确区分 `source` 与 `target`。

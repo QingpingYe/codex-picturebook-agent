@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
   "source": {
-    "space_id": "7682720271706361023",
+    "space_id": "REPLACE_WITH_SOURCE_SPACE_ID",
     "root_mode": "space",
-    "wiki_url": "https://wcno1rbz0o8i.feishu.cn/wiki/OI9gwaRv8i3RwOkGBNnc7VHinDd"
+    "wiki_url": "https://<tenant>.feishu.cn/wiki/<source-wiki-token>"
   },
   "target": {
-    "space_id": "7686313522543774944",
-    "root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN"
+    "space_id": "REPLACE_WITH_TARGET_SPACE_ID",
+    "root_mode": "space"
   },
   "identity": "user",
   "lock_ttl_minutes": 45

@@ -35,10 +35,14 @@ class Publisher:
     DEFAULT_REVISION_ADVANCE = 2
     MAX_METADATA_ATTEMPTS = 3
 
-    def __init__(self, cli: Any, target_root: str, space_id: str) -> None:
+    def __init__(self, cli: Any, target_root: str, space_id: str,
+                 root_mode: str = "node") -> None:
         self.cli = cli
         self.target_root = target_root
         self.space_id = space_id
+        if root_mode not in {"space", "node"}:
+            raise ValueError("root_mode must be 'space' or 'node'")
+        self.root_mode = root_mode
         self.tokens: dict[str, str] | None = None
         self.revision_advance = self.DEFAULT_REVISION_ADVANCE
 
@@ -74,7 +78,7 @@ class Publisher:
     def resolve_control_plane(self) -> dict[str, str]:
         tokens: dict[str, str] = {}
         for title in TREE_ORDER:
-            token = self._existing_token(self.target_root, title)
+            token = self._existing_root_token(title)
             if token is None:
                 raise NeedsReview(f"missing system container: {title}")
             tokens[title] = token
@@ -97,6 +101,11 @@ class Publisher:
         tokens["conflict"] = tokens["AI_KB_CONFLICT_QUEUE_V1"]
         tokens["content"] = tokens["01_知识内容"]
         return tokens
+
+    def _existing_root_token(self, title: str) -> str | None:
+        if self.root_mode == "space":
+            return self._existing_token(self.space_id, title, space_root=True)
+        return self._existing_token(self.target_root, title)
 
     def fetch_current(self, doc_token: str) -> dict[str, Any]:
         document = self.cli.fetch_doc(doc_token).get("data", {}).get("document", {})
@@ -268,10 +277,14 @@ class Publisher:
                 return matches[0][key], False
         return token, False
 
-    def _existing_token(self, parent: str, title: str) -> str | None:
+    def _existing_token(self, parent: str, title: str,
+                        space_root: bool = False) -> str | None:
         matches = [
             node
-            for node in self.cli.list_nodes(self.space_id, parent_node_token=parent)
+            for node in self.cli.list_nodes(
+                self.space_id,
+                parent_node_token=None if space_root else parent,
+            )
             if node.get("title") == title
         ]
         if len(matches) > 1:

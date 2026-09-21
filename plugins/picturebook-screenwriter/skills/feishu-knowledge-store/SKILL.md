@@ -11,7 +11,7 @@ description: 通过远端租约、docx revision 前提、人工优先三方合�
 
 ## 硬性规则
 
-1. Resolve configuration in this order: explicit `--config`, `PICTUREBOOK_KB_CONFIG`, nearest workspace ancestor, platform user directories, then deprecated `~/.picturebook-screenwriter`. Plugin cache is not durable configuration.
+1. Resolve configuration in this order: explicit `--config`, `PICTUREBOOK_KB_CONFIG`, nearest workspace ancestor, platform user directories, then deprecated `~/.picturebook-screenwriter`. Plugin cache is not durable configuration. Target supports `root_mode: "space"` for root-level system containers or `"node"` with an explicit `root_token`.
 2. 初始化系统树和同步只能持有远端租约。
 3. 每个 docx 页面必须用当前 `revision_id` 更新。
 4. 含资源、评论或未知块的页面进入 `needs_review`，不得自动覆盖。

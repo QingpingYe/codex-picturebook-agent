@@ -67,9 +67,12 @@ class LarkCli:
         self.identity = identity
         self.runner = runner
 
-    def preflight(self, target_root_token: str) -> dict[str, Any]:
+    def preflight(self, target_root_token: str | None,
+                  root_mode: str = "node") -> dict[str, Any]:
         """Verify user authentication and root readability without making mutations."""
         auth = self._json("auth", "status", "--json", "--verify")
+        if root_mode == "space":
+            return {"auth": auth, "root": None}
         node = self.get_node(target_root_token)
         return {"auth": auth, "root": node}
 

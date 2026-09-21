@@ -57,6 +57,27 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "placeholder"):
             self.load(config_json(placeholder), {})
 
+    def test_space_target_mode_does_not_require_root_token(self):
+        config = self.load(config_json({
+            "target": {"space_id": "target-space", "root_mode": "space"},
+        }), {})
+        self.assertEqual(config.target.root_mode, "space")
+        self.assertIsNone(config.target.root_token)
+
+    def test_node_target_mode_defaults_to_root_token(self):
+        config = self.load(config_json({}), {})
+        self.assertEqual(config.target.root_mode, "node")
+        self.assertEqual(config.target.root_token, "root-token")
+
+    def test_space_target_mode_rejects_root_token(self):
+        with self.assertRaisesRegex(ConfigError, "root_token must be omitted"):
+            self.load(config_json({
+                "target": {
+                    "space_id": "target-space", "root_mode": "space",
+                    "root_token": "root-token",
+                },
+            }), {})
+
     def test_bot_identity_is_rejected(self):
         with self.assertRaisesRegex(ConfigError, "identity must be 'user'"):
             self.load(config_json({"identity": "bot"}), {})

@@ -31,7 +31,7 @@ _FIELDS = {
     "lock_ttl_minutes",
 }
 _SOURCE_FIELDS = {"space_id", "root_mode", "wiki_url"}
-_TARGET_FIELDS = {"space_id", "root_token"}
+_TARGET_FIELDS = {"space_id", "root_token", "root_mode"}
 _PLACEHOLDER_TARGET_TOKEN = "REPLACE_WITH_TARGET_ROOT_TOKEN"
 
 def load_config(
@@ -74,14 +74,23 @@ def load_config(
     if missing:
         raise ConfigError("missing configuration fields: " + ", ".join(sorted(missing)))
     source = _nested_object(raw["source"], _SOURCE_FIELDS, "source")
-    target = _nested_object(raw["target"], _TARGET_FIELDS, "target")
+    target = _nested_object(raw["target"], _TARGET_FIELDS, "target", {"space_id"})
 
     source_space_id = _nonempty_string(source["space_id"], "source.space_id")
     source_wiki_url = _nonempty_string(source["wiki_url"], "source.wiki_url")
     if source["root_mode"] not in {"space", "node"}:
         raise ConfigError("source.root_mode must be 'space' or 'node'")
     target_space_id = _nonempty_string(target["space_id"], "target.space_id")
-    target_root_token = _nonempty_string(target["root_token"], "target.root_token")
+    target_root_mode = target.get("root_mode", "node")
+    if target_root_mode not in {"space", "node"}:
+        raise ConfigError("target.root_mode must be 'space' or 'node'")
+    target_root_token = target.get("root_token")
+    if target_root_mode == "node":
+        target_root_token = _nonempty_string(target_root_token, "target.root_token")
+    else:
+        if target_root_token is not None:
+            raise ConfigError("target.root_token must be omitted when target.root_mode is 'space'")
+        target_root_token = None
     if target_root_token == _PLACEHOLDER_TARGET_TOKEN:
         raise PlaceholderTargetTokenError(
             "target.root_token must not remain the placeholder value"
@@ -100,7 +109,7 @@ def load_config(
                 candidates.append(candidate_path)
     return KnowledgeConfig(
         SourceConfig(source_space_id, source["root_mode"], source_wiki_url),
-        TargetConfig(target_space_id, target_root_token),
+        TargetConfig(target_space_id, target_root_token, target_root_mode),
         "user", ttl, tuple(candidates),
     )
 
@@ -111,11 +120,12 @@ def _nonempty_string(value: object, field: str) -> str:
     return value
 
 
-def _nested_object(value: object, fields: set[str], name: str) -> dict[str, object]:
+def _nested_object(value: object, fields: set[str], name: str,
+                   required_fields: set[str] | None = None) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ConfigError(f"{name} must be a JSON object")
     unknown = set(value) - fields
-    missing = fields - set(value)
+    missing = (required_fields or fields) - set(value)
     if unknown:
         raise ConfigError(f"unexpected {name} fields: " + ", ".join(sorted(unknown)))
     if missing:

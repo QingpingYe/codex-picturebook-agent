@@ -15,7 +15,8 @@ class SourceConfig:
 @dataclass(frozen=True)
 class TargetConfig:
     space_id: str
-    root_token: str
+    root_token: str | None
+    root_mode: Literal["space", "node"] = "node"
 
 
 @dataclass(frozen=True)
