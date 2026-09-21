@@ -11,22 +11,24 @@ description: 通过远端租约、docx revision 前提、人工优先三方合�
 
 ## 硬性规则
 
-1. 初始化系统树和同步只能持有远端租约。
-2. 每个 docx 页面必须用当前 `revision_id` 更新。
-3. 含资源、评论或未知块的页面进入 `needs_review`，不得自动覆盖。
-4. `docs +update` 的完整结果必须检查 `warnings`、`partial_success` 和 `result`。
-5. 人工新增内容必须保留，人工删除内容不得被恢复。
-6. 出现冲突不得静默吞掉，必须登记到冲突队列并报告。
+1. Resolve configuration in this order: explicit `--config`, `PICTUREBOOK_KB_CONFIG`, workspace root, then user fallback. Plugin cache is not durable configuration.
+2. 初始化系统树和同步只能持有远端租约。
+3. 每个 docx 页面必须用当前 `revision_id` 更新。
+4. 含资源、评论或未知块的页面进入 `needs_review`，不得自动覆盖。
+5. `docs +update` 的完整结果必须检查 `warnings`、`partial_success` 和 `result`。
+6. 人工新增内容必须保留，人工删除内容不得被恢复。
+7. 出现冲突不得静默吞掉，必须登记到冲突队列并报告。
 
 ## 使用流程
 
-1. 运行 `scripts/lark_cli_bootstrap.py` 检查兼容的 lark-cli。若结果为 `missing`，先向用户说明将执行 `npx @larksuite/cli@latest install`，获得明确批准后加 `--install` 重跑；若为 `unsupported`，不得替换用户已有 CLI。
-2. 运行 `preflight`，验证用户身份、原始库读取和目标库读写能力。安装 CLI 不代表完成登录；认证失败时由用户本人执行 `lark-cli auth login`。
-3. 首次运行 `initialize`，在远端系统树中创建控制页。
-4. 运行 `wiki-ingest` 生成任务局部 `_manifest.json`。
-5. 运行 `prepare`，读取历史版本、当前版本和候选版本，并获取远端锁。
-6. 为每个 `agent_decision` 生成一个 `MergeDecision`，由 `merge_protocol` 校验。
-7. 运行 `apply`，完成条件更新并在结束时释放锁。
+1. Run `store_cli.py config-status` to confirm durable configuration and CLI availability before remote work.
+2. 运行 `scripts/lark_cli_bootstrap.py` 检查兼容的 lark-cli。若结果为 `missing`，先向用户说明将执行 `npx @larksuite/cli@latest install`，获得明确批准后加 `--install` 重跑；若为 `unsupported`，不得替换用户已有 CLI。
+3. 运行 `preflight`，验证用户身份、原始库读取和目标库读写能力。安装 CLI 不代表完成登录；认证失败时由用户本人执行 `lark-cli auth login`。
+4. 首次运行 `initialize`，在远端系统树中创建控制页。
+5. 运行 `wiki-ingest` 生成任务局部 `_manifest.json`。
+6. 运行 `prepare`，读取历史版本、当前版本和候选版本，并获取远端锁。
+7. 为每个 `agent_decision` 生成一个 `MergeDecision`，由 `merge_protocol` 校验。
+8. 运行 `apply`，完成条件更新并在结束时释放锁。
 
 ## 输出
 

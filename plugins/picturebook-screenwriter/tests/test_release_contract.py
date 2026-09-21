@@ -15,7 +15,7 @@ class ReleaseSurfaceTests(unittest.TestCase):
     def test_manifest_version_marks_phase5_minor_release(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "0.3.0")
+        self.assertEqual(manifest["version"], "0.3.1")
 
     def test_manifest_describes_completed_art_phase(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -59,9 +59,9 @@ class ReleaseVersionTests(unittest.TestCase):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         self.assertIsNotNone(re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"]))
 
-    def test_release_target_is_0_3_0(self):
+    def test_release_target_is_0_3_1(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.0")
+        self.assertEqual(manifest["version"], "0.3.1")
 
     def test_changelog_records_phase5(self):
         text = (ROOT.parent.parent / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -90,6 +90,24 @@ class ReleaseChecklistTests(unittest.TestCase):
         text = (ROOT.parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("python .\\scripts\\governance_check.py", text)
         self.assertIn("python .\\scripts\\package_check.py", text)
+
+    def test_readme_documents_workspace_config_discovery(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        for value in (
+            "feishu-knowledge-base.json",
+            "PICTUREBOOK_KB_CONFIG",
+            "authority_cli.py",
+            "config-status",
+            "非权威",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
+    def test_loader_skill_documents_explicit_offline_opt_in(self):
+        text = (ROOT / "skills" / "knowledge-loader" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("authority_cli.py", text)
+        self.assertIn("--allow-offline-cache", text)
+        self.assertIn("非权威", text)
 
 
 class LiveAcceptanceTests(unittest.TestCase):

@@ -26,16 +26,24 @@
 
 本插件不得编辑原始资料库，只能从它读取候选内容。多人同步时，目标飞书 Wiki 是唯一共享权威；人工修改优先于 AI 内容。若目标 Wiki 不可用，只能使用最后确认的本地缓存，且必须在提示中说明“离线”和“非权威”。
 
+### Configuration discovery
+
+Put the real schema-v2 file at `<workspace>/feishu-knowledge-base.json`. `--config` overrides it, and `PICTUREBOOK_KB_CONFIG` is used when `--config` is omitted. The user fallback is `~/.picturebook-screenwriter/feishu-knowledge-base.json`. Plugin cache files, including `config/feishu-knowledge-base.example.json`, are templates and are never discovered.
+
 ## Feishu runtime commands
 
 配置文件使用 schema v2，明确区分 `source` 与 `target`。
 
 ```powershell
 python .\skills\feishu-knowledge-store\scripts\lark_cli_bootstrap.py
+python .\skills\feishu-knowledge-store\scripts\store_cli.py config-status --workspace <workspace>
+python .\skills\knowledge-loader\scripts\authority_cli.py load --workspace <workspace> --project-id <project_id> --series-id <series_id> --page-types worldview,characters,content_spec
 python .\skills\feishu-knowledge-store\scripts\sync_runner.py prepare --config <config> --run-dir <run_dir>
 python .\skills\feishu-knowledge-store\scripts\sync_runner.py publish --config <config> --run-dir <run_dir>
 python .\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config <config> --run-dir <run_dir>
 ```
+
+`authority_cli.py` 只做只读检索。离线缓存不是权威版本，只有在用户显式批准后加 `--allow-offline-cache` 使用，输出必须继续说明“非权威”。
 
 `lark_cli_bootstrap.py` 支持 `1.0.95` / `1.0.96`，按 `LARK_CLI_PATH`、PATH、常见 C 盘 npm 全局位置（`%APPDATA%\npm` 与 `%ProgramFiles%\nodejs`）、`C:\lark-cli`、`D:\lark-cli` 的顺序查找。缺 CLI 时会输出官方安装命令；只有在用户明确批准后，才加 `--install` 执行 `npx @larksuite/cli@latest install`。安装机需要 Node.js 16+，且每个用户安装后仍需本人执行 `lark-cli auth login`。
 

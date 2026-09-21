@@ -9,6 +9,7 @@
 - Craft benchmark, project red lines, Wiki lint, and optional Lexile gates.
 - Gated illustration workflow with structured prompt payloads.
 - Self-contained HTML preview and illustration asset registry.
+- Workspace-first Feishu config discovery, config status, and read-only authority CLI.
 
 ### Changed
 
