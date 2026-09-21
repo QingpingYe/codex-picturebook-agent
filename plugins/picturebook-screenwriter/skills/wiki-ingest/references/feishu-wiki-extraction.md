@@ -26,8 +26,7 @@ python <plugin>/skills/feishu-knowledge-store/scripts/lark_cli_bootstrap.py
 2. PATH 中的 `lark-cli`
 3. `%APPDATA%\npm` 中的 `lark-cli.cmd` 及包内二进制
 4. `%ProgramFiles%\nodejs\lark-cli.cmd`
-5. `C:\lark-cli\lark-cli.exe`
-6. `D:\lark-cli\lark-cli.exe`（仅本机兼容回退）
+5. Unix 标准位置：`~/.local/bin`、`/usr/local/bin`、`/opt/homebrew/bin`
 
 若返回 `missing`，先向用户说明安装来源和影响，获得明确批准后运行：
 

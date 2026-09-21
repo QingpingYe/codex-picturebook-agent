@@ -15,7 +15,7 @@ class ReleaseSurfaceTests(unittest.TestCase):
     def test_manifest_version_marks_phase5_minor_release(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "0.3.1")
+        self.assertEqual(manifest["version"], "0.3.2")
 
     def test_manifest_describes_completed_art_phase(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -59,9 +59,9 @@ class ReleaseVersionTests(unittest.TestCase):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         self.assertIsNotNone(re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"]))
 
-    def test_release_target_is_0_3_1(self):
+    def test_release_target_is_0_3_2(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.1")
+        self.assertEqual(manifest["version"], "0.3.2")
 
     def test_changelog_records_phase5(self):
         text = (ROOT.parent.parent / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -108,6 +108,23 @@ class ReleaseChecklistTests(unittest.TestCase):
         self.assertIn("authority_cli.py", text)
         self.assertIn("--allow-offline-cache", text)
         self.assertIn("非权威", text)
+
+    def test_readme_documents_portable_config_discovery(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        for value in (
+            "ancestor",
+            "%APPDATA%\\picturebook-screenwriter",
+            "${XDG_CONFIG_HOME:-~/.config}/picturebook-screenwriter",
+            "PICTUREBOOK_KB_CONFIG",
+            "deprecated",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
+    def test_readme_has_no_author_machine_paths(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertNotIn("E:\\海外绘本", text)
+        self.assertNotIn("C:\\Users\\lvan", text)
 
 
 class LiveAcceptanceTests(unittest.TestCase):

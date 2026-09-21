@@ -12,7 +12,7 @@ description: 只读检索飞书权威知识库，为编剧工作流提供带 rev
 ## 使用规则
 
 1. 远端读取前先运行 `../feishu-knowledge-store/scripts/lark_cli_bootstrap.py`。若结果为 `missing`，先向用户说明将执行官方安装器，获得明确批准后加 `--install` 重跑；若为 `unsupported`，按目标 Wiki 不可用处理。
-2. Use `scripts/authority_cli.py load` as the standard entry point. Pass `--workspace` for the current project workspace. Add `--allow-offline-cache` only when the user explicitly approves offline fallback; its output is non-authoritative.
+2. Use `scripts/authority_cli.py load` as the standard entry point. Pass `--workspace` for the current project workspace; it discovers the nearest ancestor config. Add `--allow-offline-cache` only when the user explicitly approves offline fallback; its output is non-authoritative.
 3. 默认从远端索引和 docx 页面读取，不使用本地 staging；本技能只读，不写飞书。
 4. 创作依赖必须使用 `scripts/authority.py` 的 `AuthorityLoader.load()`。它会校验页面系统元数据的 `key` 和 `source_revisions` 与索引一致；缺失必需页时报告“权威知识缺失”。
 5. 每次引用必须记录 `key`、`doc_token`、`revision_id` 和 `source_revisions`。用 `scripts/dependencies.py` 的 `build_dependency_record()` 生成锁定记录，`render_dependency_record()` 渲染 `built_against`。

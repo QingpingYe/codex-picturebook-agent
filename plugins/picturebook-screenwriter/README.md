@@ -28,7 +28,17 @@
 
 ### Configuration discovery
 
-Put the real schema-v2 file at `<workspace>/feishu-knowledge-base.json`. `--config` overrides it, and `PICTUREBOOK_KB_CONFIG` is used when `--config` is omitted. The user fallback is `~/.picturebook-screenwriter/feishu-knowledge-base.json`. Plugin cache files, including `config/feishu-knowledge-base.example.json`, are templates and are never discovered.
+Configuration is local to each user or workspace. The plugin ships only `config/feishu-knowledge-base.example.json`; that template is never discovered.
+
+Resolution order:
+
+1. Explicit `--config`.
+2. `PICTUREBOOK_KB_CONFIG`.
+3. The nearest ancestor of `<workspace>` containing `feishu-knowledge-base.json`.
+4. Windows: `%APPDATA%\picturebook-screenwriter\feishu-knowledge-base.json`; macOS: `~/Library/Application Support/picturebook-screenwriter/feishu-knowledge-base.json`; Linux: `${XDG_CONFIG_HOME:-~/.config}/picturebook-screenwriter/feishu-knowledge-base.json`.
+5. deprecated: `~/.picturebook-screenwriter/feishu-knowledge-base.json`.
+
+A project subdirectory inherits a config from its nearest ancestor. Do not commit a real configuration to a repository, and do not store one in a plugin cache. `config-status` reports `origin`, `path`, and `searched` so the selected file is explicit.
 
 ## Feishu runtime commands
 
@@ -45,14 +55,14 @@ python .\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config <c
 
 `authority_cli.py` 只做只读检索。离线缓存不是权威版本，只有在用户显式批准后加 `--allow-offline-cache` 使用，输出必须继续说明“非权威”。
 
-`lark_cli_bootstrap.py` 支持 `1.0.95` / `1.0.96`，按 `LARK_CLI_PATH`、PATH、常见 C 盘 npm 全局位置（`%APPDATA%\npm` 与 `%ProgramFiles%\nodejs`）、`C:\lark-cli`、`D:\lark-cli` 的顺序查找。缺 CLI 时会输出官方安装命令；只有在用户明确批准后，才加 `--install` 执行 `npx @larksuite/cli@latest install`。安装机需要 Node.js 16+，且每个用户安装后仍需本人执行 `lark-cli auth login`。
+`lark_cli_bootstrap.py` 支持 `1.0.95` / `1.0.96`，按 `LARK_CLI_PATH`、`PATH`、`%APPDATA%\npm`、`%ProgramFiles%\nodejs` 和 Unix 标准 bin 目录的顺序查找；没有作者专用的盘符 fallback。缺 CLI 时会输出官方安装命令；只有在用户明确批准后，才加 `--install` 执行 `npx @larksuite/cli@latest install`。安装机需要 Node.js 16+，且每个用户安装后仍需本人执行 `lark-cli auth login`。
 
 ## 安装
 
 在仓库根目录执行：
 
 ```powershell
-codex plugin marketplace add E:\picturebook-screenwriter
+codex plugin marketplace add <local-plugin-root>
 codex plugin add picturebook-screenwriter@picturebook-local
 ```
 
@@ -75,7 +85,7 @@ codex plugin add picturebook-screenwriter@picturebook-local
 ## 验证
 
 ```powershell
-python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
+python <codex-home>\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
 python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\craft-benchmark-check\scripts -p "test_*.py" -v
 node .\plugins\picturebook-screenwriter\skills\staging-planner\scripts\run_regression.js
 python .\scripts\governance_check.py

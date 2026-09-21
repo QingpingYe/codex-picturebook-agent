@@ -29,7 +29,7 @@ applies_to:
 2. 先运行 `../feishu-knowledge-store/scripts/lark_cli_bootstrap.py` 检查兼容的 lark-cli。若结果为 `missing`，先向用户说明将执行官方安装器，获得明确批准后加 `--install` 重跑；若为 `unsupported`，终止并报告版本和路径。
 3. `lark-cli auth status --json --verify` 返回用户身份认证成功。安装 CLI 不会自动登录；认证失败时由用户本人执行 `lark-cli auth login`。
 4. 当前用户对原始知识库根节点有读取权限。
-5. `LARK_CLI_PATH`、PATH 中的 `lark-cli`，或常见安装位置（Windows 优先检查 `%APPDATA%\npm`、`%ProgramFiles%\nodejs`、`C:\lark-cli`，最后才是 `D:\lark-cli`）至少一个可用；安装场景还要求 Node.js 16+ 提供 `npx`。
+5. `LARK_CLI_PATH`、`PATH` 中的 `lark-cli`，或标准 npm 安装位置（Windows 检查 `%APPDATA%\npm` 与 `%ProgramFiles%\nodejs`；Unix 检查 `~/.local/bin`、`/usr/local/bin`、`/opt/homebrew/bin`）至少一个可用；安装场景还要求 Node.js 16+ 提供 `npx`。
 
 除 `auth status` 外，所有 lark-cli 读写命令使用 `--as user`，以保留实际读取者身份。
 
