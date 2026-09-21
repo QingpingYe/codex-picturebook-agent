@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from authority import AuthorityLoader, AuthorityQuery, AuthorityGapError
 from models import IndexEntry
 from page_codec import render_remote_page
+from load_knowledge import KnowledgeEvidence, KnowledgeEvidenceBundle
 
 
 class FakeControlPlane:
@@ -137,6 +138,49 @@ class _StaticPageCli:
     def fetch_doc(self, token):
         revision, content = self.pages[token]
         return {"data": {"document": {"revision_id": revision, "content": content}}}
+
+
+class RecordingCache:
+    def __init__(self):
+        self.saved = None
+
+    def save(self, bundle):
+        self.saved = bundle
+
+
+class AuthorityCacheTests(unittest.TestCase):
+    def test_successful_remote_load_saves_cache(self):
+        cache = RecordingCache()
+        loader = AuthorityLoader(FakeControlPlane(), FakeCli(), cache_store=cache)
+        bundle = loader.load(AuthorityQuery("小老鼠迈尔斯", "海外绘本", ("worldview",)))
+        self.assertFalse(bundle.offline)
+        self.assertEqual(cache.saved["items"][0]["key"], "海外绘本/小老鼠迈尔斯/worldview")
+
+    def test_remote_failure_uses_cache_only_with_explicit_opt_in(self):
+        class FailingPlane:
+            def read_index(self):
+                raise RuntimeError("network down")
+
+        item = KnowledgeEvidence(
+            key="海外绘本/小老鼠迈尔斯/worldview", doc_token="doc-a",
+            revision_id=42, title="worldview", content="正文",
+            source_revisions={"node-a": "17"},
+        )
+        cached = KnowledgeEvidenceBundle(
+            items=(item,), warnings=("缓存",), offline=False,
+            fetched_at="2026-09-20T10:00:00+08:00",
+        )
+        loader = AuthorityLoader(FailingPlane(), FakeCli(), cached_bundle=cached)
+        bundle = loader.load(
+            AuthorityQuery("小老鼠迈尔斯", "海外绘本", ("worldview",)),
+            allow_offline_cache=True,
+        )
+        self.assertTrue(bundle.offline)
+        self.assertIn("非权威", bundle.warnings[0])
+
+        strict = AuthorityLoader(FailingPlane(), FakeCli(), cached_bundle=cached)
+        with self.assertRaisesRegex(RuntimeError, "network down"):
+            strict.load(AuthorityQuery("小老鼠迈尔斯", "海外绘本", ("worldview",)))
 
 
 if __name__ == "__main__":

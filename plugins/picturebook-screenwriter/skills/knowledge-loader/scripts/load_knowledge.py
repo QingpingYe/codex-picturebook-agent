@@ -57,7 +57,7 @@ class KnowledgeLoader:
         except Exception as error:
             if allow_offline_cache and self.cached_bundle is not None:
                 warnings = list(self.cached_bundle.warnings)
-                warnings.insert(0, "目标飞书知识库不可用，正在使用最后确认的本地缓存；它不是权威版本。")
+                warnings.insert(0, "目标飞书知识库不可用，正在使用最后确认的本地缓存；它是非权威版本。")
                 return KnowledgeEvidenceBundle(
                     items=self.cached_bundle.items,
                     warnings=tuple(warnings),
@@ -126,11 +126,11 @@ class KnowledgeLoader:
             fetched_at=_now(),
         )
         if self.cache_store is not None:
-            self.cache_store.save(_bundle_to_dict(bundle))
+            self.cache_store.save(bundle_to_dict(bundle))
         return bundle
 
 
-def _bundle_to_dict(bundle: KnowledgeEvidenceBundle) -> dict[str, Any]:
+def bundle_to_dict(bundle: KnowledgeEvidenceBundle) -> dict[str, Any]:
     return {
         "items": [
             {
@@ -148,6 +148,17 @@ def _bundle_to_dict(bundle: KnowledgeEvidenceBundle) -> dict[str, Any]:
         "offline": bundle.offline,
         "fetched_at": bundle.fetched_at,
     }
+
+
+def bundle_from_dict(raw: dict[str, Any] | None) -> KnowledgeEvidenceBundle | None:
+    if raw is None:
+        return None
+    return KnowledgeEvidenceBundle(
+        items=tuple(KnowledgeEvidence(**item) for item in raw.get("items", [])),
+        warnings=tuple(raw.get("warnings", [])),
+        offline=bool(raw.get("offline", False)),
+        fetched_at=raw["fetched_at"],
+    )
 
 
 def _now() -> str:

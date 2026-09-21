@@ -17,16 +17,20 @@ class AuthorityQuery:
 
 
 class AuthorityLoader:
-    def __init__(self, control_plane, cli) -> None:
-        self.loader = KnowledgeLoader(control_plane, cli)
+    def __init__(self, control_plane, cli, cache_store=None,
+                 cached_bundle=None) -> None:
+        self.loader = KnowledgeLoader(
+            control_plane, cli,
+            cache_store=cache_store, cached_bundle=cached_bundle,
+        )
 
-    def load(self, query: AuthorityQuery):
+    def load(self, query: AuthorityQuery, allow_offline_cache: bool = False):
         bundle = self.loader.load(KnowledgeQuery(
             project_id=query.project_id,
             series_id=query.series_id,
             page_types=query.page_types,
             limit=len(query.page_types) * 2,
-        ))
+        ), allow_offline_cache=allow_offline_cache)
         found = {item.key.split("/")[-1] for item in bundle.items}
         missing = [page_type for page_type in query.page_types if page_type not in found]
         if missing:
