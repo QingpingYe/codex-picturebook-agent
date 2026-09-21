@@ -101,6 +101,29 @@ class LarkCli:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def create_space_doc(self, space_id: str, title: str,
+                         content: str = "") -> dict[str, Any]:
+        node = self._json(
+            "wiki", "+node-create", "--as", self.identity,
+            "--space-id", space_id, "--title", title,
+            "--obj-type", "docx", "--format", "json",
+        )
+        data = node.get("data", node)
+        data = data.get("node", data)
+        obj_token = next(
+            data.get(key)
+            for key in ("obj_token", "node_token", "token")
+            if data.get(key)
+        )
+        current = self.fetch_doc(obj_token)
+        revision = current.get("data", {}).get("document", {}).get("revision_id")
+        updated = self.update_doc(obj_token, int(revision), content)
+        updated_revision = updated.get("data", {}).get("document", {}).get("revision_id")
+        return {"data": {"document": {
+            "document_id": obj_token,
+            "revision_id": updated_revision,
+        }}}
+
     def fetch_doc(self, doc_token: str) -> dict[str, Any]:
         return self._json(
             "docs", "+fetch", "--as", self.identity,

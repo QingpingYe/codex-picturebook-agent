@@ -51,7 +51,7 @@ class Publisher:
             return self.tokens
         tokens: dict[str, str] = {}
         for title in TREE_ORDER:
-            parent, _ = self._find_or_create(self.target_root, title)
+            parent, _ = self._find_or_create_root(title)
             tokens[title] = parent
             if title == "01_知识内容":
                 tokens["content"] = parent
@@ -101,6 +101,38 @@ class Publisher:
         tokens["conflict"] = tokens["AI_KB_CONFLICT_QUEUE_V1"]
         tokens["content"] = tokens["01_知识内容"]
         return tokens
+
+    def _find_or_create_root(self, title: str) -> tuple[str, bool]:
+        if self.root_mode == "space":
+            existing = self._existing_root_token(title)
+            if existing:
+                return existing, True
+            seed_content = {
+                "AI_KB_INDEX_V1": render_empty_index(),
+                "AI_KB_LOCK_V1": render_empty_lock(),
+                "AI_KB_CONFLICT_QUEUE_V1": render_empty_conflict_queue(),
+            }
+            response = self.cli.create_space_doc(
+                self.space_id, title, seed_content.get(title, ""),
+            )
+            document = response.get("data", {}).get("document", {})
+            token = document.get(
+                "document_id", document.get("doc_token", document.get("token")),
+            )
+            if not token:
+                raise NeedsReview("created document did not return a usable token")
+            matches = [
+                node
+                for node in self.cli.list_nodes(self.space_id)
+                if node.get("title") == title
+            ]
+            if len(matches) != 1:
+                raise NeedsReview(f"created page has ambiguous node identity: {title}")
+            for key in ("node_token", "obj_token", "token"):
+                if matches[0].get(key):
+                    return matches[0][key], False
+            return token, False
+        return self._find_or_create(self.target_root, title)
 
     def _existing_root_token(self, title: str) -> str | None:
         if self.root_mode == "space":

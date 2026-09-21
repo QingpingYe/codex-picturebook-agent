@@ -93,6 +93,22 @@ class SpaceAwareCli(FakeCli):
         return self.nodes.get(parent_node_token, [])
 
 
+class SpaceInitializeCli(SpaceAwareCli):
+    def __init__(self):
+        super().__init__()
+        self.space_created = []
+        self.nodes[None] = []
+
+    def create_space_doc(self, space_id, title, content=""):
+        self.space_created.append(title)
+        number = len(self.space_created)
+        token = f"space-doc-{number}"
+        node_token = f"space-node-{number}"
+        self.nodes[None].append({"title": title, "node_token": node_token})
+        self.docs[token] = {"revision_id": 3, "content": content}
+        return {"data": {"document": {"document_id": token, "revision_id": 3}}}
+
+
 class PublisherTests(unittest.TestCase):
     def setUp(self):
         self.cli = FakeCli()
@@ -182,6 +198,19 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(tokens["content"], "node-01")
         self.assertEqual(tokens["99_系统控制台"], "node-99")
         self.assertTrue(any(call[1] is None for call in cli.list_node_calls))
+
+    def test_initialize_creates_space_root_system_tree(self):
+        cli = SpaceInitializeCli()
+        publisher = Publisher(cli, None, "target-space", root_mode="space")
+        tokens = publisher.initialize()
+        self.assertEqual(cli.space_created, [
+            "00_使用说明", "01_知识内容", "02_导航与日志", "99_系统控制台",
+        ])
+        self.assertEqual(cli.created_titles, [
+            "AI知识库编辑说明", "知识导航索引", "同步日志",
+            "AI_KB_INDEX_V1", "AI_KB_LOCK_V1", "AI_KB_CONFLICT_QUEUE_V1",
+        ])
+        self.assertIsNotNone(tokens["index"])
 
     def test_initialize_seeds_valid_control_documents(self):
         tokens = self.publisher.initialize()

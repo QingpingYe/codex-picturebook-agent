@@ -72,6 +72,23 @@ class LarkCliTests(unittest.TestCase):
         self.assertTrue(content_arg.startswith("@"))
         self.assertFalse(Path(content_arg[1:]).exists())
 
+    def test_create_space_doc_creates_node_then_updates_content(self):
+        runner = FakeRunner(
+            ok({"data": {"node": {
+                "obj_token": "doc-space", "node_token": "node-space",
+            }}}),
+            ok({"data": {"document": {"revision_id": 1, "content": ""}}}),
+            ok({"data": {"document": {"revision_id": 3}}}),
+        )
+        client = LarkCli(Path("lark-cli"), "user", runner)
+        result = client.create_space_doc("space-1", "00_使用说明", "# 说明")
+        self.assertEqual(result["data"]["document"]["document_id"], "doc-space")
+        self.assertEqual(result["data"]["document"]["revision_id"], 3)
+        self.assertEqual(runner.calls[0][1:3], ["wiki", "+node-create"])
+        self.assertIn("space-1", runner.calls[0])
+        self.assertEqual(runner.calls[1][1:3], ["docs", "+fetch"])
+        self.assertEqual(runner.calls[2][1:3], ["docs", "+update"])
+
     def test_supported_version_is_detected(self):
         runner = FakeRunner(Completed("lark-cli version 1.0.95\n"))
         client = LarkCli(Path("lark-cli"), "user", runner)
