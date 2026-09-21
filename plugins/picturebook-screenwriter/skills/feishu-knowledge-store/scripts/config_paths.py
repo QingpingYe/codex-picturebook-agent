@@ -61,16 +61,17 @@ def resolve_config_path(
         path = base / _CONFIG_NAME
         if path.is_file():
             origin = "workspace" if index == 0 else "ancestor"
-            return ResolvedConfigPath(path, origin, searched)
+            return ResolvedConfigPath(path, origin, searched[:index + 1])
 
-    for index, path in enumerate(user_config_candidates(environment, home_path, system)):
+    user_candidates = user_config_candidates(environment, home_path, system)
+    for index, path in enumerate(user_candidates):
         if path.is_file():
             origin = "user" if index == 0 else "user-legacy"
-            return ResolvedConfigPath(path, origin, (*searched, *user_config_candidates(environment, home_path, system)))
+            return ResolvedConfigPath(path, origin, (*searched, *user_candidates[:index + 1]))
     raise ConfigResolutionError(
         "configuration file not found; create <workspace>/feishu-knowledge-base.json "
         "or set PICTUREBOOK_KB_CONFIG",
-        searched=(*searched, *user_config_candidates(environment, home_path, system)),
+        searched=(*searched, *user_candidates),
     )
 
 

@@ -47,6 +47,11 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(resolved.origin, "workspace")
         self.assertNotIn(user, resolved.searched)
 
+    def test_workspace_success_lists_only_checked_candidates(self):
+        workspace = self.write(self.workspace / "feishu-knowledge-base.json")
+        resolved = resolve_config_path(None, self.workspace, {}, home=self.root / "home")
+        self.assertEqual(resolved.searched, (workspace,))
+
     def test_missing_direct_path_does_not_fall_back(self):
         self.write(self.workspace / "feishu-knowledge-base.json")
         with self.assertRaises(ConfigResolutionError) as caught:
