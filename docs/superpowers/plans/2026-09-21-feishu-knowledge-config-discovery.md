@@ -2,32 +2,46 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the Feishu knowledge configuration durable and discoverable from the user workspace, add read-only authority retrieval, and support explicitly opt-in offline evidence.
+Revision: v2, portable multi-user discovery
 
-**Architecture:** A shared resolver owns configuration-path discovery. `store_cli` and `sync_runner` stop deriving workspace from the plugin script location. A new `authority_cli.py` becomes the standard read-only retrieval entry point and writes the last confirmed evidence cache only after a successful remote read.
+**Goal:** Make the Feishu knowledge configuration durable, portable, and discoverable across users, operating systems, project subdirectories, and plugin upgrades; add read-only authority retrieval and explicitly opt-in offline evidence.
+
+**Architecture:** A shared resolver owns configuration-path discovery: direct paths, environment override, nearest workspace ancestor, and platform-standard user directories. `store_cli` and `sync_runner` never derive workspace from the plugin script location. `authority_cli.py` is the standard read-only retrieval entry point and writes the last confirmed evidence cache only after a successful, complete remote read. Lark CLI lookup uses portable environment and standard installation locations.
 
 **Tech Stack:** Python 3.10+, standard-library `unittest`, JSON, existing Lark CLI adapter, existing Feishu control-plane contracts.
 
 **Spec:** `docs/superpowers/specs/2026-09-21-feishu-knowledge-config-discovery-design.md`
 
+## Implementation Status
+
+- Revision 1, Tasks 1-6: implemented and merged to `main` through commit `00db22a`.
+- Task 7: manual acceptance was not executed because it requires a user-approved real target token.
+- Revision 2, Tasks 8-11: pending. These tasks supersede the v1 discovery order, documentation examples, and CLI fallbacks.
+
 ## Global Constraints
 
 - Configuration schema remains schema version 2.
-- Discovery order is explicit `--config`, `PICTUREBOOK_KB_CONFIG`, `<workspace>/feishu-knowledge-base.json`, then `~/.picturebook-screenwriter/feishu-knowledge-base.json`.
+- Discovery order is explicit `--config`, `PICTUREBOOK_KB_CONFIG`, nearest workspace ancestor, platform-standard user directories, then deprecated `~/.picturebook-screenwriter`.
+- Workspace chain discovery does not recurse downward into child directories.
+- User paths resolve from injected `APPDATA`, `XDG_CONFIG_HOME`, `HOME`, and platform rules, not from an author's real home directory.
+- Lark CLI lookup uses `LARK_CLI_PATH`, `PATH`, and standard npm-global locations; it has no `C:\lark-cli` or `D:\lark-cli` fallback.
 - Do not discover `config/feishu-knowledge-base.example.json`.
 - Do not infer workspace from plugin script location.
 - Do not use offline cache unless the caller explicitly opts in.
 - Offline evidence is non-authoritative and must be labeled as such.
 - Do not store, log, or commit real Feishu tokens.
-- Implement in the source repository under `plugins/picturebook-screenwriter`; release as version `0.3.1`.
+- Implement in the source repository under `plugins/picturebook-screenwriter`; release Revision 2 as version `0.3.2`.
 
 ## Review Focus
 
 1. A missing direct `--config` path must fail instead of silently trying other candidates; pinned by Task 2.
 2. A placeholder target token must never be treated as configured; pinned by Task 1.
 3. An installed plugin cache example must never become live configuration; pinned by Task 1.
-4. Remote authority failure without explicit opt-in must fail closed, not silently use local cache; pinned by Task 4.
-5. `config-status` must not leak token values; pinned by Task 2.
+4. A project subdirectory must discover the nearest ancestor config without reading unrelated child projects; pinned by Task 8.
+5. Platform user directories must be resolved from injected environment values, not the author's real home; pinned by Task 8.
+6. Lark CLI discovery must have no author-specific drive-letter fallback; pinned by Task 9.
+7. Remote authority failure without explicit opt-in must fail closed, not silently use local cache; pinned by Task 4.
+8. `config-status` must not leak token values; pinned by Task 2.
 
 ---
 
@@ -1149,7 +1163,7 @@ Run:
 python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts -p "test_*.py"
 python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\knowledge-loader\scripts -p "test_*.py"
 python .\plugins\picturebook-screenwriter\tests\test_release_contract.py
-python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
+python <codex-home>\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
 python .\scripts\governance_check.py
 python .\scripts\package_check.py
 ```
@@ -1226,3 +1240,444 @@ Expected: `True`.
 - [ ] **Step 5: Record result**
 
 Record command names, statuses, and page keys in the task summary. Do not record the token or the full evidence body.
+
+## Task 8: Portable Workspace Chain and User Directories
+
+**Files:**
+- Modify: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/config_paths.py`
+- Modify: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/store_cli.py`
+- Test: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_config_paths.py`
+
+**Interfaces:**
+- Consumes: existing `resolve_config_path()` signature.
+- Produces: `_workspace_chain(workspace)`, `user_config_candidates(environ, home=None, system=None)`, origin values `workspace`, `ancestor`, `user`, and `user-legacy`.
+
+- [ ] **Step 1: Write failing ancestor and platform tests**
+
+Add these representative tests to `test_config_paths.py`:
+
+```python
+    def test_nearest_ancestor_config_wins(self):
+        root_config = self.write(self.root / "feishu-knowledge-base.json")
+        nested = self.root / "shared" / "project"
+        nested.mkdir(parents=True)
+        resolved = resolve_config_path(None, nested, {}, home=self.root / "home")
+        self.assertEqual(resolved.path, root_config)
+        self.assertEqual(resolved.origin, "ancestor")
+
+    def test_nearest_ancestor_beats_higher_ancestor(self):
+        shared = self.root / "shared"
+        shared.mkdir()
+        self.write(shared / "feishu-knowledge-base.json")
+        root_config = self.write(self.root / "feishu-knowledge-base.json")
+        resolved = resolve_config_path(None, shared / "project", {}, home=self.root / "home")
+        self.assertEqual(resolved.path, shared / "feishu-knowledge-base.json")
+        self.assertNotEqual(resolved.path, root_config)
+
+    def test_deeper_child_config_is_not_discovered(self):
+        nested = self.workspace / "project"
+        self.write(nested / "feishu-knowledge-base.json")
+        with self.assertRaises(ConfigResolutionError):
+            resolve_config_path(None, self.workspace, {}, home=self.root / "home")
+
+    def test_windows_user_directory_is_portable(self):
+        appdata = self.root / "appdata"
+        expected = appdata / "picturebook-screenwriter" / "feishu-knowledge-base.json"
+        self.write(expected)
+        resolved = resolve_config_path(
+            None, self.workspace, {"APPDATA": str(appdata)},
+            home=self.root / "home", system="windows",
+        )
+        self.assertEqual(resolved.path, expected)
+        self.assertEqual(resolved.origin, "user")
+
+    def test_linux_xdg_user_directory_is_portable(self):
+        config_home = self.root / "xdg"
+        expected = config_home / "picturebook-screenwriter" / "feishu-knowledge-base.json"
+        self.write(expected)
+        resolved = resolve_config_path(
+            None, self.workspace, {"XDG_CONFIG_HOME": str(config_home)},
+            home=self.root / "home", system="linux",
+        )
+        self.assertEqual(resolved.path, expected)
+        self.assertEqual(resolved.origin, "user")
+
+    def test_macos_user_directory_is_portable(self):
+        expected = self.root / "home" / "Library" / "Application Support" / \
+            "picturebook-screenwriter" / "feishu-knowledge-base.json"
+        self.write(expected)
+        resolved = resolve_config_path(
+            None, self.workspace, {}, home=self.root / "home", system="macos",
+        )
+        self.assertEqual(resolved.path, expected)
+        self.assertEqual(resolved.origin, "user")
+```
+
+- [ ] **Step 2: Run the new tests and verify they fail**
+
+Run:
+
+```powershell
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_config_paths.py
+```
+
+Expected: FAIL because ancestor and platform directory discovery do not exist.
+
+- [ ] **Step 3: Implement workspace chain and platform directories**
+
+Update `config_paths.py`:
+
+```python
+_CONFIG_NAME = "feishu-knowledge-base.json"
+
+
+def _workspace_chain(workspace: str | Path) -> tuple[Path, ...]:
+    current = Path(workspace).expanduser().resolve()
+    chain = []
+    while True:
+        chain.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    return tuple(chain)
+
+
+def user_config_candidates(
+    environ: Mapping[str, str] | None = None,
+    home: str | Path | None = None,
+    system: str | None = None,
+) -> tuple[Path, ...]:
+    environment = os.environ if environ is None else environ
+    home_path = Path(home) if home is not None else Path.home()
+    system_name = (system or ("windows" if os.name == "nt" else "macos" if sys.platform == "darwin" else "linux")).lower()
+    if system_name == "windows":
+        appdata = environment.get("APPDATA") or (home_path / "AppData" / "Roaming")
+        standard = Path(appdata) / "picturebook-screenwriter"
+    elif system_name == "macos":
+        standard = home_path / "Library" / "Application Support" / "picturebook-screenwriter"
+    else:
+        config_home = environment.get("XDG_CONFIG_HOME") or home_path / ".config"
+        standard = Path(config_home) / "picturebook-screenwriter"
+    legacy = home_path / ".picturebook-screenwriter"
+    return (
+        standard / _CONFIG_NAME,
+        legacy / _CONFIG_NAME,
+    )
+```
+
+Change workspace resolution from one exact path to the chain:
+
+```python
+    workspace_path = Path(workspace) if workspace is not None else Path.cwd()
+    chain = _workspace_chain(workspace_path)
+    for index, base in enumerate(chain):
+        path = base / _CONFIG_NAME
+        if path.is_file():
+            origin = "workspace" if index == 0 else "ancestor"
+            return ResolvedConfigPath(path, origin, tuple(base / _CONFIG_NAME for base in chain))
+```
+
+Then check `user_config_candidates(environment, home_path)`. Return origin `user` for the standard candidate and `user-legacy` for the legacy candidate. Keep direct-path failure behavior unchanged.
+
+Add `import sys` to the module imports.
+
+- [ ] **Step 4: Preserve provenance in config status**
+
+No schema change is needed in `store_cli.py`; it passes `resolved.origin` through. Verify that status output can emit `ancestor`, `user`, and `user-legacy`.
+
+- [ ] **Step 5: Run focused tests**
+
+Run:
+
+```powershell
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_config_paths.py
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_config.py
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_store_cli.py
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/config_paths.py `
+  plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/store_cli.py `
+  plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_config_paths.py
+git commit -m "feat(feishu): discover portable workspace config"
+```
+
+## Task 9: Portable Lark CLI Lookup
+
+**Files:**
+- Modify: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/config.py`
+- Modify: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/lark_cli_bootstrap.py`
+- Test: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_config.py`
+- Test: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_lark_cli_bootstrap.py`
+
+**Interfaces:**
+- Consumes: `LARK_CLI_PATH`, `PATH`, `APPDATA`, `HOME`, `ProgramFiles`.
+- Produces: portable CLI candidates with no author-specific drive-letter fallback.
+
+- [ ] **Step 1: Write failing portability tests**
+
+Update CLI candidate tests to assert that machine-specific paths are absent:
+
+```python
+    def test_config_cli_candidates_use_standard_sources_only(self):
+        config = self.load(config_json({}), {"LARK_CLI_PATH": "lark-cli"}, which=lambda _: "lark-cli")
+        self.assertEqual(config.cli_candidates[0], Path("lark-cli"))
+        self.assertEqual(config.cli_candidates[1], Path("lark-cli"))
+        self.assertEqual(len(config.cli_candidates), 2)
+
+    def test_bootstrap_platform_candidates_exclude_author_drive_letters(self):
+        candidates = lark_cli_bootstrap._platform_candidates({
+            "APPDATA": str(self.tmp / "appdata"),
+            "ProgramFiles": str(self.tmp / "program-files"),
+            "HOME": str(self.tmp / "home"),
+        })
+        text = "\n".join(str(path) for path in candidates)
+        self.assertNotIn("C:\\lark-cli", text)
+        self.assertNotIn("D:\\lark-cli", text)
+```
+
+- [ ] **Step 2: Run the tests and verify they fail**
+
+Run:
+
+```powershell
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_config.py
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_lark_cli_bootstrap.py
+```
+
+Expected: FAIL while `C:\lark-cli` and `D:\lark-cli` remain.
+
+- [ ] **Step 3: Remove author-specific fallbacks**
+
+In `config.py`, remove:
+
+```python
+_WINDOWS_CLI_FALLBACK = Path(r"D:\lark-cli\lark-cli.exe")
+```
+
+and remove that path from candidate construction. Keep:
+
+```python
+for candidate in (environment.get("LARK_CLI_PATH"), which("lark-cli")):
+```
+
+In `lark_cli_bootstrap.py`, update `_platform_candidates()`:
+
+```python
+def _platform_candidates(environment):
+    if os.name == "nt":
+        candidates = []
+        appdata = environment.get("APPDATA")
+        if appdata:
+            npm_bin = Path(appdata) / "npm"
+            candidates.extend((
+                npm_bin / "lark-cli.cmd",
+                npm_bin / "node_modules" / "@larksuite" / "cli" / "bin" / "lark-cli.exe",
+            ))
+        program_files = environment.get("ProgramFiles")
+        if program_files:
+            candidates.append(Path(program_files) / "nodejs" / "lark-cli.cmd")
+        return tuple(candidates)
+
+    home = environment.get("HOME")
+    candidates = []
+    if home:
+        candidates.append(Path(home) / ".local" / "bin" / "lark-cli")
+    candidates.extend((
+        Path("/usr/local/bin/lark-cli"),
+        Path("/opt/homebrew/bin/lark-cli"),
+    ))
+    return tuple(candidates)
+```
+
+- [ ] **Step 4: Run focused tests**
+
+Run:
+
+```powershell
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_config.py
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\test_lark_cli_bootstrap.py
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/config.py `
+  plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/lark_cli_bootstrap.py `
+  plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_config.py `
+  plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_lark_cli_bootstrap.py
+git commit -m "fix(feishu): use portable cli discovery"
+```
+
+## Task 10: Portable Documentation and 0.3.2 Release
+
+**Files:**
+- Modify: `plugins/picturebook-screenwriter/README.md`
+- Modify: `plugins/picturebook-screenwriter/skills/knowledge-loader/SKILL.md`
+- Modify: `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/SKILL.md`
+- Modify: `plugins/picturebook-screenwriter/.codex-plugin/plugin.json`
+- Modify: `plugins/picturebook-screenwriter/tests/test_release_contract.py`
+- Modify: `docs/CHANGELOG.md`
+
+**Interfaces:**
+- Consumes: v2 discovery and CLI contracts.
+- Produces: generic documentation and plugin version `0.3.2`.
+
+- [ ] **Step 1: Add failing release assertions**
+
+Update version assertions from `0.3.1` to `0.3.2`. Add:
+
+```python
+    def test_readme_documents_portable_config_discovery(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        for value in (
+            "ancestor",
+            "%APPDATA%\\picturebook-screenwriter",
+            "${XDG_CONFIG_HOME:-~/.config}/picturebook-screenwriter",
+            "PICTUREBOOK_KB_CONFIG",
+            "deprecated",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
+    def test_readme_has_no_author_machine_paths(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertNotIn("E:\\海外绘本", text)
+        self.assertNotIn("C:\\Users\\lvan", text)
+```
+
+- [ ] **Step 2: Run release tests and verify they fail**
+
+Run:
+
+```powershell
+python .\plugins\picturebook-screenwriter\tests\test_release_contract.py
+```
+
+Expected: FAIL because docs and version are not updated.
+
+- [ ] **Step 3: Update documentation and version**
+
+Set:
+
+```json
+  "version": "0.3.2",
+```
+
+Update README's Configuration discovery section to document:
+
+```text
+1. --config
+2. PICTUREBOOK_KB_CONFIG
+3. nearest workspace ancestor
+4. Windows: %APPDATA%\picturebook-screenwriter
+   macOS: ~/Library/Application Support/picturebook-screenwriter
+   Linux: ${XDG_CONFIG_HOME:-~/.config}/picturebook-screenwriter
+5. deprecated: ~/.picturebook-screenwriter
+```
+
+Use `<workspace>`, `<project-id>`, `<series-id>`, `<page-types>`, and `<local-plugin-root>` in command examples. Document that each user creates their own local schema-v2 config and that example files are never discovered.
+
+Update SKILL files to state ancestor discovery and portable user fallbacks. Update the changelog:
+
+```markdown
+- Portable Feishu config discovery for project subdirectories, user directories, and shared plugin distribution.
+```
+
+- [ ] **Step 4: Run release tests**
+
+Run:
+
+```powershell
+python .\plugins\picturebook-screenwriter\tests\test_release_contract.py
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add plugins/picturebook-screenwriter/README.md `
+  plugins/picturebook-screenwriter/skills/knowledge-loader/SKILL.md `
+  plugins/picturebook-screenwriter/skills/feishu-knowledge-store/SKILL.md `
+  plugins/picturebook-screenwriter/.codex-plugin/plugin.json `
+  plugins/picturebook-screenwriter/tests/test_release_contract.py `
+  docs/CHANGELOG.md
+git commit -m "docs: release portable feishu discovery"
+```
+
+## Task 11: Portable Offline Gates and Manual Acceptance
+
+**Files:**
+- No repository code changes in the automated gate.
+- Create outside the repository: `<selected-config-owner>/feishu-knowledge-base.json`
+
+**Interfaces:**
+- Consumes: plugin version `0.3.2`.
+- Produces: automated validation and user-local acceptance evidence.
+
+- [ ] **Step 1: Run automated offline gates**
+
+Run:
+
+```powershell
+python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts -p "test_*.py"
+python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\knowledge-loader\scripts -p "test_*.py"
+python .\plugins\picturebook-screenwriter\tests\test_release_contract.py
+python <codex-home>\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
+python .\scripts\governance_check.py
+python .\scripts\package_check.py
+git diff --check
+```
+
+Expected: all commands exit `0`.
+
+- [ ] **Step 2: Verify no machine-specific defaults**
+
+Run:
+
+```powershell
+git grep -n "E:\\海外绘本" -- plugins
+git grep -n "C:\\Users\\lvan" -- plugins
+git grep -n "D:\\lark-cli" -- plugins
+```
+
+Expected: all searches exit `1` with no matches. The only acceptable placeholder remains `REPLACE_WITH_TARGET_ROOT_TOKEN` in the example and tests.
+
+- [ ] **Step 3: Test shared workspace inheritance**
+
+With a real schema-v2 config at `<series-workspace>/feishu-knowledge-base.json`, run from a project subdirectory:
+
+```powershell
+python <plugin-root>\skills\feishu-knowledge-store\scripts\store_cli.py config-status --workspace <series-workspace>\<project>
+```
+
+Expected JSON: `configured: true`, `origin: "ancestor"`, and a path pointing to `<series-workspace>/feishu-knowledge-base.json`.
+
+- [ ] **Step 4: Test user fallback**
+
+Temporarily remove or rename the workspace-chain config, create the platform-standard user config, then rerun `config-status`.
+
+Expected JSON: `configured: true`, `origin: "user"`.
+
+Restore the workspace-chain config after the test.
+
+- [ ] **Step 5: Run read-only authority load**
+
+Run:
+
+```powershell
+python <plugin-root>\skills\knowledge-loader\scripts\authority_cli.py load --workspace <series-workspace>\<project> --project-id <project-id> --series-id <series-id> --page-types worldview,characters,content_spec
+```
+
+Expected: `offline: false`, required page keys present, and each item contains `revision_id` and `source_revisions`.
+
+- [ ] **Step 6: Record result**
+
+Record command names, origins, statuses, and page keys. Do not record the target root token or the full evidence body.
