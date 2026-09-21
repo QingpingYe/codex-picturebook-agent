@@ -5,6 +5,7 @@ import unittest
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from models import IndexEntry
 
@@ -113,9 +114,10 @@ class FakeControlPlane:
         }
 
 
-def fake_factory(config_path, environ=None):
+def fake_factory(config_path, environ=None, workspace=None):
     return SimpleNamespace(
         config=config(Path(config_path)),
+        config_path=Path(config_path),
         cli=FakeCli(),
         publisher=FakePublisher(),
         control_plane=FakeControlPlane(),
@@ -193,9 +195,10 @@ class StoreCliTests(unittest.TestCase):
             def resolve_control_plane(self):
                 raise RuntimeError("missing system page: AI_KB_INDEX_V1")
 
-        def missing_factory(config_path, environ=None):
+        def missing_factory(config_path, environ=None, workspace=None):
             return SimpleNamespace(
                 config=config(Path(config_path)), cli=FakeCli(),
+                config_path=Path(config_path),
                 publisher=MissingPublisher(), control_plane=FakeControlPlane(),
             )
 
@@ -214,9 +217,10 @@ class StoreCliTests(unittest.TestCase):
         write_manifest(run_dir)
         cli = FakeCli()
 
-        def factory(config_path, environ=None):
+        def factory(config_path, environ=None, workspace=None):
             return SimpleNamespace(
                 config=config(Path(config_path)), cli=cli,
+                config_path=Path(config_path),
                 publisher=FakePublisher(), control_plane=FakeControlPlane(),
             )
 
@@ -235,9 +239,10 @@ class StoreCliTests(unittest.TestCase):
         plane = FakeControlPlane()
         publisher = FakePublisher()
 
-        def factory(config_path, environ=None):
+        def factory(config_path, environ=None, workspace=None):
             return SimpleNamespace(
                 config=config(Path(config_path)), cli=FakeCli(),
+                config_path=Path(config_path),
                 publisher=publisher, control_plane=plane,
             )
 
@@ -257,9 +262,10 @@ class StoreCliTests(unittest.TestCase):
         plane = FakeControlPlane()
         publisher = FakePublisher()
 
-        def factory(config_path, environ=None):
+        def factory(config_path, environ=None, workspace=None):
             return SimpleNamespace(
                 config=config(Path(config_path)), cli=FakeCli(),
+                config_path=Path(config_path),
                 publisher=publisher, control_plane=plane,
             )
 
@@ -274,9 +280,10 @@ class StoreCliTests(unittest.TestCase):
     def test_lint_fixture_writes_tree_index_conflict_and_pages(self):
         cli = FakeCli()
 
-        def factory(config_path, environ=None):
+        def factory(config_path, environ=None, workspace=None):
             return SimpleNamespace(
                 config=config(Path(config_path)), cli=cli,
+                config_path=Path(config_path),
                 publisher=FakePublisher(), control_plane=FakeControlPlane(),
             )
 
@@ -293,6 +300,82 @@ class StoreCliTests(unittest.TestCase):
         self.assertTrue((out / "conflict.md").exists())
         self.assertTrue((out / "pages" / "s__p__worldview.md").exists())
         self.assertEqual(cli.fetched, ["index-doc", "conflict-doc", "page-doc"])
+
+    def test_components_use_workspace_without_explicit_config(self):
+        workspace = Path(self.tmp.name)
+        workspace_config = workspace / "feishu-knowledge-base.json"
+        write_config(workspace_config)
+        seen = {}
+
+        def factory(config_path, environ=None, workspace=None):
+            seen.update(config_path=config_path, workspace=workspace)
+            return SimpleNamespace(
+                config=config(workspace_config), cli=FakeCli(),
+                publisher=FakePublisher(), control_plane=FakeControlPlane(),
+            )
+
+        stdout = StringIO()
+        exit_code = store_cli.main(
+            ["resolve", "--workspace", str(workspace)],
+            stdout=stdout, components_factory=factory,
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(seen["workspace"], workspace)
+
+    def test_missing_config_error_is_machine_readable(self):
+        stdout = StringIO()
+        exit_code = store_cli.main(
+            ["resolve", "--workspace", str(self.tmp.name)],
+            stdout=stdout,
+            components_factory=store_cli.build_components,
+        )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["status"], "missing_config")
+        self.assertIn("searched", payload)
+
+    def test_config_status_reports_missing_configuration(self):
+        stdout = StringIO()
+        with patch.object(store_cli, "ensure_lark_cli", return_value={
+            "status": "available", "path": "D:\\lark-cli\\lark-cli.exe",
+            "version": "1.0.95",
+        }):
+            exit_code = store_cli.main(
+                ["config-status", "--workspace", str(self.tmp.name)],
+                stdout=stdout,
+            )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["configured"])
+        self.assertEqual(payload["status"], "missing_config")
+        self.assertEqual(payload["cli_status"]["version"], "1.0.95")
+
+    def test_config_status_reports_placeholder_without_remote_calls(self):
+        placeholder_path = Path(self.tmp.name) / "placeholder.json"
+        placeholder_path.write_text(json.dumps({
+            "schema_version": 2,
+            "source": {
+                "space_id": "source-space", "root_mode": "space",
+                "wiki_url": "https://example.feishu.cn/wiki/source",
+            },
+            "target": {"space_id": "target-space",
+                       "root_token": "REPLACE_WITH_TARGET_ROOT_TOKEN"},
+            "identity": "user", "lock_ttl_minutes": 45,
+        }), encoding="utf-8")
+        stdout = StringIO()
+        with patch.object(store_cli, "ensure_lark_cli", return_value={
+            "status": "available", "path": "D:\\lark-cli\\lark-cli.exe",
+            "version": "1.0.95",
+        }):
+            exit_code = store_cli.main(
+                ["config-status", "--config", str(placeholder_path)],
+                stdout=stdout,
+            )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["configured"])
+        self.assertEqual(payload["status"], "placeholder_target_token")
+        self.assertNotIn("root-token", stdout.getvalue())
 
 
 if __name__ == "__main__":

@@ -8,9 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config import load_config
+from config import ConfigError, load_config
+from config_paths import ConfigResolutionError, resolve_config_path
 from control_plane import ControlPlane
 from lark_cli import LarkCli
+from lark_cli_bootstrap import ensure_lark_cli
 from publisher import Publisher
 from sync_runner import SyncRunner
 
@@ -18,14 +20,15 @@ from sync_runner import SyncRunner
 @dataclass(frozen=True)
 class Components:
     config: Any
+    config_path: Path
     cli: Any
     publisher: Publisher
     control_plane: ControlPlane
 
 
-def build_components(config_path, environ=None) -> Components:
-    workspace = Path(__file__).resolve().parents[5]
-    config = load_config(config_path, workspace, environ)
+def build_components(config_path=None, environ=None, workspace=None) -> Components:
+    resolved = resolve_config_path(config_path, workspace, environ)
+    config = load_config(resolved.path, resolved.path.parent, environ)
     cli = LarkCli(config.cli_candidates[0], identity=config.identity)
     publisher = Publisher(cli, config.target.root_token, config.target.space_id)
     tokens = publisher.resolve_control_plane()
@@ -34,7 +37,7 @@ def build_components(config_path, environ=None) -> Components:
         {"index": tokens["index"], "lock": tokens["lock"]},
         lock_ttl_minutes=config.lock_ttl_minutes,
     )
-    return Components(config, cli, publisher, control_plane)
+    return Components(config, resolved.path, cli, publisher, control_plane)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,20 +45,71 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("preflight", "resolve", "lock-status", "conflict-list"):
         command = commands.add_parser(name)
-        command.add_argument("--config", required=True)
+        command.add_argument("--config")
+        command.add_argument("--workspace")
     for name in ("prepare", "publish", "verify"):
         command = commands.add_parser(name)
-        command.add_argument("--config", required=True)
+        command.add_argument("--config")
+        command.add_argument("--workspace")
         command.add_argument("--run-dir", required=True)
     conflict = commands.add_parser("conflict-append")
-    conflict.add_argument("--config", required=True)
+    conflict.add_argument("--config")
+    conflict.add_argument("--workspace")
     conflict.add_argument("--key", required=True)
     conflict.add_argument("--reason", required=True)
     conflict.add_argument("--holder")
     fixture = commands.add_parser("lint-fixture")
-    fixture.add_argument("--config", required=True)
+    fixture.add_argument("--config")
+    fixture.add_argument("--workspace")
     fixture.add_argument("--out", required=True)
+    status = commands.add_parser("config-status")
+    status.add_argument("--config")
+    status.add_argument("--workspace")
     return parser
+
+
+def config_status(args, stdout, environ=None, cli_probe=None) -> int:
+    cli_probe = cli_probe or ensure_lark_cli
+    resolved = None
+    config = None
+    try:
+        resolved = resolve_config_path(args.config, args.workspace, environ)
+        config = load_config(resolved.path, resolved.path.parent, environ)
+        status = "configured"
+        origin = resolved.origin
+        path = str(resolved.path)
+        searched = [str(item) for item in resolved.searched]
+    except ConfigResolutionError as error:
+        status = error.status
+        origin = error.origin
+        path = None
+        searched = [str(item) for item in error.searched]
+    except ConfigError as error:
+        status = getattr(error, "status", "invalid_config")
+        origin = resolved.origin if resolved is not None else None
+        path = str(resolved.path) if resolved is not None else (
+            str(args.config) if args.config else None
+        )
+        searched = [str(item) for item in resolved.searched] if resolved is not None else []
+
+    try:
+        cli_status = cli_probe(
+            candidates=config.cli_candidates if config is not None else None,
+            environ=environ,
+        )
+    except Exception as error:
+        cli_status = {"status": "error", "message": str(error)}
+
+    payload = {
+        "configured": status == "configured",
+        "status": status,
+        "origin": origin,
+        "path": path,
+        "searched": searched,
+        "cli_status": cli_status,
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=stdout)
+    return 0
 
 
 def export_lint_fixture(components: Components, out: str | Path) -> Path:
@@ -106,8 +160,13 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
     args = build_parser().parse_args(argv)
     stdout = stdout if stdout is not None else sys.stdout
     factory = components_factory if components_factory is not None else build_components
+    if args.command == "config-status":
+        return config_status(args, stdout, environ=None)
     try:
-        components = factory(args.config)
+        components = factory(
+            args.config, environ=None,
+            workspace=Path(args.workspace) if args.workspace else None,
+        )
         if args.command == "preflight":
             payload = components.cli.preflight(components.config.target.root_token)
         elif args.command == "resolve":
@@ -130,19 +189,19 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
             payload = record
         elif args.command == "prepare":
             runner = SyncRunner(
-                args.config, components.cli, components.publisher,
+                components.config_path, components.cli, components.publisher,
                 components.control_plane, config=components.config,
             )
             payload = str(runner.prepare(args.run_dir))
         elif args.command == "publish":
             runner = SyncRunner(
-                args.config, components.cli, components.publisher,
+                components.config_path, components.cli, components.publisher,
                 components.control_plane, config=components.config,
             )
             payload = runner.publish(args.run_dir)
         elif args.command == "verify":
             runner = SyncRunner(
-                args.config, components.cli, components.publisher,
+                components.config_path, components.cli, components.publisher,
                 components.control_plane, config=components.config,
             )
             payload = runner.verify(args.run_dir)
@@ -152,7 +211,10 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
             tokens = components.publisher.resolve_control_plane()
             payload = components.publisher.fetch_current(tokens["conflict"])
     except Exception as error:
-        print(json.dumps({"error": str(error)}, ensure_ascii=False), file=stdout)
+        payload = error.to_dict() if hasattr(error, "to_dict") else {
+            "status": "runtime_error", "error": str(error),
+        }
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=stdout)
         return 1
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=stdout)
     return 0
