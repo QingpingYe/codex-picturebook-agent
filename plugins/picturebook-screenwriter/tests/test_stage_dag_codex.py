@@ -137,6 +137,14 @@ class StageDagCodexAdapterTest(unittest.TestCase):
             plan["decision_required"]["stage_id"],
             "confirmation_gate",
         )
+        self.assertEqual(
+            plan["decision_required"]["allowed_outcomes"],
+            ["approved", "revision_requested", "cancelled"],
+        )
+        self.assertNotIn(
+            "completion_mode",
+            plan["decision_required"],
+        )
         self.assertEqual(plan["next_batches"], [])
 
     def test_nonlead_confirmation_gate_waits_and_is_not_dispatched(self):
@@ -199,6 +207,14 @@ class StageDagCodexAdapterTest(unittest.TestCase):
                 self.assertEqual(
                     plan["decision_required"]["stage_id"],
                     gate_id,
+                )
+                self.assertEqual(
+                    plan["decision_required"]["completion_mode"],
+                    "acknowledge",
+                )
+                self.assertNotIn(
+                    "allowed_outcomes",
+                    plan["decision_required"],
                 )
                 self.assertEqual(plan["next_batches"], [])
 

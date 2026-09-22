@@ -44,10 +44,15 @@ creation、revision 和 illustration 模板均使用 `pb-stage-run-v2`。creatio
    `next_batches`；只有带 `when` 条件且尚未满足的后续阶段会进入
    `deferred_stages`，仅因依赖尚未完成而等待的阶段不会列出。不得把计划
    解释为未来无条件批次。
-3. 若计划状态为 `waiting_for_user`，说明当前待执行的确认门必须由主编
-   直接向用户呈现，不能派发子 Agent，也不能自动选择结果。等待用户返回
-   `approved`、`revision_requested` 或 `cancelled` 后，再用
-   `stage_dag.transition_stage` 写入确认结果并重新生成计划。
+3. 若计划状态为 `waiting_for_user`，当前待执行的门必须由主编直接向用户
+   呈现，不能派发子 Agent，也不能自动选择结果：
+   - `decision_required.stage_id` 为 `confirmation_gate` 时，按
+     `allowed_outcomes` 等待 `approved`、`revision_requested` 或
+     `cancelled`，再用 `stage_dag.transition_stage` 写入 `outcome`。
+   - `decision_required.stage_id` 为 `asset_confirmation` 或
+     `asset_final_confirmation` 时，payload 使用
+     `completion_mode: "acknowledge"` 且不得包含 `allowed_outcomes`。用户
+     确认资产后，主编用普通 `done` 状态迁移完成该阶段，不写 `outcome`。
 4. 若计划状态为 `ready`，按 `next_batches` 中每个批次的 stage 逐个调用
    `spawn_agent`（同一批次可并行）。
    - `fork_context: false` 给子 Agent 干净上下文。
@@ -87,7 +92,18 @@ Codex 没有 WorkBuddy 式的预定义角色文件。`assignee` 字段表示的�
 即使 manifest 中的 assignee 被错误配置为非主编，适配层也必须返回
 `waiting_for_user`，不会把确认门放入派发批次。
 
-确认结果只能是 `approved`、`revision_requested` 或 `cancelled`：
+`confirmation_gate` 是唯一使用结构化确认结果的阶段，派发计划的
+`decision_required.allowed_outcomes` 只能是 `approved`、
+`revision_requested` 或 `cancelled`。
+
+`asset_confirmation` 和 `asset_final_confirmation` 分别使用 `asset-list`
+与 `asset-final` gate；派发计划的 `decision_required` 必须使用
+`completion_mode: "acknowledge"`，且不得暴露 `allowed_outcomes`。主编获得
+用户确认后用普通 `done` 状态迁移完成，不传 `outcome`，因为
+`transition_stage()` 不接受非 `confirmation` gate 的结果。
+
+`confirmation_gate` 的确认结果只能是 `approved`、`revision_requested`
+或 `cancelled`：
 
 - `approved`：确认阶段以 `approved` 完成后，计划才会解锁条件阶段
   `persistence`；只有该阶段成功完成，run 才能持久化为 approved。

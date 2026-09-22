@@ -84,6 +84,8 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("waiting_for_user", stage_skill)
         self.assertIn("revision_requested", stage_skill)
         self.assertIn("不得派发子 Agent", stage_skill)
+        self.assertIn("completion_mode", stage_skill)
+        self.assertIn("acknowledge", stage_skill)
         self.assertIn("重新执行 preflight、collision_check 和 qa", entry_skill)
 
     def test_plugin_advertises_authoritative_feishu_knowledge(self):

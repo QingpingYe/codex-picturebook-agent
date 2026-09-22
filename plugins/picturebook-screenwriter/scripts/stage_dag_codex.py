@@ -115,11 +115,17 @@ def build_dispatch_plan(manifest):
             or stage_id in LEAD_OWNED_STAGE_IDS
         ):
             plan["status"] = "waiting_for_user"
-            plan["decision_required"] = {
+            decision_required = {
                 "stage_id": stage["stage_id"],
                 "owner": LEAD_OWNER,
-                "allowed_outcomes": list(CONFIRMATION_OUTCOMES),
             }
+            if stage_id == "confirmation_gate":
+                decision_required["allowed_outcomes"] = list(
+                    CONFIRMATION_OUTCOMES
+                )
+            else:
+                decision_required["completion_mode"] = "acknowledge"
+            plan["decision_required"] = decision_required
             return plan
 
     plan["lead_actions"] = [
