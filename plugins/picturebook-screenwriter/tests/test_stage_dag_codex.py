@@ -245,22 +245,32 @@ class StageDagCodexAdapterTest(unittest.TestCase):
         )
 
     def test_revision_plan_defers_persistence_until_confirmation(self):
-        creation = stage_dag._creation_template_manifest()
-        creation = self._fast_forward_without_gate(creation)
-        creation = self._complete_confirmation(
-            creation,
-            "revision_requested",
-        )
-        creation = stage_dag.finalize_run(
-            creation,
-            "revision_requested",
-        )
-        revision = stage_dag.build_revision_manifest(
-            creation,
-            feedback=[{"page": 5, "issue": "钩子弱", "instruction": "加强"}],
-            artifact_ref="picturebook/script_v1.md",
-            run_id="20260922-example-0002",
-        )
+        with tempfile.TemporaryDirectory() as project_root:
+            artifact_path = os.path.join(
+                project_root, "picturebook", "script_v1.md")
+            os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+            with open(artifact_path, "w", encoding="utf-8") as fh:
+                fh.write("draft\n")
+
+            creation = stage_dag._creation_template_manifest()
+            creation["project_root"] = project_root
+            creation = self._fast_forward_without_gate(creation)
+            creation = self._complete_confirmation(
+                creation,
+                "revision_requested",
+            )
+            creation = stage_dag.finalize_run(
+                creation,
+                "revision_requested",
+            )
+            revision = stage_dag.build_revision_manifest(
+                creation,
+                feedback=[
+                    {"page": 5, "issue": "钩子弱", "instruction": "加强"}
+                ],
+                artifact_ref="picturebook/script_v1.md",
+                run_id="20260922-example-0002",
+            )
         for stage_id in (
             "revision_init",
             "knowledge_load",

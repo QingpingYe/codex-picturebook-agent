@@ -185,8 +185,97 @@ class StageDagManifestTest(unittest.TestCase):
                 with self.assertRaises(stage_dag.StageDagError):
                     stage_dag.validate_manifest(bad)
 
+    def test_validate_manifest_rejects_done_confirmation_gate_without_outcome(self):
+        bad = _manifest()
+        bad["stages"][1]["gate"] = "confirmation"
+        bad["stages"][1]["status"] = "done"
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "outcome"):
+            stage_dag.validate_manifest(bad)
+
+    def test_validate_manifest_rejects_confirmation_outcome_before_done(self):
+        bad = _manifest()
+        bad["stages"][1]["gate"] = "confirmation"
+        bad["stages"][1]["status"] = "pending"
+        bad["stages"][1]["outcome"] = "approved"
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "done"):
+            stage_dag.validate_manifest(bad)
+
+    def test_validate_manifest_rejects_terminal_stage_without_required_reason(self):
+        malformed = (
+            ("skipped", "skip_reason", "skip_reason"),
+            ("blocked", "blocked_reason", "blocked_reason"),
+        )
+        for status, missing_key, message in malformed:
+            with self.subTest(status=status):
+                bad = _manifest()
+                bad["stages"][0]["status"] = status
+                bad["stages"][0][missing_key] = None
+
+                with self.assertRaisesRegex(
+                        stage_dag.StageDagError, message):
+                    stage_dag.validate_manifest(bad)
+
+    def test_validate_manifest_rejects_incompatible_run_lifecycle(self):
+        invalid_overrides = (
+            {"mode": "turbo"},
+            {"status": "completed", "outcome": None},
+            {"status": "cancelled", "outcome": None},
+            {"status": "pending", "outcome": "approved"},
+        )
+        for overrides in invalid_overrides:
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(stage_dag.StageDagError):
+                    stage_dag.validate_manifest(_manifest(**overrides))
+
+    def test_validate_manifest_rejects_incomplete_revision_manifest(self):
+        invalid_overrides = (
+            {
+                "intent": "revision",
+                "revision_of_run_id": "20260922-example-0000",
+                "iteration": 2,
+                "revision_feedback": [],
+                "source_artifact_ref": "picturebook/script_v1.md",
+            },
+            {
+                "intent": "revision",
+                "revision_of_run_id": "20260922-example-0000",
+                "iteration": 2,
+                "revision_feedback": [{"page": 1}],
+                "source_artifact_ref": None,
+            },
+            {
+                "intent": "revision",
+                "revision_of_run_id": "20260922-example-0001",
+                "iteration": 2,
+                "revision_feedback": [{"page": 1}],
+                "source_artifact_ref": "picturebook/script_v1.md",
+            },
+        )
+        for overrides in invalid_overrides:
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(stage_dag.StageDagError):
+                    stage_dag.validate_manifest(_manifest(**overrides))
+
 
 class StageDagMigrationTest(unittest.TestCase):
+
+    @staticmethod
+    def _as_v1(template):
+        legacy = copy.deepcopy(template)
+        legacy["schema_version"] = stage_dag.RUN_SCHEMA_V1
+        for key in (
+            "root_run_id", "revision_of_run_id", "iteration", "status",
+            "outcome", "revision_feedback", "source_artifact_ref",
+        ):
+            legacy.pop(key, None)
+        for stage in legacy["stages"]:
+            for key in (
+                "outcome", "when", "skip_reason", "blocked_reason",
+            ):
+                stage.pop(key, None)
+        return legacy
 
     def test_migrate_v1_removes_revision_loop_and_adds_persistence_condition(self):
         legacy = stage_dag._creation_template_manifest_v1()
@@ -212,6 +301,81 @@ class StageDagMigrationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(stage_dag.StageDagError, "outcome"):
             stage_dag.migrate_manifest_v1(legacy)
+
+    def test_migrate_v1_supports_generic_template(self):
+        legacy = self._as_v1(stage_dag._template_manifest())
+
+        migrated = stage_dag.migrate_manifest_v1(legacy)
+
+        self.assertEqual(migrated["schema_version"], stage_dag.RUN_SCHEMA)
+        self.assertEqual(migrated["root_run_id"], legacy["run_id"])
+        self.assertEqual(migrated["iteration"], 1)
+        self.assertIsNone(migrated["revision_of_run_id"])
+        self.assertEqual(
+            [stage["stage_id"] for stage in migrated["stages"]],
+            ["session_init", "brief_gate"],
+        )
+
+    def test_migrate_v1_supports_illustration_template(self):
+        legacy = self._as_v1(stage_dag._illustration_template_manifest())
+
+        migrated = stage_dag.migrate_manifest_v1(legacy)
+
+        self.assertEqual(migrated["schema_version"], stage_dag.RUN_SCHEMA)
+        self.assertEqual(migrated["artifact_type"], "illustration")
+        self.assertEqual(
+            [stage["stage_id"] for stage in migrated["stages"]],
+            [stage["stage_id"] for stage in legacy["stages"]],
+        )
+
+    def test_migrate_preserves_completed_approved_creation_run(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        by_id = {
+            stage["stage_id"]: stage for stage in legacy["stages"]
+        }
+        for stage_id in (
+            "session_init", "brief_gate", "knowledge_load",
+            "creation_delegate", "preflight", "collision_check",
+            "qa", "qa_synthesis",
+        ):
+            by_id[stage_id]["status"] = "done"
+        by_id["confirmation_gate"]["status"] = "done"
+        by_id["confirmation_gate"]["outcome"] = "approved"
+        by_id["persistence"]["status"] = "done"
+        by_id["knowledge_reminder"]["status"] = "done"
+
+        migrated = stage_dag.migrate_manifest_v1(legacy)
+        stages = {
+            stage["stage_id"]: stage for stage in migrated["stages"]
+        }
+
+        self.assertEqual(migrated["status"], "completed")
+        self.assertEqual(migrated["outcome"], "approved")
+        self.assertEqual(stages["confirmation_gate"]["outcome"], "approved")
+        self.assertNotIn("revision_loop", stages)
+
+    def test_migrate_preserves_completed_revision_request(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        by_id = {
+            stage["stage_id"]: stage for stage in legacy["stages"]
+        }
+        by_id["confirmation_gate"]["status"] = "done"
+        by_id["confirmation_gate"]["outcome"] = "revision_requested"
+        by_id["revision_loop"]["status"] = "done"
+
+        migrated = stage_dag.migrate_manifest_v1(legacy)
+        stages = {
+            stage["stage_id"]: stage for stage in migrated["stages"]
+        }
+
+        self.assertEqual(migrated["status"], "completed")
+        self.assertEqual(migrated["outcome"], "revision_requested")
+        self.assertEqual(stages["persistence"]["status"], "skipped")
+        self.assertEqual(stages["knowledge_reminder"]["status"], "skipped")
+        self.assertEqual(
+            stages["persistence"]["skip_reason"],
+            "confirmation_requested_revision",
+        )
 
     def test_migrate_rejects_unknown_stage(self):
         legacy = stage_dag._creation_template_manifest_v1()
@@ -483,12 +647,53 @@ class StageDagConditionalTest(unittest.TestCase):
 
     def test_finalize_cancelled_marks_run_cancelled(self):
         manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "cancelled")
         manifest = stage_dag.finalize_run(manifest, "cancelled")
         stages = {stage["stage_id"]: stage for stage in manifest["stages"]}
 
         self.assertEqual(manifest["status"], "cancelled")
         self.assertEqual(manifest["outcome"], "cancelled")
         self.assertEqual(stages["persistence"]["status"], "pending")
+
+    def test_finalize_rejects_untouched_confirmation_gate(self):
+        manifest = self._conditional_manifest()
+
+        with self.assertRaises(stage_dag.StageDagError):
+            stage_dag.finalize_run(manifest, "revision_requested")
+
+    def test_finalize_requires_confirmation_outcome_to_match(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "approved")
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "outcome"):
+            stage_dag.finalize_run(manifest, "revision_requested")
+
+    def test_terminal_runs_have_no_decisions_or_batches(self):
+        manifests = []
+
+        cancelled = self._conditional_manifest()
+        cancelled = self._complete_confirmation(cancelled, "cancelled")
+        manifests.append(stage_dag.finalize_run(cancelled, "cancelled"))
+
+        failed = self._conditional_manifest()
+        failed["status"] = "failed"
+        manifests.append(failed)
+
+        completed = self._conditional_manifest()
+        completed = self._complete_confirmation(completed, "approved")
+        for stage_id in ("persistence", "knowledge_reminder"):
+            for status in ("ready", "running", "done"):
+                completed = stage_dag.transition_stage(
+                    completed, stage_id, status)
+        manifests.append(stage_dag.finalize_run(completed, "approved"))
+
+        for manifest in manifests:
+            with self.subTest(status=manifest["status"]):
+                self.assertEqual(stage_dag.ready_stages(manifest), [])
+                self.assertEqual(
+                    stage_dag.resolve_stage_decisions(manifest), [])
+                self.assertEqual(stage_dag.next_batches(manifest), [])
+                self.assertEqual(stage_dag.parallel_batches(manifest), [])
 
     def test_finalize_revision_request_skips_downstream(self):
         manifest = self._conditional_manifest()
@@ -504,9 +709,22 @@ class StageDagConditionalTest(unittest.TestCase):
 
 class StageDagRevisionTest(unittest.TestCase):
 
-    @staticmethod
-    def _revision_parent():
+    def setUp(self):
+        self._project_dir = tempfile.TemporaryDirectory()
+        self.project_root = self._project_dir.name
+        self.artifact_ref = "picturebook/script_v1.md"
+        artifact_path = os.path.join(
+            self.project_root, "picturebook", "script_v1.md")
+        os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+        with open(artifact_path, "w", encoding="utf-8") as fh:
+            fh.write("approved draft\n")
+
+    def tearDown(self):
+        self._project_dir.cleanup()
+
+    def _revision_parent(self):
         manifest = stage_dag._creation_template_manifest()
+        manifest["project_root"] = self.project_root
         for stage_id in (
             "session_init", "brief_gate", "knowledge_load",
             "creation_delegate", "preflight", "collision_check",
@@ -548,7 +766,7 @@ class StageDagRevisionTest(unittest.TestCase):
                 "issue": "钩子偏弱",
                 "instruction": "加强悬念",
             }],
-            artifact_ref="picturebook/script_v1.md",
+            artifact_ref=self.artifact_ref,
             run_id="20260922-example-0002",
         )
         self.assertEqual(revision["intent"], "revision")
@@ -556,6 +774,51 @@ class StageDagRevisionTest(unittest.TestCase):
         self.assertEqual(revision["root_run_id"], parent["root_run_id"])
         self.assertEqual(
             revision["revision_of_run_id"], parent["run_id"])
+        self.assertEqual(revision["artifact_type"], parent["artifact_type"])
+        self.assertEqual(revision["project_root"], parent["project_root"])
+        self.assertEqual(
+            revision["revision_feedback"],
+            [{
+                "page": 5,
+                "issue": "钩子偏弱",
+                "instruction": "加强悬念",
+            }],
+        )
+        self.assertEqual(
+            revision["source_artifact_ref"], self.artifact_ref)
+
+    def test_build_revision_manifest_rejects_parent_run_id_reuse(self):
+        parent = self._revision_parent()
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "run_id"):
+            stage_dag.build_revision_manifest(
+                parent,
+                feedback=[{"page": 1, "issue": "问题", "instruction": "修改"}],
+                artifact_ref=self.artifact_ref,
+                run_id=parent["run_id"],
+            )
+
+    def test_build_revision_manifest_rejects_unreadable_source_artifact(self):
+        parent = self._revision_parent()
+        artifact_refs = (
+            "picturebook/missing.md",
+            "../outside-project.md",
+            os.path.join(self.project_root, "picturebook", "script_v1.md"),
+        )
+
+        for artifact_ref in artifact_refs:
+            with self.subTest(artifact_ref=artifact_ref):
+                with self.assertRaises(stage_dag.StageDagError):
+                    stage_dag.build_revision_manifest(
+                        parent,
+                        feedback=[{
+                            "page": 1,
+                            "issue": "问题",
+                            "instruction": "修改",
+                        }],
+                        artifact_ref=artifact_ref,
+                        run_id="20260922-example-0002",
+                    )
 
     def test_revision_template_reruns_checks_and_stops_at_new_gate(self):
         revision = stage_dag.build_revision_manifest(
@@ -565,7 +828,7 @@ class StageDagRevisionTest(unittest.TestCase):
                 "issue": "钩子偏弱",
                 "instruction": "加强悬念",
             }],
-            artifact_ref="picturebook/script_v1.md",
+            artifact_ref=self.artifact_ref,
             run_id="20260922-example-0002",
         )
         self.assertEqual(
@@ -623,7 +886,7 @@ class StageDagRevisionTest(unittest.TestCase):
             stage_dag.build_revision_manifest(
                 parent,
                 feedback=[{"page": 1, "issue": "问题", "instruction": "修改"}],
-                artifact_ref="picturebook/script_v1.md",
+                artifact_ref=self.artifact_ref,
                 run_id="20260922-example-0002",
             )
 
@@ -636,7 +899,7 @@ class StageDagRevisionTest(unittest.TestCase):
             stage_dag.build_revision_manifest(
                 parent,
                 feedback=[{"page": 1, "issue": "问题", "instruction": "修改"}],
-                artifact_ref="picturebook/script_v1.md",
+                artifact_ref=self.artifact_ref,
                 run_id="20260922-example-0002",
             )
 
@@ -648,7 +911,7 @@ class StageDagRevisionTest(unittest.TestCase):
                     stage_dag.build_revision_manifest(
                         self._revision_parent(),
                         feedback=feedback,
-                        artifact_ref="picturebook/script_v1.md",
+                        artifact_ref=self.artifact_ref,
                         run_id="20260922-example-0002",
                     )
 
@@ -1047,8 +1310,23 @@ class StageDagCliTest(unittest.TestCase):
 class StageDagIntegrationTest(unittest.TestCase):
     """spec 13.2 集成测试：用调度器引擎验证关键流程行为。"""
 
+    def setUp(self):
+        self._project_dir = tempfile.TemporaryDirectory()
+        self.project_root = self._project_dir.name
+        for filename in ("script_v1.md", "script_v2.md"):
+            path = os.path.join(
+                self.project_root, "picturebook", filename)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("draft\n")
+
+    def tearDown(self):
+        self._project_dir.cleanup()
+
     def _creation_template(self):
-        return stage_dag._creation_template_manifest()
+        manifest = stage_dag._creation_template_manifest()
+        manifest["project_root"] = self.project_root
+        return manifest
 
     @staticmethod
     def _complete_confirmation(manifest, outcome):
@@ -1085,7 +1363,7 @@ class StageDagIntegrationTest(unittest.TestCase):
         ])
 
     def test_creation_revision_round_reruns_required_checks(self):
-        creation = stage_dag._creation_template_manifest()
+        creation = self._creation_template()
         creation = self._fast_forward(creation, [
             "session_init",
             "brief_gate",
@@ -1137,7 +1415,7 @@ class StageDagIntegrationTest(unittest.TestCase):
         self.assertEqual(revision["iteration"], 2)
 
     def test_repeated_revision_preserves_distinct_run_ids(self):
-        parent = stage_dag._creation_template_manifest()
+        parent = self._creation_template()
         parent = self._fast_forward(parent, [
             "session_init",
             "brief_gate",

@@ -168,6 +168,16 @@ class PluginContractTests(unittest.TestCase):
             contract["stage_workflow"]["revision_reruns"]
             == ["preflight", "collision_check", "qa", "qa_synthesis"]
         )
+        self.assertEqual(
+            contract["stage_workflow"]["lead_owned_gates"],
+            [
+                "confirmation_gate",
+                "asset_confirmation",
+                "asset_final_confirmation",
+            ],
+        )
+        self.assertTrue(
+            contract["stage_workflow"]["skipped_is_terminal"])
 
     def test_entry_skill_forbids_implicit_file_writes(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")

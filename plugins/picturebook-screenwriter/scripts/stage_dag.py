@@ -25,6 +25,8 @@ RESULT_SCHEMA = "pb-stage-result-v1"
 RUN_STATUSES = {
     "pending", "running", "blocked", "completed", "failed", "cancelled",
 }
+RUN_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+RUN_MODES = {"full", "light"}
 RUN_OUTCOMES = {None, "approved", "revision_requested", "cancelled"}
 CONFIRMATION_OUTCOMES = {
     "approved", "revision_requested", "cancelled",
@@ -113,6 +115,24 @@ def _validate_manifest_structure(manifest):
         errors.append(f"status 非法：{manifest.get('status')!r}")
     if manifest.get("outcome") not in RUN_OUTCOMES:
         errors.append(f"outcome 非法：{manifest.get('outcome')!r}")
+    mode = manifest.get("mode")
+    status = manifest.get("status")
+    outcome = manifest.get("outcome")
+    if mode not in RUN_MODES:
+        errors.append(f"mode 非法：{mode!r}")
+    if status == "completed" and outcome not in {
+            "approved", "revision_requested"}:
+        errors.append("completed run 的 outcome 必须是 approved 或 revision_requested")
+    if status == "cancelled" and outcome != "cancelled":
+        errors.append("cancelled run 的 outcome 必须是 cancelled")
+    if status in {"pending", "running", "blocked", "failed"} and outcome is not None:
+        errors.append(f"{status} run 的 outcome 必须为 null")
+    if outcome == "cancelled" and status != "cancelled":
+        errors.append("outcome=cancelled 要求 status=cancelled")
+    if outcome in {"approved", "revision_requested"} and status != "completed":
+        errors.append(
+            f"outcome={outcome} 要求 status=completed")
+
     for key in ("revision_feedback", "stages"):
         if not isinstance(manifest.get(key), list):
             errors.append(f"{key} 必须是数组")
@@ -123,6 +143,33 @@ def _validate_manifest_structure(manifest):
     source_ref = manifest.get("source_artifact_ref")
     if source_ref is not None and not isinstance(source_ref, str):
         errors.append("source_artifact_ref 必须为 null 或字符串")
+    revision_feedback = manifest.get("revision_feedback")
+    intent = manifest.get("intent")
+    if intent == "revision":
+        _require_nonempty_str(
+            revision_of, "revision_of_run_id", errors)
+        if isinstance(iteration, int) and not isinstance(iteration, bool):
+            if iteration < 2:
+                errors.append("revision iteration 必须 >= 2")
+        if isinstance(revision_of, str) and revision_of == manifest.get(
+                "run_id"):
+            errors.append("revision_of_run_id 不得与 run_id 相同")
+        if not isinstance(revision_feedback, list) or not revision_feedback:
+            errors.append("revision_feedback 必须是非空数组")
+        _require_nonempty_str(
+            source_ref, "source_artifact_ref", errors)
+        if mode != "full":
+            errors.append("revision mode 必须是 full")
+    elif intent == "creation":
+        if revision_of is not None:
+            errors.append("creation revision_of_run_id 必须为 null")
+        if (
+            not isinstance(revision_feedback, list)
+            or revision_feedback
+        ):
+            errors.append("creation revision_feedback 必须为空数组")
+        if source_ref is not None:
+            errors.append("creation source_artifact_ref 必须为 null")
 
     stages = manifest.get("stages")
     is_light = manifest.get("mode") == "light"
@@ -160,15 +207,18 @@ def _validate_manifest_structure(manifest):
             errors.append(f"stages[{index}].status 非法：{status!r}")
         outcome = stage.get("outcome")
         if stage.get("gate") == "confirmation":
-            if (
-                outcome is not None
-                and (
-                    not isinstance(outcome, str)
-                    or outcome not in CONFIRMATION_OUTCOMES
-                )
+            if outcome is not None and (
+                not isinstance(outcome, str)
+                or outcome not in CONFIRMATION_OUTCOMES
             ):
                 errors.append(
                     f"stages[{index}].outcome 非法：{outcome!r}")
+            if status == "done" and outcome not in CONFIRMATION_OUTCOMES:
+                errors.append(
+                    f"stages[{index}] confirmation gate done 时必须提供 outcome")
+            if outcome is not None and status != "done":
+                errors.append(
+                    f"stages[{index}] confirmation gate 只有 done 时才能提供 outcome")
         elif outcome is not None:
             errors.append(f"stages[{index}].outcome 必须为 null")
         _require_nonempty_str(stage.get("gate"), f"stages[{index}].gate", errors)
@@ -213,6 +263,41 @@ def _validate_manifest_structure(manifest):
                 errors.append(f"stages[{index}].{key} 必须是数组")
         _validate_optional_reason(stage, "skip_reason", index, errors)
         _validate_optional_reason(stage, "blocked_reason", index, errors)
+        if status == "skipped" and not (
+            isinstance(stage.get("skip_reason"), str)
+            and stage["skip_reason"].strip()
+        ):
+            errors.append(
+                f"stages[{index}] status=skipped 时必须提供 skip_reason")
+        if status == "blocked" and not (
+            isinstance(stage.get("blocked_reason"), str)
+            and stage["blocked_reason"].strip()
+        ):
+            errors.append(
+                f"stages[{index}] status=blocked 时必须提供 blocked_reason")
+    confirmation_gate = stage_by_id.get("confirmation_gate")
+    if status in {"completed", "cancelled"} and confirmation_gate is not None:
+        if (
+            confirmation_gate.get("status") != "done"
+            or confirmation_gate.get("outcome") != outcome
+        ):
+            errors.append(
+                "terminal run 的 confirmation_gate 必须 done 且 outcome 与 run 一致"
+            )
+    if status == "completed" and outcome == "approved":
+        for stage_id in ("persistence", "knowledge_reminder"):
+            stage = stage_by_id.get(stage_id)
+            if stage is not None and stage.get("status") != "done":
+                errors.append(
+                    f"completed/approved run 的 {stage_id} 必须 done"
+                )
+    if status == "completed" and outcome == "revision_requested":
+        for stage_id in ("persistence", "knowledge_reminder"):
+            stage = stage_by_id.get(stage_id)
+            if stage is not None and stage.get("status") != "skipped":
+                errors.append(
+                    f"completed/revision_requested run 的 {stage_id} 必须 skipped"
+                )
     return errors
 
 
@@ -273,13 +358,38 @@ _V1_CREATION_STAGE_IDS = {
     "preflight", "collision_check", "qa", "qa_synthesis",
     "confirmation_gate", "revision_loop", "persistence", "knowledge_reminder",
 }
-_REQUIRED_V1_STAGE_IDS = _V1_CREATION_STAGE_IDS - {"revision_loop"}
+_V1_CREATION_REQUIRED_STAGE_IDS = (
+    _V1_CREATION_STAGE_IDS - {"revision_loop"}
+)
+_V1_GENERIC_STAGE_IDS = {"session_init", "brief_gate"}
+_V1_ILLUSTRATION_STAGE_IDS = {
+    "illustration_init", "asset_extraction", "asset_confirmation",
+    "asset_preproduction", "asset_final_confirmation",
+    "illustration_generation", "html_export", "illustration_delivery",
+}
+_V1_KNOWN_STAGE_IDS = (
+    _V1_CREATION_STAGE_IDS
+    | _V1_GENERIC_STAGE_IDS
+    | _V1_ILLUSTRATION_STAGE_IDS
+)
 
 
 def _validate_v1_manifest_shape(manifest):
     errors = []
     for key in ("run_id", "intent", "artifact_type", "mode", "project_root"):
         _require_nonempty_str(manifest.get(key), f"v1 {key}", errors)
+    if manifest.get("mode") not in RUN_MODES:
+        errors.append(f"v1 mode 非法：{manifest.get('mode')!r}")
+    if (
+        "status" in manifest
+        and manifest.get("status") not in RUN_STATUSES
+    ):
+        errors.append(f"v1 status 非法：{manifest.get('status')!r}")
+    if (
+        "outcome" in manifest
+        and manifest.get("outcome") not in RUN_OUTCOMES
+    ):
+        errors.append(f"v1 outcome 非法：{manifest.get('outcome')!r}")
 
     stages = manifest.get("stages")
     if not isinstance(stages, list):
@@ -329,6 +439,9 @@ def _validate_v1_manifest_shape(manifest):
             )
         ):
             errors.append(f"v1 stages[{index}].outcome 非法：{outcome!r}")
+        elif outcome is not None and stage.get("gate") != "confirmation":
+            errors.append(
+                f"v1 stages[{index}].outcome 只能用于 confirmation gate")
 
         for key in ("input_refs", "output_refs"):
             if not isinstance(stage.get(key), list):
@@ -354,35 +467,88 @@ def migrate_manifest_v1(manifest):
         raise StageDagError(shape_errors)
 
     by_id = {stage.get("stage_id"): stage for stage in stages}
-    unknown_stage_ids = sorted(set(by_id) - _V1_CREATION_STAGE_IDS)
+    stage_ids = set(by_id)
+    unknown_stage_ids = sorted(stage_ids - _V1_KNOWN_STAGE_IDS)
     if unknown_stage_ids:
         raise StageDagError(
             f"v1 包含未知 stage：{', '.join(unknown_stage_ids)}")
-    missing_stage_ids = sorted(_REQUIRED_V1_STAGE_IDS - set(by_id))
-    if missing_stage_ids:
+
+    if stage_ids == _V1_GENERIC_STAGE_IDS:
+        graph_kind = "generic"
+    elif stage_ids == _V1_ILLUSTRATION_STAGE_IDS:
+        graph_kind = "illustration"
+    elif (
+        _V1_CREATION_REQUIRED_STAGE_IDS <= stage_ids
+        and stage_ids <= _V1_CREATION_STAGE_IDS
+    ):
+        graph_kind = "creation"
+    else:
+        missing_stage_ids = sorted(
+            _V1_CREATION_REQUIRED_STAGE_IDS - stage_ids)
+        if missing_stage_ids:
+            raise StageDagError(
+                f"v1 缺少必需 stage：{', '.join(missing_stage_ids)}")
         raise StageDagError(
-            f"v1 缺少必需 stage：{', '.join(missing_stage_ids)}")
+            "v1 stage 集合不是受支持的 creation、generic 或 illustration 模板"
+        )
 
     gate = by_id.get("confirmation_gate")
-    if gate and gate.get("status") == "done" and not gate.get("outcome"):
+    gate_outcome = gate.get("outcome") if gate else None
+    if gate and gate.get("status") == "done" and not gate_outcome:
         raise StageDagError("确认门已 done 但缺少 outcome，无法安全迁移")
 
     revision = by_id.get("revision_loop")
     persistence = by_id.get("persistence")
-    if revision and persistence:
-        revision_started = revision.get("status") not in {"pending", "cancelled"}
-        persistence_started = (
-            persistence.get("status") not in {"pending", "cancelled"}
-        )
+    revision_started = (
+        revision is not None
+        and revision.get("status") not in {"pending", "cancelled"}
+    )
+    persistence_started = (
+        persistence is not None
+        and persistence.get("status") not in {"pending", "cancelled"}
+    )
+    if gate and gate.get("status") == "done":
+        if gate_outcome == "approved" and revision_started:
+            raise StageDagError(
+                "确认门 approved 时 revision_loop 已开始，状态存在歧义")
+        if gate_outcome == "revision_requested" and persistence_started:
+            raise StageDagError(
+                "确认门 revision_requested 时 persistence 已开始，状态存在歧义")
+        if gate_outcome == "cancelled" and (
+            revision_started or persistence_started
+        ):
+            raise StageDagError(
+                "确认门 cancelled 时存在下游执行记录，状态存在歧义")
+    elif graph_kind == "creation" and (
+        revision_started or persistence_started
+    ):
         if revision_started or persistence_started:
             raise StageDagError("v1 revision_loop/persistence 状态存在歧义")
 
+    run_status = manifest.get("status", "pending")
+    run_outcome = manifest.get("outcome")
+    if graph_kind == "creation" and gate and gate.get("status") == "done":
+        if gate_outcome == "approved":
+            if (
+                persistence is not None
+                and persistence.get("status") == "done"
+                and by_id["knowledge_reminder"].get("status") == "done"
+            ):
+                run_status = "completed"
+                run_outcome = "approved"
+        elif gate_outcome == "revision_requested":
+            run_status = "completed"
+            run_outcome = "revision_requested"
+        elif gate_outcome == "cancelled":
+            run_status = "cancelled"
+            run_outcome = "cancelled"
+
     migrated["schema_version"] = RUN_SCHEMA
-    migrated["root_run_id"] = manifest["run_id"]
+    migrated["root_run_id"] = manifest.get("root_run_id", manifest["run_id"])
     migrated["revision_of_run_id"] = None
     migrated["iteration"] = 1
-    migrated["status"] = "pending"
-    migrated["outcome"] = None
+    migrated["status"] = run_status
+    migrated["outcome"] = run_outcome
     migrated["revision_feedback"] = []
     migrated["source_artifact_ref"] = None
     migrated["stages"] = [
@@ -394,14 +560,29 @@ def migrate_manifest_v1(manifest):
         stage.setdefault("when", None)
         stage.setdefault("skip_reason", None)
         stage.setdefault("blocked_reason", None)
-    persistence = next(
-        stage for stage in migrated["stages"]
-        if stage["stage_id"] == "persistence"
-    )
-    persistence["when"] = {
-        "stage_id": "confirmation_gate",
-        "outcome": "approved",
-    }
+    if graph_kind == "creation":
+        persistence = next(
+            stage for stage in migrated["stages"]
+            if stage["stage_id"] == "persistence"
+        )
+        persistence["when"] = {
+            "stage_id": "confirmation_gate",
+            "outcome": "approved",
+        }
+    if (
+        graph_kind == "creation"
+        and gate_outcome == "revision_requested"
+    ):
+        for stage_id in ("persistence", "knowledge_reminder"):
+            stage = next(
+                item for item in migrated["stages"]
+                if item["stage_id"] == stage_id
+            )
+            if stage["status"] in {"pending", "ready"}:
+                stage["status"] = "skipped"
+                stage["skip_reason"] = (
+                    "confirmation_requested_revision"
+                )
     return validate_manifest(migrated)
 
 
@@ -423,6 +604,8 @@ def ready_stages(manifest):
 def resolve_stage_decisions(manifest):
     """按依赖状态和条件返回 pending/ready 阶段的调度决策。"""
     validated = validate_manifest(manifest)
+    if validated["status"] in RUN_TERMINAL_STATUSES:
+        return []
     stages = {
         stage["stage_id"]: stage
         for stage in validated["stages"]
@@ -495,6 +678,8 @@ def resolve_stage_decisions(manifest):
 def next_batches(manifest):
     """返回下一批可执行阶段，并正确处理条件阶段。"""
     validated = validate_manifest(manifest)
+    if validated["status"] in RUN_TERMINAL_STATUSES:
+        return []
     ready = [
         item.stage_id
         for item in resolve_stage_decisions(validated)
@@ -508,6 +693,25 @@ def finalize_run(manifest, outcome):
     validated = validate_manifest(manifest)
     if outcome not in CONFIRMATION_OUTCOMES:
         raise StageDagError(f"非法 run outcome：{outcome!r}")
+    gate = next(
+        (
+            stage for stage in validated["stages"]
+            if stage["stage_id"] == "confirmation_gate"
+            and stage["gate"] == "confirmation"
+        ),
+        None,
+    )
+    if gate is None:
+        raise StageDagError("找不到 confirmation_gate，无法结束 run")
+    if gate["status"] != "done":
+        raise StageDagError(
+            "confirmation_gate 尚未完成，无法结束 run"
+        )
+    if gate["outcome"] != outcome:
+        raise StageDagError(
+            "confirmation_gate outcome 与 run outcome 不一致："
+            f"{gate['outcome']!r} != {outcome!r}"
+        )
 
     if outcome == "approved":
         persistence = next(
@@ -549,6 +753,8 @@ def finalize_run(manifest, outcome):
 def parallel_batches(manifest):
     """把 DAG 展开成按波次执行的并行批次。"""
     validated = validate_manifest(manifest)
+    if validated["status"] in RUN_TERMINAL_STATUSES:
+        return []
     if any(stage.get("when") is not None for stage in validated["stages"]):
         raise StageDagError(
             "parallel_batches 不支持条件阶段；请使用 next_batches"
@@ -810,8 +1016,14 @@ def _revision_template_manifest():
         "project_root": "E:/workspace/example-project",
         "status": "pending",
         "outcome": None,
-        "revision_feedback": [],
-        "source_artifact_ref": None,
+        "revision_feedback": [
+            {
+                "page": 1,
+                "issue": "example issue",
+                "instruction": "apply the requested revision",
+            },
+        ],
+        "source_artifact_ref": "picturebook/script_v1.md",
         "stages": [
             _v2_stage(
                 "revision_init", "pb-intake-agent", [], "none"),
@@ -846,6 +1058,30 @@ def _revision_template_manifest():
     }
 
 
+def _validate_revision_source(project_root, artifact_ref):
+    errors = []
+    _require_nonempty_str(artifact_ref, "artifact_ref", errors)
+    if errors:
+        raise StageDagError(errors)
+    if os.path.isabs(artifact_ref):
+        raise StageDagError("artifact_ref 必须是 project_root 下的相对路径")
+
+    root = os.path.realpath(project_root)
+    source_path = os.path.realpath(
+        os.path.join(root, artifact_ref)
+    )
+    try:
+        inside_root = os.path.commonpath([root, source_path]) == root
+    except ValueError:
+        inside_root = False
+    if not inside_root:
+        raise StageDagError("artifact_ref 不得越过 project_root")
+    if not os.path.isfile(source_path):
+        raise StageDagError(f"artifact_ref 不是可读文件：{artifact_ref!r}")
+    if not os.access(source_path, os.R_OK):
+        raise StageDagError(f"artifact_ref 不可读：{artifact_ref!r}")
+
+
 def build_revision_manifest(parent_run, feedback, artifact_ref, run_id):
     """从已请求修订的父 run 创建下一轮 revision run。"""
     parent = validate_manifest(parent_run)
@@ -856,9 +1092,12 @@ def build_revision_manifest(parent_run, feedback, artifact_ref, run_id):
     if not isinstance(feedback, list) or not feedback:
         raise StageDagError("revision_feedback 必须非空")
     errors = []
-    _require_nonempty_str(artifact_ref, "artifact_ref", errors)
+    _require_nonempty_str(run_id, "run_id", errors)
+    if run_id == parent["run_id"]:
+        errors.append("run_id 不得复用父 run_id")
     if errors:
         raise StageDagError(errors)
+    _validate_revision_source(parent["project_root"], artifact_ref)
 
     manifest = _revision_template_manifest()
     manifest["run_id"] = run_id
