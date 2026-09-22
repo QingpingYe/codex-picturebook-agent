@@ -878,7 +878,7 @@ class StageDagCliTest(unittest.TestCase):
 
         code, out, err = self._run_cli(["--manifest", path, "--action", "batches"])
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out), [["session_init"], ["brief_gate"]])
+        self.assertEqual(json.loads(out), [["session_init"]])
 
     def test_cli_template_prints_valid_manifest(self):
         code, out, err = self._run_cli(["--action", "template"])

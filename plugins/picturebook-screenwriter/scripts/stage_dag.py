@@ -998,7 +998,7 @@ def run_cli(argv=None):
         elif args.action == "ready":
             print(json.dumps(ready_stages(manifest), ensure_ascii=False, indent=2))
         elif args.action == "batches":
-            print(json.dumps(parallel_batches(manifest), ensure_ascii=False, indent=2))
+            print(json.dumps(next_batches(manifest), ensure_ascii=False, indent=2))
         return 0
     except StageDagError as exc:
         print("[stage_dag] 清单或调度失败：", file=sys.stderr)

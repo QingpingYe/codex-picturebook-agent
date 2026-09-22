@@ -17,6 +17,39 @@ import stage_dag_codex
 
 class StageDagCodexAdapterTest(unittest.TestCase):
 
+    def _fast_forward_without_gate(self, manifest):
+        for stage_id in (
+            "session_init",
+            "brief_gate",
+            "knowledge_load",
+            "creation_delegate",
+            "preflight",
+            "collision_check",
+            "qa",
+            "qa_synthesis",
+        ):
+            for status in ("ready", "running", "done"):
+                manifest = stage_dag.transition_stage(
+                    manifest,
+                    stage_id,
+                    status,
+                )
+        return manifest
+
+    def _complete_confirmation(self, manifest, outcome):
+        for status in ("ready", "running"):
+            manifest = stage_dag.transition_stage(
+                manifest,
+                "confirmation_gate",
+                status,
+            )
+        return stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "done",
+            outcome=outcome,
+        )
+
     def _write_manifest(self, manifest):
         fd, path = tempfile.mkstemp(prefix="stage-dag-codex-", suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -37,23 +70,29 @@ class StageDagCodexAdapterTest(unittest.TestCase):
         path = self._write_manifest(stage_dag._creation_template_manifest())
         manifest = stage_dag_codex.load_manifest(path)
         self.assertEqual(manifest["run_id"], "00000000-creation-0001")
-        self.assertEqual(len(manifest["stages"]), 12)
+        self.assertEqual(len(manifest["stages"]), 11)
 
-    def test_build_dispatch_plan_returns_correct_batch_count(self):
+    def test_build_dispatch_plan_returns_current_batch_only(self):
         manifest = stage_dag._creation_template_manifest()
         plan = stage_dag_codex.build_dispatch_plan(manifest)
 
-        self.assertEqual(plan["total_batches"], 9)
-        self.assertEqual(plan["total_stages"], 12)
+        self.assertEqual(plan["schema_version"], "pb-dispatch-plan-v2")
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(len(plan["next_batches"]), 1)
+        self.assertEqual(plan["next_batches"][0]["batch_index"], 0)
         self.assertEqual(
-            [batch["batch_index"] for batch in plan["batches"]],
-            list(range(9)),
+            [
+                item["stage_id"]
+                for item in plan["next_batches"][0]["stages"]
+            ],
+            ["session_init"],
         )
         self.assertEqual(
-            plan["batches"][0]["stages"][0]["stage_id"], "session_init")
-        self.assertEqual(
-            {item["stage_id"] for item in plan["batches"][1]["stages"]},
-            {"brief_gate", "knowledge_load"},
+            plan["deferred_stages"],
+            [{
+                "stage_id": "persistence",
+                "reason": "awaiting confirmation_gate outcome",
+            }],
         )
 
     def test_format_task_envelope_validates(self):
@@ -66,6 +105,16 @@ class StageDagCodexAdapterTest(unittest.TestCase):
         self.assertEqual(task["run_id"], manifest["run_id"])
         self.assertEqual(task["stage_id"], "brief_gate")
         self.assertEqual(task["agent_id"], stage["assignee"])
+        self.assertEqual(
+            task["inputs"]["run_context"],
+            {
+                "root_run_id": manifest["root_run_id"],
+                "revision_of_run_id": manifest["revision_of_run_id"],
+                "iteration": manifest["iteration"],
+                "revision_feedback": manifest["revision_feedback"],
+                "source_artifact_ref": manifest["source_artifact_ref"],
+            },
+        )
 
     def test_build_dispatch_plan_sequential_mode(self):
         manifest = stage_dag._creation_template_manifest()
@@ -73,10 +122,61 @@ class StageDagCodexAdapterTest(unittest.TestCase):
         manifest["stages"] = []
         plan = stage_dag_codex.build_dispatch_plan(manifest)
 
-        self.assertEqual(plan["batches"], [])
-        self.assertEqual(plan["total_batches"], 0)
-        self.assertEqual(plan["total_stages"], 0)
+        self.assertEqual(plan["schema_version"], "pb-dispatch-plan-v2")
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(plan["lead_actions"], [])
+        self.assertEqual(plan["next_batches"], [])
+
+    def test_confirmation_gate_is_lead_owned_and_waits_for_user(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest = self._fast_forward_without_gate(manifest)
+        plan = stage_dag_codex.build_dispatch_plan(manifest)
+
+        self.assertEqual(plan["status"], "waiting_for_user")
+        self.assertEqual(
+            plan["decision_required"]["stage_id"],
+            "confirmation_gate",
+        )
+        self.assertEqual(plan["next_batches"], [])
+
+    def test_approved_confirmation_plans_persistence_only(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest = self._fast_forward_without_gate(manifest)
+        manifest = self._complete_confirmation(manifest, "approved")
+        plan = stage_dag_codex.build_dispatch_plan(manifest)
+
+        self.assertEqual(
+            [item["stage_id"] for item in plan["next_batches"][0]["stages"]],
+            ["persistence"],
+        )
+
+    def test_revision_request_returns_follow_up_action(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest = self._fast_forward_without_gate(manifest)
+        manifest = self._complete_confirmation(manifest, "revision_requested")
+        manifest = stage_dag.finalize_run(manifest, "revision_requested")
+        plan = stage_dag_codex.build_dispatch_plan(manifest)
+
+        self.assertEqual(plan["status"], "run_completed")
+        self.assertEqual(plan["run_outcome"], "revision_requested")
+        self.assertEqual(
+            plan["follow_up_action"]["action"],
+            "create_revision_run",
+        )
+
+    def test_fallback_waits_for_lead_owned_confirmation(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest = self._fast_forward_without_gate(manifest)
+        plan = stage_dag_codex.build_sequential_fallback(manifest)
+
+        self.assertEqual(plan["schema_version"], "pb-dispatch-plan-v2")
         self.assertEqual(plan["mode"], "sequential")
+        self.assertEqual(plan["status"], "waiting_for_user")
+        self.assertEqual(
+            plan["decision_required"]["stage_id"],
+            "confirmation_gate",
+        )
+        self.assertEqual(plan["next_batches"], [])
 
     def test_cli_plan_outputs_json(self):
         path = self._write_manifest(stage_dag._creation_template_manifest())
@@ -85,8 +185,9 @@ class StageDagCodexAdapterTest(unittest.TestCase):
 
         self.assertEqual((code, err), (0, ""))
         plan = json.loads(out)
-        self.assertEqual(plan["total_batches"], 9)
-        self.assertEqual(plan["total_stages"], 12)
+        self.assertEqual(plan["schema_version"], "pb-dispatch-plan-v2")
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(len(plan["next_batches"]), 1)
 
     def test_cli_fallback_outputs_sequential_order(self):
         path = self._write_manifest(stage_dag._creation_template_manifest())
@@ -95,16 +196,18 @@ class StageDagCodexAdapterTest(unittest.TestCase):
 
         self.assertEqual((code, err), (0, ""))
         fallback = json.loads(out)
-        self.assertEqual(fallback["mode"], "sequential")
-        self.assertEqual(fallback["total_batches"], 9)
         self.assertEqual(
-            [batch["batch_index"] for batch in fallback["batches"]],
-            list(range(9)),
+            fallback["schema_version"],
+            "pb-dispatch-plan-v2",
+        )
+        self.assertEqual(fallback["mode"], "sequential")
+        self.assertEqual(len(fallback["next_batches"]), 1)
+        self.assertEqual(
+            fallback["next_batches"][0]["stages"][0]["stage_id"],
+            "session_init",
         )
         self.assertEqual(
-            fallback["batches"][0]["stages"][0]["stage_id"], "session_init")
-        self.assertEqual(
-            fallback["batches"][0]["stages"][0]["assignee"],
+            fallback["next_batches"][0]["stages"][0]["assignee"],
             "pb-intake-agent",
         )
 
