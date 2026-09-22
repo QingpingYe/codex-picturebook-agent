@@ -7,22 +7,23 @@ from package_check import build_package_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_VERSION = "1.2.3"
 
 
 class PackageCheckTests(unittest.TestCase):
     def test_real_repo_report_is_valid(self):
         report = build_package_report(ROOT)
-        self.assertEqual(report.version, "0.3.0")
+        self.assertTrue(report.ok, report.errors)
+        self.assertRegex(report.version, r"^\d+\.\d+\.\d+$")
         self.assertIn(".codex-plugin/plugin.json", report.files)
         self.assertIn("config/plugin-contract.json", report.files)
-        self.assertTrue(report.ok, report.errors)
 
     def test_forbidden_credential_file_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             plugin = Path(temp) / "plugins" / "picturebook-screenwriter"
             (plugin / ".codex-plugin").mkdir(parents=True)
             (plugin / ".codex-plugin" / "plugin.json").write_text(
-                json.dumps({"version": "0.3.0"}),
+                json.dumps({"version": TEST_VERSION}),
                 encoding="utf-8",
             )
             (plugin / ".env").write_text("SHOULD_NOT_EXIST=1", encoding="utf-8")
@@ -35,7 +36,7 @@ class PackageCheckTests(unittest.TestCase):
             plugin = Path(temp) / "plugins" / "picturebook-screenwriter"
             (plugin / ".codex-plugin").mkdir(parents=True)
             (plugin / ".codex-plugin" / "plugin.json").write_text(
-                json.dumps({"version": "0.3.0"}),
+                json.dumps({"version": TEST_VERSION}),
                 encoding="utf-8",
             )
             cache = plugin / "skills" / "demo" / "__pycache__"
@@ -50,7 +51,7 @@ class PackageCheckTests(unittest.TestCase):
             (plugin / ".codex-plugin").mkdir(parents=True)
             (plugin / "config").mkdir()
             (plugin / ".codex-plugin" / "plugin.json").write_text(
-                json.dumps({"version": "0.3.0"}),
+                json.dumps({"version": TEST_VERSION}),
                 encoding="utf-8",
             )
             (plugin / "config" / "feishu-knowledge-base.example.json").write_text(

@@ -34,7 +34,14 @@
    python .\scripts\package_check.py
    ```
 
-6. Confirm `docs/CHANGELOG.md` and `0.3.0` describe this release.
+6. Confirm the version in `plugins/picturebook-screenwriter/.codex-plugin/plugin.json`, `docs/CHANGELOG.md`, and the release tag describe the same release. Run the release-version gate with the tag value:
+
+   ```powershell
+   $env:PICTUREBOOK_EXPECTED_VERSION = "<release-version>"
+   python .\plugins\picturebook-screenwriter\tests\test_release_contract.py
+   Remove-Item Env:PICTUREBOOK_EXPECTED_VERSION
+   ```
+
 7. Confirm no credentials, run directories, or `.picturebook-screenwriter` files are committed.
 
 ## Explicit live gates

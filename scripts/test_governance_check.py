@@ -6,6 +6,9 @@ from pathlib import Path
 from governance_check import check_repo
 
 
+TEST_VERSION = "1.2.3"
+
+
 def write_plugin(root: Path, contract_skills: list[str]) -> Path:
     plugin = root / "plugins" / "picturebook-screenwriter"
     (plugin / ".codex-plugin").mkdir(parents=True)
@@ -16,7 +19,7 @@ def write_plugin(root: Path, contract_skills: list[str]) -> Path:
         encoding="utf-8",
     )
     (plugin / ".codex-plugin" / "plugin.json").write_text(
-        json.dumps({"version": "0.3.0"}, ensure_ascii=False),
+        json.dumps({"version": TEST_VERSION}, ensure_ascii=False),
         encoding="utf-8",
     )
     (plugin / "config" / "plugin-contract.json").write_text(
