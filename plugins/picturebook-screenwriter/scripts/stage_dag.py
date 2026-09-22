@@ -13,6 +13,8 @@ import os
 import sys
 from collections import deque
 from argparse import ArgumentParser
+from dataclasses import dataclass
+from typing import Literal
 
 
 RUN_SCHEMA_V1 = "pb-stage-run-v1"
@@ -40,14 +42,24 @@ REQUEST_TYPES = {
 }
 
 TRANSITIONS = {
-    "pending": {"ready", "running", "blocked", "failed", "cancelled"},
-    "ready": {"running", "blocked", "failed", "cancelled"},
+    "pending": {
+        "ready", "running", "blocked", "failed", "cancelled", "skipped",
+    },
+    "ready": {"running", "blocked", "failed", "cancelled", "skipped"},
     "running": {"blocked", "done", "failed", "cancelled"},
     "blocked": {"ready", "running", "failed", "cancelled"},
     "failed": {"ready", "running"},
     "cancelled": set(),
     "done": set(),
+    "skipped": set(),
 }
+
+
+@dataclass(frozen=True)
+class StageDecision:
+    stage_id: str
+    decision: Literal["waiting", "ready", "skip", "block"]
+    reason: str
 
 
 class StageDagError(Exception):
@@ -401,18 +413,152 @@ def topological_order(manifest):
 
 def ready_stages(manifest):
     """返回所有依赖均已完成的待执行阶段。"""
-    validated = validate_manifest(manifest)
-    stages = {stage["stage_id"]: stage for stage in validated["stages"]}
     return sorted(
-        sid for sid, stage in stages.items()
-        if stage["status"] in ("pending", "ready")
-        and all(stages[dep]["status"] == "done" for dep in stage["depends_on"])
+        item.stage_id
+        for item in resolve_stage_decisions(manifest)
+        if item.decision == "ready"
     )
+
+
+def resolve_stage_decisions(manifest):
+    """按依赖状态和条件返回 pending/ready 阶段的调度决策。"""
+    validated = validate_manifest(manifest)
+    stages = {
+        stage["stage_id"]: stage
+        for stage in validated["stages"]
+    }
+    decisions = []
+    for stage in validated["stages"]:
+        if stage["status"] not in {"pending", "ready"}:
+            continue
+
+        dependencies = [stages[dep] for dep in stage["depends_on"]]
+        if any(
+            dep["status"] in {"failed", "blocked", "cancelled"}
+            for dep in dependencies
+        ):
+            decisions.append(StageDecision(
+                stage["stage_id"],
+                "block",
+                "dependency failed, blocked, or cancelled",
+            ))
+            continue
+        if any(
+            dep["status"] in {"pending", "ready", "running"}
+            for dep in dependencies
+        ):
+            decisions.append(StageDecision(
+                stage["stage_id"],
+                "waiting",
+                "dependency is not done",
+            ))
+            continue
+
+        when = stage.get("when")
+        if when is not None:
+            condition = stages[when["stage_id"]]
+            if condition["outcome"] != when["outcome"]:
+                decisions.append(StageDecision(
+                    stage["stage_id"],
+                    "skip",
+                    "condition outcome does not match",
+                ))
+            elif all(dep["status"] == "done" for dep in dependencies):
+                decisions.append(StageDecision(
+                    stage["stage_id"],
+                    "ready",
+                    "condition matched and dependencies are done",
+                ))
+            else:
+                decisions.append(StageDecision(
+                    stage["stage_id"],
+                    "waiting",
+                    "conditional dependencies are not ready",
+                ))
+            continue
+
+        if all(dep["status"] == "done" for dep in dependencies):
+            decisions.append(StageDecision(
+                stage["stage_id"],
+                "ready",
+                "dependencies are done",
+            ))
+        elif any(dep["status"] == "skipped" for dep in dependencies):
+            decisions.append(StageDecision(
+                stage["stage_id"],
+                "skip",
+                "dependency was skipped",
+            ))
+        else:
+            decisions.append(StageDecision(
+                stage["stage_id"],
+                "waiting",
+                "dependencies are not ready",
+            ))
+    return decisions
+
+
+def next_batches(manifest):
+    """返回下一批可执行阶段，并正确处理条件阶段。"""
+    validated = validate_manifest(manifest)
+    ready = [
+        item.stage_id
+        for item in resolve_stage_decisions(validated)
+        if item.decision == "ready"
+    ]
+    return [sorted(ready)] if ready else []
+
+
+def finalize_run(manifest, outcome):
+    """按确认结果收敛 run 及其下游阶段。"""
+    validated = validate_manifest(manifest)
+    if outcome not in CONFIRMATION_OUTCOMES:
+        raise StageDagError(f"非法 run outcome：{outcome!r}")
+
+    if outcome == "approved":
+        persistence = next(
+            stage for stage in validated["stages"]
+            if stage["stage_id"] == "persistence"
+        )
+        reminder = next(
+            stage for stage in validated["stages"]
+            if stage["stage_id"] == "knowledge_reminder"
+        )
+        if persistence["status"] != "done":
+            raise StageDagError("persistence 未完成，run 不能标记 approved")
+        if reminder["status"] != "done":
+            raise StageDagError(
+                "knowledge_reminder 未完成，run 不能标记 approved")
+        validated["status"] = "completed"
+        validated["outcome"] = "approved"
+    elif outcome == "revision_requested":
+        for stage_id in ("persistence", "knowledge_reminder"):
+            stage = next(
+                item for item in validated["stages"]
+                if item["stage_id"] == stage_id
+            )
+            if stage["status"] in {"pending", "ready"}:
+                stage["status"] = "skipped"
+                stage["skip_reason"] = "confirmation_requested_revision"
+            elif stage["status"] != "skipped":
+                raise StageDagError(
+                    f"{stage_id} 状态无法安全收敛为 skipped"
+                )
+        validated["status"] = "completed"
+        validated["outcome"] = "revision_requested"
+    else:
+        validated["status"] = "cancelled"
+        validated["outcome"] = "cancelled"
+    return validate_manifest(validated)
 
 
 def parallel_batches(manifest):
     """把 DAG 展开成按波次执行的并行批次。"""
     validated = validate_manifest(manifest)
+    if any(stage.get("when") is not None for stage in validated["stages"]):
+        raise StageDagError(
+            "parallel_batches 不支持条件阶段；请使用 next_batches"
+        )
     work = {
         stage["stage_id"]: dict(stage)
         for stage in validated["stages"]
@@ -456,6 +602,22 @@ def transition_stage(manifest, stage_id, status, **fields):
             f"阶段 {stage_id} 不允许从 {current} 迁移到 {status}")
     validated["stages"][index]["status"] = status
     validated["stages"][index].update(fields)
+    current_stage = validated["stages"][index]
+
+    if status == "skipped" and not fields.get("skip_reason"):
+        raise StageDagError("skipped 阶段必须提供 skip_reason")
+
+    if status == "blocked" and not fields.get("blocked_reason"):
+        raise StageDagError("blocked 阶段必须提供 blocked_reason")
+
+    if status == "done" and current_stage["gate"] == "confirmation":
+        outcome = fields.get("outcome")
+        if outcome not in CONFIRMATION_OUTCOMES:
+            raise StageDagError(f"confirmation outcome 非法：{outcome!r}")
+
+    if status == "done" and current_stage["gate"] != "confirmation":
+        if fields.get("outcome") is not None:
+            raise StageDagError("非 confirmation 阶段不得写入 outcome")
     return validated
 
 

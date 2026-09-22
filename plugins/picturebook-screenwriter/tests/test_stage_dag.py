@@ -327,7 +327,169 @@ class StageDagSchedulingTest(unittest.TestCase):
         manifest["stages"][0]["status"] = "done"
         manifest["stages"][1]["depends_on"] = ["session_init"]
         manifest["stages"][1]["status"] = "blocked"
+        manifest["stages"][1]["blocked_reason"] = "dependency failed"
         self.assertEqual(stage_dag.parallel_batches(manifest), [])
+
+
+class StageDagConditionalTest(unittest.TestCase):
+
+    @staticmethod
+    def _complete_confirmation(manifest, outcome):
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "ready",
+        )
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "running",
+        )
+        return stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "done",
+            outcome=outcome,
+        )
+
+    @staticmethod
+    def _conditional_manifest():
+        return _manifest(stages=[
+            {
+                "stage_id": "confirmation_gate",
+                "assignee": "picturebook-screenwriter-team-lead",
+                "depends_on": [],
+                "status": "pending",
+                "gate": "confirmation",
+                "outcome": None,
+                "when": None,
+                "input_refs": [],
+                "output_refs": [],
+                "skip_reason": None,
+                "blocked_reason": None,
+            },
+            {
+                "stage_id": "persistence",
+                "assignee": "pb-persistence-agent",
+                "depends_on": ["confirmation_gate"],
+                "status": "pending",
+                "gate": "none",
+                "outcome": None,
+                "when": {
+                    "stage_id": "confirmation_gate",
+                    "outcome": "approved",
+                },
+                "input_refs": [],
+                "output_refs": [],
+                "skip_reason": None,
+                "blocked_reason": None,
+            },
+            {
+                "stage_id": "knowledge_reminder",
+                "assignee": "picturebook-screenwriter-team-lead",
+                "depends_on": ["persistence"],
+                "status": "pending",
+                "gate": "none",
+                "outcome": None,
+                "when": None,
+                "input_refs": [],
+                "output_refs": [],
+                "skip_reason": None,
+                "blocked_reason": None,
+            },
+        ])
+
+    def test_persistence_is_skipped_when_confirmation_is_revision_requested(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "revision_requested")
+
+        decisions = {
+            item.stage_id: item
+            for item in stage_dag.resolve_stage_decisions(manifest)
+        }
+        self.assertEqual(decisions["persistence"].decision, "skip")
+
+    def test_persistence_is_ready_only_after_approved(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "approved")
+        self.assertEqual(stage_dag.ready_stages(manifest), ["persistence"])
+
+    def test_persistence_is_not_ready_after_revision_requested(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "revision_requested")
+        self.assertEqual(stage_dag.ready_stages(manifest), [])
+
+    def test_next_batches_returns_ready_conditional_stage(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "approved")
+        self.assertEqual(stage_dag.next_batches(manifest), [["persistence"]])
+
+    def test_parallel_batches_rejects_conditional_manifest(self):
+        manifest = self._conditional_manifest()
+        with self.assertRaisesRegex(stage_dag.StageDagError, "next_batches"):
+            stage_dag.parallel_batches(manifest)
+
+    def test_finalize_approved_requires_downstream_done(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "approved")
+        for stage_id in ("persistence", "knowledge_reminder"):
+            for status in ("ready", "running", "done"):
+                manifest = stage_dag.transition_stage(
+                    manifest, stage_id, status)
+
+        manifest = stage_dag.finalize_run(manifest, "approved")
+        stages = {stage["stage_id"]: stage for stage in manifest["stages"]}
+        self.assertEqual(manifest["status"], "completed")
+        self.assertEqual(manifest["outcome"], "approved")
+        self.assertEqual(stages["persistence"]["status"], "done")
+        self.assertEqual(stages["knowledge_reminder"]["status"], "done")
+
+    def test_finalize_cancelled_marks_run_cancelled(self):
+        manifest = self._conditional_manifest()
+        manifest = stage_dag.finalize_run(manifest, "cancelled")
+        stages = {stage["stage_id"]: stage for stage in manifest["stages"]}
+
+        self.assertEqual(manifest["status"], "cancelled")
+        self.assertEqual(manifest["outcome"], "cancelled")
+        self.assertEqual(stages["persistence"]["status"], "pending")
+
+    def test_finalize_revision_request_skips_downstream(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "revision_requested")
+        manifest = stage_dag.finalize_run(manifest, "revision_requested")
+        stages = {stage["stage_id"]: stage for stage in manifest["stages"]}
+
+        self.assertEqual(manifest["status"], "completed")
+        self.assertEqual(manifest["outcome"], "revision_requested")
+        self.assertEqual(stages["persistence"]["status"], "skipped")
+        self.assertEqual(stages["knowledge_reminder"]["status"], "skipped")
+
+
+class StageDagDecisionTest(unittest.TestCase):
+
+    def test_resolve_stage_decisions_blocks_on_failed_dependency(self):
+        manifest = _manifest()
+        manifest = stage_dag.transition_stage(
+            manifest, "session_init", "failed")
+        decisions = {
+            item.stage_id: item
+            for item in stage_dag.resolve_stage_decisions(manifest)
+        }
+        self.assertEqual(decisions["brief_gate"].decision, "block")
+
+    def test_resolve_stage_decisions_skips_after_skipped_dependency(self):
+        manifest = _manifest()
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "session_init",
+            "skipped",
+            skip_reason="not required",
+        )
+        decisions = {
+            item.stage_id: item
+            for item in stage_dag.resolve_stage_decisions(manifest)
+        }
+        self.assertEqual(decisions["brief_gate"].decision, "skip")
 
 
 class StageDagTransitionTest(unittest.TestCase):
@@ -340,15 +502,62 @@ class StageDagTransitionTest(unittest.TestCase):
         self.assertEqual(manifest["stages"][0]["status"], "done")
 
         manifest = _manifest()
-        manifest = stage_dag.transition_stage(manifest, "session_init", "blocked")
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "session_init",
+            "blocked",
+            blocked_reason="test block",
+        )
         manifest = stage_dag.transition_stage(manifest, "session_init", "ready")
         self.assertEqual(manifest["stages"][0]["status"], "ready")
+
+    def test_transition_stage_requires_reasons_for_blocked_and_skipped(self):
+        cases = (
+            ("blocked", "blocked_reason"),
+            ("skipped", "skip_reason"),
+        )
+        for status, reason_field in cases:
+            with self.subTest(status=status):
+                with self.assertRaisesRegex(
+                        stage_dag.StageDagError, reason_field):
+                    stage_dag.transition_stage(
+                        _manifest(), "session_init", status)
+
+    def test_transition_requires_valid_confirmation_outcome(self):
+        manifest = self._confirmation_manifest()
+        for status in ("ready", "running"):
+            manifest = stage_dag.transition_stage(
+                manifest, "confirmation_gate", status)
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "outcome"):
+            stage_dag.transition_stage(
+                manifest, "confirmation_gate", "done")
+
+    def test_transition_rejects_outcome_for_non_confirmation_stage(self):
+        manifest = _manifest()
+        for status in ("ready", "running"):
+            manifest = stage_dag.transition_stage(
+                manifest, "session_init", status)
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "outcome"):
+            stage_dag.transition_stage(
+                manifest, "session_init", "done", outcome="approved")
 
     def test_transition_stage_rejects_invalid_transition(self):
         manifest = _manifest()
         manifest = stage_dag.transition_stage(manifest, "session_init", "ready")
         with self.assertRaises(stage_dag.StageDagError):
             stage_dag.transition_stage(manifest, "session_init", "ready")
+
+    @staticmethod
+    def _confirmation_manifest():
+        manifest = _manifest()
+        manifest["stages"][1].update(
+            stage_id="confirmation_gate",
+            depends_on=[],
+            gate="confirmation",
+        )
+        return manifest
 
 
 class StageDagEnvelopeTest(unittest.TestCase):
@@ -638,7 +847,12 @@ class StageDagIntegrationTest(unittest.TestCase):
             "creation_delegate", "preflight", "collision_check",
             "qa", "qa_synthesis",
         ])
-        manifest = stage_dag.transition_stage(manifest, "confirmation_gate", "blocked")
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "blocked",
+            blocked_reason="awaiting confirmation",
+        )
 
         batches = stage_dag.parallel_batches(manifest)
         all_scheduled = [sid for batch in batches for sid in batch]
@@ -652,8 +866,17 @@ class StageDagIntegrationTest(unittest.TestCase):
         manifest = self._fast_forward(manifest, [
             "session_init", "brief_gate", "knowledge_load",
             "creation_delegate", "preflight", "collision_check",
-            "qa", "qa_synthesis", "confirmation_gate",
+            "qa", "qa_synthesis",
         ])
+        for status in ("ready", "running"):
+            manifest = stage_dag.transition_stage(
+                manifest, "confirmation_gate", status)
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "done",
+            outcome="approved",
+        )
 
         batches = stage_dag.parallel_batches(manifest)
         self.assertEqual(batches[0], ["persistence", "revision_loop"])
@@ -719,8 +942,14 @@ class StageDagIntegrationTest(unittest.TestCase):
             i for i, b in enumerate(batches) if "persistence" in b)
         self.assertGreater(persistence_batch_idx, gate_batch_idx)
 
-        for status in ("ready", "running", "done"):
+        for status in ("ready", "running"):
             manifest = stage_dag.transition_stage(manifest, "confirmation_gate", status)
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "done",
+            outcome="approved",
+        )
         all_scheduled = [sid for batch in stage_dag.parallel_batches(manifest) for sid in batch]
         self.assertIn("persistence", all_scheduled)
 
