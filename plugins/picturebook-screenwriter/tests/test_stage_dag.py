@@ -419,6 +419,43 @@ class StageDagConditionalTest(unittest.TestCase):
         manifest = self._complete_confirmation(manifest, "revision_requested")
         self.assertEqual(stage_dag.ready_stages(manifest), [])
 
+    def test_matched_condition_is_ready_when_other_dependency_is_skipped(self):
+        manifest = self._conditional_manifest()
+        manifest = self._complete_confirmation(manifest, "approved")
+        manifest["stages"].insert(1, {
+            "stage_id": "optional_dependency",
+            "assignee": "pb-knowledge-steward",
+            "depends_on": [],
+            "status": "pending",
+            "gate": "none",
+            "outcome": None,
+            "when": None,
+            "input_refs": [],
+            "output_refs": [],
+            "skip_reason": None,
+            "blocked_reason": None,
+        })
+        persistence = next(
+            stage for stage in manifest["stages"]
+            if stage["stage_id"] == "persistence"
+        )
+        persistence["depends_on"] = [
+            "confirmation_gate",
+            "optional_dependency",
+        ]
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "optional_dependency",
+            "skipped",
+            skip_reason="not required",
+        )
+
+        decisions = {
+            item.stage_id: item
+            for item in stage_dag.resolve_stage_decisions(manifest)
+        }
+        self.assertEqual(decisions["persistence"].decision, "ready")
+
     def test_next_batches_returns_ready_conditional_stage(self):
         manifest = self._conditional_manifest()
         manifest = self._complete_confirmation(manifest, "approved")

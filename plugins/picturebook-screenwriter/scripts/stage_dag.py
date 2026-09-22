@@ -463,17 +463,11 @@ def resolve_stage_decisions(manifest):
                     "skip",
                     "condition outcome does not match",
                 ))
-            elif all(dep["status"] == "done" for dep in dependencies):
-                decisions.append(StageDecision(
-                    stage["stage_id"],
-                    "ready",
-                    "condition matched and dependencies are done",
-                ))
             else:
                 decisions.append(StageDecision(
                     stage["stage_id"],
-                    "waiting",
-                    "conditional dependencies are not ready",
+                    "ready",
+                    "condition outcome matched",
                 ))
             continue
 
