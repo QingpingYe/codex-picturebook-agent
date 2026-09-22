@@ -139,6 +139,29 @@ class StageDagCodexAdapterTest(unittest.TestCase):
         )
         self.assertEqual(plan["next_batches"], [])
 
+    def test_nonlead_confirmation_gate_waits_and_is_not_dispatched(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest = self._fast_forward_without_gate(manifest)
+        confirmation = next(
+            stage
+            for stage in manifest["stages"]
+            if stage["stage_id"] == "confirmation_gate"
+        )
+        confirmation["assignee"] = "pb-screenwriter"
+
+        plan = stage_dag_codex.build_dispatch_plan(manifest)
+
+        self.assertEqual(plan["status"], "waiting_for_user")
+        self.assertEqual(
+            plan["decision_required"]["stage_id"],
+            "confirmation_gate",
+        )
+        self.assertEqual(
+            plan["decision_required"]["owner"],
+            "picturebook-screenwriter-team-lead",
+        )
+        self.assertEqual(plan["next_batches"], [])
+
     def test_approved_confirmation_plans_persistence_only(self):
         manifest = stage_dag._creation_template_manifest()
         manifest = self._fast_forward_without_gate(manifest)
