@@ -23,8 +23,12 @@ def _manifest(**overrides):
             "depends_on": [],
             "status": "pending",
             "gate": "none",
+            "outcome": None,
+            "when": None,
             "input_refs": [],
             "output_refs": [],
+            "skip_reason": None,
+            "blocked_reason": None,
         },
         {
             "stage_id": "brief_gate",
@@ -32,17 +36,28 @@ def _manifest(**overrides):
             "depends_on": ["session_init"],
             "status": "pending",
             "gate": "brief",
+            "outcome": None,
+            "when": None,
             "input_refs": [],
             "output_refs": [],
+            "skip_reason": None,
+            "blocked_reason": None,
         },
     ]
     manifest = {
-        "schema_version": "pb-stage-run-v1",
-        "run_id": "20260921-example-0001",
+        "schema_version": "pb-stage-run-v2",
+        "run_id": "20260922-example-0001",
+        "root_run_id": "20260922-example-0001",
+        "revision_of_run_id": None,
+        "iteration": 1,
         "intent": "creation",
         "artifact_type": "script",
         "mode": "full",
         "project_root": "E:/workspace/example-project",
+        "status": "pending",
+        "outcome": None,
+        "revision_feedback": [],
+        "source_artifact_ref": None,
         "stages": stages,
     }
     manifest.update(overrides)
@@ -93,7 +108,7 @@ class StageDagManifestTest(unittest.TestCase):
         bad["schema_version"] = "pb-stage-run-v0"
         with self.assertRaises(stage_dag.StageDagError) as ctx:
             stage_dag.validate_manifest(bad)
-        self.assertTrue(any("pb-stage-run-v1" in msg for msg in ctx.exception.errors))
+        self.assertTrue(any("pb-stage-run-v2" in msg for msg in ctx.exception.errors))
 
         bad = _manifest()
         bad["stages"][1]["stage_id"] = "session_init"
@@ -114,6 +129,79 @@ class StageDagManifestTest(unittest.TestCase):
         with self.assertRaises(stage_dag.StageDagError) as ctx:
             stage_dag.topological_order(bad)
         self.assertTrue(any("循环" in msg for msg in ctx.exception.errors))
+
+    def test_validate_manifest_direct_v1_points_to_migration(self):
+        legacy = _manifest()
+        legacy["schema_version"] = stage_dag.RUN_SCHEMA_V1
+        with self.assertRaises(stage_dag.StageDagError) as ctx:
+            stage_dag.validate_manifest(legacy)
+        self.assertTrue(
+            any("--action migrate" in msg for msg in ctx.exception.errors)
+        )
+
+    def test_validate_manifest_rejects_invalid_when_object(self):
+        bad = _manifest()
+        bad["stages"][1]["when"] = {
+            "stage_id": "session_init",
+            "outcome": "approved",
+            "extra": True,
+        }
+        with self.assertRaises(stage_dag.StageDagError) as ctx:
+            stage_dag.validate_manifest(bad)
+        self.assertTrue(any("when" in msg for msg in ctx.exception.errors))
+
+
+class StageDagMigrationTest(unittest.TestCase):
+
+    def test_migrate_v1_removes_revision_loop_and_adds_persistence_condition(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        migrated = stage_dag.migrate_manifest_v1(legacy)
+        stages = {stage["stage_id"]: stage for stage in migrated["stages"]}
+
+        self.assertEqual(migrated["schema_version"], "pb-stage-run-v2")
+        self.assertEqual(migrated["root_run_id"], legacy["run_id"])
+        self.assertEqual(migrated["iteration"], 1)
+        self.assertNotIn("revision_loop", stages)
+        self.assertEqual(
+            stages["persistence"]["when"],
+            {"stage_id": "confirmation_gate", "outcome": "approved"},
+        )
+
+    def test_migrate_rejects_completed_gate_without_outcome(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        gate = next(
+            stage for stage in legacy["stages"]
+            if stage["stage_id"] == "confirmation_gate"
+        )
+        gate["status"] = "done"
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "outcome"):
+            stage_dag.migrate_manifest_v1(legacy)
+
+    def test_migrate_rejects_unknown_stage(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        legacy["stages"].append({
+            "stage_id": "unknown_stage",
+            "assignee": "pb-screenwriter",
+            "depends_on": [],
+            "status": "pending",
+            "gate": "none",
+            "input_refs": [],
+            "output_refs": [],
+        })
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "未知 stage"):
+            stage_dag.migrate_manifest_v1(legacy)
+
+    def test_migrate_rejects_missing_required_stage(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        legacy["stages"] = [
+            stage for stage in legacy["stages"]
+            if stage["stage_id"] != "persistence"
+        ]
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "persistence"):
+            stage_dag.migrate_manifest_v1(legacy)
 
 
 class StageDagSchedulingTest(unittest.TestCase):
@@ -275,7 +363,17 @@ class StageDagCliTest(unittest.TestCase):
         path = self._write_manifest(bad)
         code, out, err = self._run_cli(["--manifest", path, "--action", "validate"])
         self.assertEqual(code, 2)
-        self.assertIn("pb-stage-run-v1", err)
+        self.assertIn("pb-stage-run-v2", err)
+
+    def test_cli_migrate_outputs_valid_v2_manifest(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        path = self._write_manifest(legacy)
+        code, out, err = self._run_cli(
+            ["--manifest", path, "--action", "migrate"])
+        self.assertEqual((code, err), (0, ""))
+        migrated = json.loads(out)
+        self.assertEqual(migrated["schema_version"], stage_dag.RUN_SCHEMA)
+        self.assertEqual(stage_dag.validate_manifest(migrated), migrated)
 
     def test_cli_ready_and_batches_print_json(self):
         path = self._write_manifest(_manifest())

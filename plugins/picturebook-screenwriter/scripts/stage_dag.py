@@ -15,12 +15,23 @@ from collections import deque
 from argparse import ArgumentParser
 
 
-RUN_SCHEMA = "pb-stage-run-v1"
+RUN_SCHEMA_V1 = "pb-stage-run-v1"
+RUN_SCHEMA = "pb-stage-run-v2"
 TASK_SCHEMA = "pb-stage-task-v1"
 RESULT_SCHEMA = "pb-stage-result-v1"
 
+RUN_STATUSES = {
+    "pending", "running", "blocked", "completed", "failed", "cancelled",
+}
+RUN_OUTCOMES = {None, "approved", "revision_requested", "cancelled"}
+CONFIRMATION_OUTCOMES = {
+    "approved", "revision_requested", "cancelled",
+}
+TERMINAL_STAGE_STATUSES = {"done", "skipped", "failed", "cancelled"}
+
 STAGE_STATUSES = {
-    "pending", "ready", "running", "blocked", "done", "failed", "cancelled",
+    "pending", "ready", "running", "blocked",
+    "done", "skipped", "failed", "cancelled",
 }
 RESULT_STATUSES = {"done", "needs_input", "blocked", "failed", "cancelled"}
 REQUEST_TYPES = {
@@ -54,15 +65,52 @@ def _require_nonempty_str(value, label, errors):
         errors.append(f"{label} 必须是非空字符串")
 
 
+def _validate_optional_reason(stage, key, index, errors):
+    value = stage.get(key)
+    if value is not None and (
+        not isinstance(value, str) or not value.strip()
+    ):
+        errors.append(f"stages[{index}].{key} 必须为 null 或非空字符串")
+
+
 def _validate_manifest_structure(manifest):
     if not isinstance(manifest, dict):
-        return [ "manifest 顶层必须是对象" ]
+        return ["manifest 顶层必须是对象"]
     errors = []
-    if manifest.get("schema_version") != RUN_SCHEMA:
+    schema_version = manifest.get("schema_version")
+    if schema_version == RUN_SCHEMA_V1:
+        errors.append(
+            f"schema_version 是 {RUN_SCHEMA_V1}，请先运行 --action migrate")
+    elif schema_version != RUN_SCHEMA:
         errors.append(f"schema_version 必须是 {RUN_SCHEMA}")
-    for key in ("run_id", "intent", "artifact_type", "project_root"):
+    for key in (
+        "run_id", "root_run_id", "intent", "artifact_type",
+        "mode", "project_root",
+    ):
         _require_nonempty_str(manifest.get(key), key, errors)
-    _require_nonempty_str(manifest.get("mode"), "mode", errors)
+
+    iteration = manifest.get("iteration")
+    if (
+        isinstance(iteration, bool)
+        or not isinstance(iteration, int)
+        or iteration < 1
+    ):
+        errors.append("iteration 必须是 >= 1 的整数")
+
+    if manifest.get("status") not in RUN_STATUSES:
+        errors.append(f"status 非法：{manifest.get('status')!r}")
+    if manifest.get("outcome") not in RUN_OUTCOMES:
+        errors.append(f"outcome 非法：{manifest.get('outcome')!r}")
+    for key in ("revision_feedback", "stages"):
+        if not isinstance(manifest.get(key), list):
+            errors.append(f"{key} 必须是数组")
+
+    revision_of = manifest.get("revision_of_run_id")
+    if revision_of is not None and not isinstance(revision_of, str):
+        errors.append("revision_of_run_id 必须为 null 或字符串")
+    source_ref = manifest.get("source_artifact_ref")
+    if source_ref is not None and not isinstance(source_ref, str):
+        errors.append("source_artifact_ref 必须为 null 或字符串")
 
     stages = manifest.get("stages")
     is_light = manifest.get("mode") == "light"
@@ -92,10 +140,36 @@ def _validate_manifest_structure(manifest):
         status = stage.get("status")
         if status not in STAGE_STATUSES:
             errors.append(f"stages[{index}].status 非法：{status!r}")
+        outcome = stage.get("outcome")
+        if stage.get("gate") == "confirmation":
+            if outcome is not None and outcome not in CONFIRMATION_OUTCOMES:
+                errors.append(
+                    f"stages[{index}].outcome 非法：{outcome!r}")
+        elif outcome is not None:
+            errors.append(f"stages[{index}].outcome 必须为 null")
         _require_nonempty_str(stage.get("gate"), f"stages[{index}].gate", errors)
+        when = stage.get("when")
+        if when is not None:
+            if not isinstance(when, dict) or set(when) != {"stage_id", "outcome"}:
+                errors.append(
+                    f"stages[{index}].when 必须只包含 stage_id 和 outcome")
+            else:
+                _require_nonempty_str(
+                    when.get("stage_id"), f"stages[{index}].when.stage_id", errors)
+                _require_nonempty_str(
+                    when.get("outcome"), f"stages[{index}].when.outcome", errors)
+                deps = stage.get("depends_on")
+                if (
+                    isinstance(deps, list)
+                    and when.get("stage_id") not in deps
+                ):
+                    errors.append(
+                        f"stages[{index}].when.stage_id 必须是直接依赖")
         for key in ("input_refs", "output_refs"):
             if not isinstance(stage.get(key), list):
                 errors.append(f"stages[{index}].{key} 必须是数组")
+        _validate_optional_reason(stage, "skip_reason", index, errors)
+        _validate_optional_reason(stage, "blocked_reason", index, errors)
     return errors
 
 
@@ -149,6 +223,78 @@ def validate_manifest(manifest):
         raise StageDagError(errors)
     _topological_order(stages)
     return copy.deepcopy(manifest)
+
+
+_V1_CREATION_STAGE_IDS = {
+    "session_init", "brief_gate", "knowledge_load", "creation_delegate",
+    "preflight", "collision_check", "qa", "qa_synthesis",
+    "confirmation_gate", "revision_loop", "persistence", "knowledge_reminder",
+}
+_REQUIRED_V1_STAGE_IDS = _V1_CREATION_STAGE_IDS - {"revision_loop"}
+
+
+def migrate_manifest_v1(manifest):
+    """把冻结的 v1 run manifest 显式迁移为可执行的 v2。"""
+    if not isinstance(manifest, dict):
+        raise StageDagError("v1 manifest 顶层必须是对象")
+    if manifest.get("schema_version") != RUN_SCHEMA_V1:
+        raise StageDagError("migrate 只接受 pb-stage-run-v1")
+
+    migrated = copy.deepcopy(manifest)
+    stages = migrated.get("stages")
+    if not isinstance(stages, list):
+        raise StageDagError("v1 stages 必须是数组")
+
+    by_id = {stage.get("stage_id"): stage for stage in stages}
+    unknown_stage_ids = sorted(set(by_id) - _V1_CREATION_STAGE_IDS)
+    if unknown_stage_ids:
+        raise StageDagError(
+            f"v1 包含未知 stage：{', '.join(unknown_stage_ids)}")
+    missing_stage_ids = sorted(_REQUIRED_V1_STAGE_IDS - set(by_id))
+    if missing_stage_ids:
+        raise StageDagError(
+            f"v1 缺少必需 stage：{', '.join(missing_stage_ids)}")
+
+    gate = by_id.get("confirmation_gate")
+    if gate and gate.get("status") == "done" and not gate.get("outcome"):
+        raise StageDagError("确认门已 done 但缺少 outcome，无法安全迁移")
+
+    revision = by_id.get("revision_loop")
+    persistence = by_id.get("persistence")
+    if revision and persistence:
+        revision_started = revision.get("status") not in {"pending", "cancelled"}
+        persistence_started = (
+            persistence.get("status") not in {"pending", "cancelled"}
+        )
+        if revision_started or persistence_started:
+            raise StageDagError("v1 revision_loop/persistence 状态存在歧义")
+
+    migrated["schema_version"] = RUN_SCHEMA
+    migrated["root_run_id"] = manifest["run_id"]
+    migrated["revision_of_run_id"] = None
+    migrated["iteration"] = 1
+    migrated["status"] = "pending"
+    migrated["outcome"] = None
+    migrated["revision_feedback"] = []
+    migrated["source_artifact_ref"] = None
+    migrated["stages"] = [
+        stage for stage in stages
+        if stage.get("stage_id") != "revision_loop"
+    ]
+    for stage in migrated["stages"]:
+        stage.setdefault("outcome", None)
+        stage.setdefault("when", None)
+        stage.setdefault("skip_reason", None)
+        stage.setdefault("blocked_reason", None)
+    persistence = next(
+        stage for stage in migrated["stages"]
+        if stage["stage_id"] == "persistence"
+    )
+    persistence["when"] = {
+        "stage_id": "confirmation_gate",
+        "outcome": "approved",
+    }
+    return validate_manifest(migrated)
 
 
 def topological_order(manifest):
@@ -306,39 +452,138 @@ def validate_result(result):
     return copy.deepcopy(result)
 
 
+def _v2_stage(stage_id, assignee, depends_on, gate, when=None):
+    return {
+        "stage_id": stage_id,
+        "assignee": assignee,
+        "depends_on": depends_on,
+        "status": "pending",
+        "gate": gate,
+        "outcome": None,
+        "when": when,
+        "input_refs": [],
+        "output_refs": [],
+        "skip_reason": None,
+        "blocked_reason": None,
+    }
+
+
 def _template_manifest():
     return {
         "schema_version": RUN_SCHEMA,
         "run_id": "00000000-example-0001",
+        "root_run_id": "00000000-example-0001",
+        "revision_of_run_id": None,
+        "iteration": 1,
         "intent": "creation",
         "artifact_type": "script",
         "mode": "full",
         "project_root": "E:/workspace/example-project",
+        "status": "pending",
+        "outcome": None,
+        "revision_feedback": [],
+        "source_artifact_ref": None,
         "stages": [
-            {
-                "stage_id": "session_init",
-                "assignee": "pb-intake-agent",
-                "depends_on": [],
-                "status": "pending",
-                "gate": "none",
-                "input_refs": [],
-                "output_refs": [],
-            },
-            {
-                "stage_id": "brief_gate",
-                "assignee": "pb-intake-agent",
-                "depends_on": ["session_init"],
-                "status": "pending",
-                "gate": "brief",
-                "input_refs": [],
-                "output_refs": [],
-            },
+            _v2_stage(
+                "session_init", "pb-intake-agent", [], "none"),
+            _v2_stage(
+                "brief_gate", "pb-intake-agent", ["session_init"], "brief"),
         ],
     }
 
 
 def _creation_template_manifest():
     """spec 第 5 节定义的 12 阶段 creation 全流程模板。"""
+    lead = "picturebook-screenwriter-team-lead"
+    return {
+        "schema_version": RUN_SCHEMA,
+        "run_id": "00000000-creation-0001",
+        "root_run_id": "00000000-creation-0001",
+        "revision_of_run_id": None,
+        "iteration": 1,
+        "intent": "creation",
+        "artifact_type": "script",
+        "mode": "full",
+        "project_root": "E:/workspace/example-project",
+        "status": "pending",
+        "outcome": None,
+        "revision_feedback": [],
+        "source_artifact_ref": None,
+        "stages": [
+            _v2_stage(
+                "session_init", "pb-intake-agent", [], "none"),
+            _v2_stage(
+                "brief_gate", "pb-intake-agent", ["session_init"], "brief"),
+            _v2_stage(
+                "knowledge_load", "pb-knowledge-steward", ["session_init"], "authority"),
+            _v2_stage(
+                "creation_delegate", "pb-screenwriter",
+                ["brief_gate", "knowledge_load"], "none"),
+            _v2_stage(
+                "preflight", "pb-preflight-agent", ["creation_delegate"], "redline"),
+            _v2_stage(
+                "collision_check", "pb-knowledge-steward",
+                ["creation_delegate"], "collision"),
+            _v2_stage(
+                "qa", "pb-quality-reviewer",
+                ["preflight", "collision_check"], "quality"),
+            _v2_stage("qa_synthesis", lead, ["qa"], "none"),
+            _v2_stage(
+                "confirmation_gate", lead, ["qa_synthesis"], "confirmation"),
+            _v2_stage(
+                "revision_loop", "pb-screenwriter", ["confirmation_gate"], "revision"),
+            _v2_stage(
+                "persistence", "pb-persistence-agent",
+                ["confirmation_gate"], "none"),
+            _v2_stage(
+                "knowledge_reminder", lead, ["persistence"], "none"),
+        ],
+    }
+
+
+def _illustration_template_manifest():
+    """spec 第 5 节定义的 8 阶段插画子图模板。"""
+    art = "picturebook-art-agent"
+    lead = "picturebook-screenwriter-team-lead"
+    return {
+        "schema_version": RUN_SCHEMA,
+        "run_id": "00000000-illustration-0001",
+        "root_run_id": "00000000-illustration-0001",
+        "revision_of_run_id": None,
+        "iteration": 1,
+        "intent": "creation",
+        "artifact_type": "illustration",
+        "mode": "full",
+        "project_root": "E:/workspace/example-project",
+        "status": "pending",
+        "outcome": None,
+        "revision_feedback": [],
+        "source_artifact_ref": None,
+        "stages": [
+            _v2_stage(
+                "illustration_init", "pb-intake-agent", [], "script-approved"),
+            _v2_stage(
+                "asset_extraction", art, ["illustration_init"], "none"),
+            _v2_stage(
+                "asset_confirmation", lead, ["asset_extraction"], "asset-list"),
+            _v2_stage(
+                "asset_preproduction", art, ["asset_confirmation"], "none"),
+            _v2_stage(
+                "asset_final_confirmation", lead,
+                ["asset_preproduction"], "asset-final"),
+            _v2_stage(
+                "illustration_generation", art,
+                ["asset_final_confirmation"], "none"),
+            _v2_stage(
+                "html_export", art, ["illustration_generation"], "none"),
+            _v2_stage(
+                "illustration_delivery", lead, ["html_export"], "none"),
+        ],
+    }
+
+
+def _creation_template_manifest_v1():
+    """Return the frozen v1 creation template used only by migration tests."""
     def _stage(sid, assignee, deps, gate):
         return {
             "stage_id": sid,
@@ -352,7 +597,7 @@ def _creation_template_manifest():
 
     lead = "picturebook-screenwriter-team-lead"
     return {
-        "schema_version": RUN_SCHEMA,
+        "schema_version": RUN_SCHEMA_V1,
         "run_id": "00000000-creation-0001",
         "intent": "creation",
         "artifact_type": "script",
@@ -375,41 +620,6 @@ def _creation_template_manifest():
     }
 
 
-def _illustration_template_manifest():
-    """spec 第 5 节定义的 8 阶段插画子图模板。"""
-    def _stage(sid, assignee, deps, gate):
-        return {
-            "stage_id": sid,
-            "assignee": assignee,
-            "depends_on": deps,
-            "status": "pending",
-            "gate": gate,
-            "input_refs": [],
-            "output_refs": [],
-        }
-
-    art = "picturebook-art-agent"
-    lead = "picturebook-screenwriter-team-lead"
-    return {
-        "schema_version": RUN_SCHEMA,
-        "run_id": "00000000-illustration-0001",
-        "intent": "creation",
-        "artifact_type": "illustration",
-        "mode": "full",
-        "project_root": "E:/workspace/example-project",
-        "stages": [
-            _stage("illustration_init", "pb-intake-agent", [], "script-approved"),
-            _stage("asset_extraction", art, ["illustration_init"], "none"),
-            _stage("asset_confirmation", lead, ["asset_extraction"], "asset-list"),
-            _stage("asset_preproduction", art, ["asset_confirmation"], "none"),
-            _stage("asset_final_confirmation", lead, ["asset_preproduction"], "asset-final"),
-            _stage("illustration_generation", art, ["asset_final_confirmation"], "none"),
-            _stage("html_export", art, ["illustration_generation"], "none"),
-            _stage("illustration_delivery", lead, ["html_export"], "none"),
-        ],
-    }
-
-
 def run_cli(argv=None):
     """供 hook / 主编调用的命令行入口。"""
     parser = ArgumentParser(description="阶段 DAG 调度器")
@@ -418,7 +628,7 @@ def run_cli(argv=None):
         "--action",
         required=True,
         choices=(
-            "validate", "ready", "batches", "template",
+            "validate", "ready", "batches", "template", "migrate",
             "creation-template", "illustration-template",
         ),
     )
@@ -436,9 +646,16 @@ def run_cli(argv=None):
                 _illustration_template_manifest(), ensure_ascii=False, indent=2))
             return 0
         if not args.manifest:
-            parser.error("--manifest 在 validate/ready/batches 模式下必填")
+            parser.error("--manifest 在 validate/ready/batches/migrate 模式下必填")
         with open(args.manifest, encoding="utf-8") as fh:
             manifest = json.load(fh)
+        if args.action == "migrate":
+            print(json.dumps(
+                migrate_manifest_v1(manifest),
+                ensure_ascii=False,
+                indent=2,
+            ))
+            return 0
         if args.action == "validate":
             validate_manifest(manifest)
             print("OK")
