@@ -2,15 +2,20 @@
 
 import json
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from control_plane import ControlPlaneCorrupt
 from models import IndexEntry
 from config import load_config
 from config_paths import resolve_config_path
 from runner_status import BootstrapState, RunStatus
+from page_codec import parse_candidate, parse_remote_page, render_remote_page
+from publisher import NeedsReview
+from merge_protocol import classify
+from target_state import classify_target
 
 
 class SyncRunnerError(RuntimeError):
@@ -79,24 +84,66 @@ class SyncRunner:
         self.bootstrap_state = BootstrapState.IN_PROGRESS
         lease = self.control_plane.acquire_lock("sync-runner", datetime.now(timezone.utc))
         try:
+            remote_index = self.control_plane.read_index()
             tokens = self.publisher.initialize()
             parent = tokens["content"]
             published = 0
+            preserved = 0
+            queued = 0
             failed = 0
             errors = []
             successful_pages = 0
             for raw in entries:
                 try:
-                    entry = self._entry(raw)
-                    body = self._candidate_body(run_dir, raw["path"])
-                    published_entry = self.publisher.publish_new(entry, body, parent)
-                    self.control_plane.update_index([published_entry])
-                    published += 1
+                    candidate, body = self._candidate(raw, run_dir)
+                    action = classify_target(candidate, remote_index)
+                    if action.action == "first_publish":
+                        result = self.publisher.publish_new(candidate, body, parent)
+                    elif action.action == "preserve":
+                        indexed = remote_index[candidate.key]
+                        current = self._assert_page_matches_index(indexed)
+                        result = replace(
+                            indexed,
+                            last_seen_revision_id=current["revision_id"],
+                        )
+                    elif action.action == "update":
+                        result = self._update_existing(remote_index[candidate.key], candidate, body)
+                    else:
+                        self.publisher.append_conflict(tokens["conflict"], {
+                            "key": candidate.key,
+                            "reason": action.reason,
+                            "revision_id": remote_index[candidate.key].last_seen_revision_id,
+                        })
+                        queued += 1
+                        continue
+                    try:
+                        self.control_plane.update_index([result])
+                    except Exception as index_error:
+                        self.publisher.append_conflict(tokens["conflict"], {
+                            "key": candidate.key,
+                            "reason": f"index_update_failed: {index_error}",
+                            "revision_id": result.last_seen_revision_id,
+                        })
+                        queued += 1
+                        continue
+                    if action.action == "preserve":
+                        preserved += 1
+                    else:
+                        published += 1
                     successful_pages += 1
                     if successful_pages % 5 == 0:
                         lease = self.control_plane.refresh_lock(
                             lease, datetime.now(timezone.utc)
                         )
+                except NeedsReview as error:
+                    key = raw.get("key", "<unknown>")
+                    revision = remote_index[key].last_seen_revision_id if key in remote_index else 0
+                    self.publisher.append_conflict(tokens["conflict"], {
+                        "key": key,
+                        "reason": str(error),
+                        "revision_id": revision,
+                    })
+                    queued += 1
                 except Exception as error:
                     failed += 1
                     errors.append(f"{raw.get('key', '<unknown>')}: {error}")
@@ -106,7 +153,7 @@ class SyncRunner:
                 raise SyncRunnerError("有候选页面发布失败")
             report = SyncReport(
                 RunStatus.PUBLISHED, len(entries), published,
-                preserved=0, queued=0, failed=failed,
+                preserved=preserved, queued=queued, failed=failed,
                 run_id=run_dir.name, source=self._source_summary(run_dir),
                 errors=errors,
             )
@@ -162,21 +209,58 @@ class SyncRunner:
         }
 
     @staticmethod
-    def _entry(raw: dict[str, Any]) -> IndexEntry:
-        return IndexEntry(
-            key=raw["key"],
-            doc_token=raw.get("doc_token", raw["key"]),
+    def _candidate(raw: dict[str, Any], run_dir: Path):
+        body = SyncRunner._candidate_body(run_dir, raw["path"])
+        parsed = parse_candidate(body)
+        if parsed.metadata["key"] != raw["key"]:
+            raise ValueError(f"candidate logical key mismatch: {raw['key']}")
+        entry = IndexEntry(
+            key=raw["key"], doc_token=raw.get("doc_token", raw["key"]),
             wiki_node_token=raw.get("wiki_node_token", raw["key"]),
-            source_revisions=raw["source_revisions"],
-            last_ai_revision_id=0,
-            last_seen_revision_id=0,
-            status="published",
+            source_revisions=parsed.metadata["source_revisions"],
+            last_ai_revision_id=0, last_seen_revision_id=0, status="published",
         )
+        return entry, parsed.body
 
     @staticmethod
     def _candidate_body(run_dir: Path, relative_path: str) -> str:
         candidate_path = run_dir / "wiki_staging" / relative_path
         return candidate_path.read_text(encoding="utf-8")
+
+    def _assert_page_matches_index(self, indexed: IndexEntry) -> dict[str, Any]:
+        current = self.publisher.fetch_current(indexed.doc_token)
+        parsed = parse_remote_page(current["content"])
+        metadata = parsed.metadata
+        if (
+            metadata["key"] != indexed.key
+            or metadata["source_revisions"] != indexed.source_revisions
+            or metadata["last_ai_revision_id"] != indexed.last_ai_revision_id
+        ):
+            raise NeedsReview("remote page metadata does not match the remote index")
+        return current
+
+    def _update_existing(self, indexed: IndexEntry, candidate: IndexEntry, body: str) -> IndexEntry:
+        current = self._assert_page_matches_index(indexed)
+        current_page = parse_remote_page(current["content"])
+        history = self.publisher.fetch_revision(indexed.doc_token, indexed.last_ai_revision_id)
+        base_page = parse_remote_page(history["content"])
+        requirement = classify(base_page.body, current_page.body, body, source_changed=True)
+        if requirement.required_action == "preserve":
+            return replace(indexed, last_seen_revision_id=current["revision_id"])
+        if requirement.required_action != "publish":
+            raise NeedsReview(requirement.reason)
+        candidate_metadata = {
+            "schema_version": 1,
+            "key": candidate.key,
+            "page_type": candidate.key.split("/")[-1],
+            "source_node_tokens": sorted(candidate.source_revisions),
+            "source_revisions": dict(candidate.source_revisions),
+            "last_ai_revision_id": candidate.last_ai_revision_id,
+        }
+        merged = render_remote_page(body, candidate_metadata)
+        return self.publisher.conditional_update(
+            indexed, current, merged, candidate.source_revisions,
+        )
 
     def _target_parent(self) -> str:
         return self._load_config().target.root_token

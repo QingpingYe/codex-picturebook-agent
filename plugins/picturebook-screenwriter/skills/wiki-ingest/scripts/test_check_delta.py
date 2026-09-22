@@ -164,6 +164,18 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(result["verdicts"]["tokB"]["verdict"], "new")
         self.assertEqual(result["summary"]["new"], 1)
 
+    def test_new_and_first_run_are_processing_verdicts_without_confirmation(self):
+        first = cd.classify({"nodes": {"tokF": snap_node("tokF")}}, None)
+        self.assertEqual(first["verdicts"]["tokF"]["verdict"], "first_run")
+        self.assertEqual(first["summary"]["process"], 1)
+
+        new = cd.classify(
+            {"nodes": {"tokB": snap_node("tokB")}},
+            {"nodes": {"tokZ": snap_node("tokZ")}},
+        )
+        self.assertEqual(new["verdicts"]["tokB"]["verdict"], "new")
+        self.assertEqual(new["summary"]["process"], 1)
+
     def test_cache_missing_upgrades_to_changed(self):
         snap = {"nodes": {"tokA": snap_node("tokA")}}
         state = {"_version": 1,

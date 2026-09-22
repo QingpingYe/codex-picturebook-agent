@@ -312,6 +312,17 @@ class PublisherTests(unittest.TestCase):
             {"revision_id": 9, "content": current},
         )
 
+    def test_fetch_revision_returns_requested_content(self):
+        self.cli.fetch_doc_revision = lambda token, revision: {
+            "data": {"document": {"revision_id": revision, "content": page("# 历史版本")}}
+        }
+        result = self.publisher.fetch_revision("doc-worldview", 4)
+        self.assertEqual(result, {"revision_id": 4, "content": page("# 历史版本")})
+
+    def test_fetch_revision_rejects_invalid_revision(self):
+        with self.assertRaises(NeedsReview):
+            self.publisher.fetch_revision("doc-worldview", 0)
+
     def test_node_lookup_uses_space_id_and_parent_token(self):
         cli = SpaceAwareCli()
         publisher = Publisher(cli, "content-root", "target-space")
