@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """stage_dag_codex.py 的离线单测（unittest，无网络）。"""
+import copy
 import io
 import json
 import os
@@ -283,14 +284,69 @@ class StageDagCodexAdapterTest(unittest.TestCase):
             revision_plan["decision_required"]["stage_id"],
             "confirmation_gate",
         )
+        pending_stages = [
+            stage["stage_id"]
+            for batch in revision_plan["next_batches"]
+            for stage in batch["stages"]
+        ]
+        self.assertNotIn("persistence", pending_stages)
+        self.assertNotIn("knowledge_reminder", pending_stages)
+
+        requested = self._complete_confirmation(
+            copy.deepcopy(revision),
+            "revision_requested",
+        )
+        requested = stage_dag.finalize_run(
+            requested,
+            "revision_requested",
+        )
+        requested_plan = stage_dag_codex.build_dispatch_plan(requested)
+        requested_stages = [
+            stage["stage_id"]
+            for batch in requested_plan["next_batches"]
+            for stage in batch["stages"]
+        ]
+        self.assertEqual(requested_plan["status"], "run_completed")
+        self.assertEqual(
+            requested_plan["run_outcome"],
+            "revision_requested",
+        )
+        self.assertEqual(
+            requested_plan["follow_up_action"]["action"],
+            "create_revision_run",
+        )
         self.assertNotIn(
             "persistence",
+            requested_stages,
+        )
+        self.assertNotIn("knowledge_reminder", requested_stages)
+
+        approved = self._complete_confirmation(
+            copy.deepcopy(revision),
+            "approved",
+        )
+        approved_plan = stage_dag_codex.build_dispatch_plan(approved)
+        self.assertEqual(
             [
                 stage["stage_id"]
-                for batch in revision_plan["next_batches"]
+                for batch in approved_plan["next_batches"]
                 for stage in batch["stages"]
             ],
+            ["persistence"],
         )
+
+    def test_cancelled_confirmation_completes_without_follow_up(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest = self._fast_forward_without_gate(manifest)
+        manifest = self._complete_confirmation(manifest, "cancelled")
+        manifest = stage_dag.finalize_run(manifest, "cancelled")
+
+        plan = stage_dag_codex.build_dispatch_plan(manifest)
+
+        self.assertEqual(plan["status"], "run_completed")
+        self.assertEqual(plan["run_outcome"], "cancelled")
+        self.assertEqual(plan["next_batches"], [])
+        self.assertIsNone(plan["follow_up_action"])
 
     def test_fallback_waits_for_lead_owned_confirmation(self):
         manifest = stage_dag._creation_template_manifest()
