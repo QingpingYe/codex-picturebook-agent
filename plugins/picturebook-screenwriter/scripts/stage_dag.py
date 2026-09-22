@@ -116,22 +116,28 @@ def _validate_manifest_structure(manifest):
     if manifest.get("outcome") not in RUN_OUTCOMES:
         errors.append(f"outcome 非法：{manifest.get('outcome')!r}")
     mode = manifest.get("mode")
-    status = manifest.get("status")
-    outcome = manifest.get("outcome")
+    run_status = manifest.get("status")
+    run_outcome = manifest.get("outcome")
     if mode not in RUN_MODES:
         errors.append(f"mode 非法：{mode!r}")
-    if status == "completed" and outcome not in {
+    if run_status == "completed" and run_outcome not in {
             "approved", "revision_requested"}:
         errors.append("completed run 的 outcome 必须是 approved 或 revision_requested")
-    if status == "cancelled" and outcome != "cancelled":
+    if run_status == "cancelled" and run_outcome != "cancelled":
         errors.append("cancelled run 的 outcome 必须是 cancelled")
-    if status in {"pending", "running", "blocked", "failed"} and outcome is not None:
-        errors.append(f"{status} run 的 outcome 必须为 null")
-    if outcome == "cancelled" and status != "cancelled":
+    if (
+        run_status in {"pending", "running", "blocked", "failed"}
+        and run_outcome is not None
+    ):
+        errors.append(f"{run_status} run 的 outcome 必须为 null")
+    if run_outcome == "cancelled" and run_status != "cancelled":
         errors.append("outcome=cancelled 要求 status=cancelled")
-    if outcome in {"approved", "revision_requested"} and status != "completed":
+    if (
+        run_outcome in {"approved", "revision_requested"}
+        and run_status != "completed"
+    ):
         errors.append(
-            f"outcome={outcome} 要求 status=completed")
+            f"outcome={run_outcome} 要求 status=completed")
 
     for key in ("revision_feedback", "stages"):
         if not isinstance(manifest.get(key), list):
@@ -202,24 +208,27 @@ def _validate_manifest_structure(manifest):
         deps = stage.get("depends_on")
         if not isinstance(deps, list):
             errors.append(f"stages[{index}].depends_on 必须是数组")
-        status = stage.get("status")
-        if status not in STAGE_STATUSES:
-            errors.append(f"stages[{index}].status 非法：{status!r}")
-        outcome = stage.get("outcome")
+        stage_status = stage.get("status")
+        if stage_status not in STAGE_STATUSES:
+            errors.append(f"stages[{index}].status 非法：{stage_status!r}")
+        stage_outcome = stage.get("outcome")
         if stage.get("gate") == "confirmation":
-            if outcome is not None and (
-                not isinstance(outcome, str)
-                or outcome not in CONFIRMATION_OUTCOMES
+            if stage_outcome is not None and (
+                not isinstance(stage_outcome, str)
+                or stage_outcome not in CONFIRMATION_OUTCOMES
             ):
                 errors.append(
-                    f"stages[{index}].outcome 非法：{outcome!r}")
-            if status == "done" and outcome not in CONFIRMATION_OUTCOMES:
+                    f"stages[{index}].outcome 非法：{stage_outcome!r}")
+            if (
+                stage_status == "done"
+                and stage_outcome not in CONFIRMATION_OUTCOMES
+            ):
                 errors.append(
                     f"stages[{index}] confirmation gate done 时必须提供 outcome")
-            if outcome is not None and status != "done":
+            if stage_outcome is not None and stage_status != "done":
                 errors.append(
                     f"stages[{index}] confirmation gate 只有 done 时才能提供 outcome")
-        elif outcome is not None:
+        elif stage_outcome is not None:
             errors.append(f"stages[{index}].outcome 必须为 null")
         _require_nonempty_str(stage.get("gate"), f"stages[{index}].gate", errors)
         when = stage.get("when")
@@ -263,35 +272,38 @@ def _validate_manifest_structure(manifest):
                 errors.append(f"stages[{index}].{key} 必须是数组")
         _validate_optional_reason(stage, "skip_reason", index, errors)
         _validate_optional_reason(stage, "blocked_reason", index, errors)
-        if status == "skipped" and not (
+        if stage_status == "skipped" and not (
             isinstance(stage.get("skip_reason"), str)
             and stage["skip_reason"].strip()
         ):
             errors.append(
                 f"stages[{index}] status=skipped 时必须提供 skip_reason")
-        if status == "blocked" and not (
+        if stage_status == "blocked" and not (
             isinstance(stage.get("blocked_reason"), str)
             and stage["blocked_reason"].strip()
         ):
             errors.append(
                 f"stages[{index}] status=blocked 时必须提供 blocked_reason")
     confirmation_gate = stage_by_id.get("confirmation_gate")
-    if status in {"completed", "cancelled"} and confirmation_gate is not None:
+    if (
+        run_status in {"completed", "cancelled"}
+        and confirmation_gate is not None
+    ):
         if (
             confirmation_gate.get("status") != "done"
-            or confirmation_gate.get("outcome") != outcome
+            or confirmation_gate.get("outcome") != run_outcome
         ):
             errors.append(
                 "terminal run 的 confirmation_gate 必须 done 且 outcome 与 run 一致"
             )
-    if status == "completed" and outcome == "approved":
+    if run_status == "completed" and run_outcome == "approved":
         for stage_id in ("persistence", "knowledge_reminder"):
             stage = stage_by_id.get(stage_id)
             if stage is not None and stage.get("status") != "done":
                 errors.append(
                     f"completed/approved run 的 {stage_id} 必须 done"
                 )
-    if status == "completed" and outcome == "revision_requested":
+    if run_status == "completed" and run_outcome == "revision_requested":
         for stage_id in ("persistence", "knowledge_reminder"):
             stage = stage_by_id.get(stage_id)
             if stage is not None and stage.get("status") != "skipped":

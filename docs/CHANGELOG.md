@@ -22,3 +22,4 @@
 ### Fixed
 
 - Knowledge loading now rejects page revisions behind the remote index, marks page-ahead evidence as `index_synced=false`, and prevents unsynced reads from replacing the last confirmed cache.
+- Terminal stage-run validation now evaluates run-level status and outcome without shadowing by stage fields.

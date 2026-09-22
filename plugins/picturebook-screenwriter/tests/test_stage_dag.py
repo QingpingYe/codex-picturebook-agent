@@ -229,6 +229,22 @@ class StageDagManifestTest(unittest.TestCase):
                 with self.assertRaises(stage_dag.StageDagError):
                     stage_dag.validate_manifest(_manifest(**overrides))
 
+    def test_validate_manifest_rejects_completed_run_with_pending_confirmation(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest["status"] = "completed"
+        manifest["outcome"] = "approved"
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "terminal run"):
+            stage_dag.validate_manifest(manifest)
+
+    def test_validate_manifest_rejects_cancelled_run_with_pending_confirmation(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest["status"] = "cancelled"
+        manifest["outcome"] = "cancelled"
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "terminal run"):
+            stage_dag.validate_manifest(manifest)
+
     def test_validate_manifest_rejects_incomplete_revision_manifest(self):
         invalid_overrides = (
             {
@@ -723,6 +739,9 @@ class StageDagRevisionTest(unittest.TestCase):
         self._project_dir.cleanup()
 
     def _revision_parent(self):
+        return self._completed_parent("revision_requested")
+
+    def _completed_parent(self, outcome):
         manifest = stage_dag._creation_template_manifest()
         manifest["project_root"] = self.project_root
         for stage_id in (
@@ -740,9 +759,14 @@ class StageDagRevisionTest(unittest.TestCase):
             manifest,
             "confirmation_gate",
             "done",
-            outcome="revision_requested",
+            outcome=outcome,
         )
-        return stage_dag.finalize_run(manifest, "revision_requested")
+        if outcome == "approved":
+            for stage_id in ("persistence", "knowledge_reminder"):
+                for status in ("ready", "running", "done"):
+                    manifest = stage_dag.transition_stage(
+                        manifest, stage_id, status)
+        return stage_dag.finalize_run(manifest, outcome)
 
     def test_creation_template_has_no_revision_loop(self):
         manifest = stage_dag._creation_template_manifest()
@@ -891,8 +915,7 @@ class StageDagRevisionTest(unittest.TestCase):
             )
 
     def test_build_revision_manifest_rejects_parent_without_revision_outcome(self):
-        parent = self._revision_parent()
-        parent["outcome"] = "approved"
+        parent = self._completed_parent("approved")
 
         with self.assertRaisesRegex(
                 stage_dag.StageDagError, "revision_requested"):
