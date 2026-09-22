@@ -11,7 +11,8 @@
 2. Run plugin structure validation:
 
    ```powershell
-   python <codex-home>\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
+   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
+   python "$codexHome\skills\.system\plugin-creator\scripts\validate_plugin.py" .\plugins\picturebook-screenwriter
    ```
 
 3. Confirm the version in `plugins/picturebook-screenwriter/.codex-plugin/plugin.json`, `docs/CHANGELOG.md`, and the release tag describe the same release. Run the release-version gate with the tag value:

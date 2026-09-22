@@ -11,6 +11,10 @@ The levels below describe where a guarantee actually lives.
 - `prompt_only`: behavior depends on the model following Skill instructions;
   there is no host-level prevention.
 
+A `runtime_required` level only applies when its owner script is in the execution path.
+Whether a Skill chooses to invoke that script remains prompt-driven unless
+host policy enforces the call.
+
 ## Matrix
 
 | Gate | Level | Enforcement point | Consequence |

@@ -90,6 +90,12 @@ class ReleaseChecklistTests(unittest.TestCase):
         text = (ROOT.parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("python .\\scripts\\run_plugin_tests.py", text)
 
+    def test_release_checklist_uses_valid_validator_path(self):
+        text = (ROOT.parent.parent / "docs" / "RELEASE.md").read_text(encoding="utf-8")
+        self.assertNotIn("<codex-home>", text)
+        self.assertIn("$env:CODEX_HOME", text)
+        self.assertIn(r'"$codexHome\skills\.system', text)
+
     def test_readme_documents_workspace_config_discovery(self):
         text = PLUGIN_README.read_text(encoding="utf-8")
         for value in (

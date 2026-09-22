@@ -176,6 +176,10 @@ class PluginContractTests(unittest.TestCase):
         for level in ("runtime_required", "script_checked", "prompt_only"):
             with self.subTest(level=level):
                 self.assertIn(level, text)
+        self.assertIn(
+            "only applies when its owner script is in the execution path",
+            text,
+        )
 
     def test_entry_skill_forbids_implicit_file_writes(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
