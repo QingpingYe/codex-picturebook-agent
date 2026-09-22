@@ -5,19 +5,19 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 
 # Picture Book Screenwriter
 
-把用户请求当作一次绘本编辑部工作流处理。你自己承担四个内部角色：主编、编剧、质检、知识管理。本插件是 Codex 原生实现，不依赖 WorkBuddy 的 TeamCreate、SendMessage、原生 hooks 或多子代理运行时；当前支持飞书权威知识检索与同步，也支持需要用户明确确认的插画工作流。
+把用户请求当作一次绘本编辑部工作流处理。你自己承担四个内部角色：主编、编剧、质检、知识管理。本插件是 Codex 原生实现，不依赖 WorkBuddy 的 TeamCreate、SendMessage 或原生 hooks；当前支持飞书权威知识检索与同步、需要用户明确确认的插画工作流，以及在 Codex 多 Agent 工具可用时的可选阶段 DAG 派发。多 Agent 工具不可用时，使用同一条件决策引擎顺序降级。
 
 ## Workflow
 
 1. **Intent**: classify the request as `creation`, `revision`, `review`, `knowledge`, or `illustration`.
 2. **Brief gate**: for creation and revision, collect missing essentials before drafting: audience age band, target page count, language, story premise, tone, and any constraints. Ask at most three questions at once.
 3. **Knowledge loading**: read `../text-craft/SKILL.md` and the relevant references before drafting. For creation and revision, also invoke `../knowledge-loader/SKILL.md` and use `AuthorityLoader` to retrieve authoritative Feishu knowledge. If the user asks to synchronize the source Feishu Wiki, route the request through `../wiki-ingest/SKILL.md` and then `../feishu-knowledge-store/SKILL.md`.
-4. **Stage DAG dispatch** (optional): if the current session has `spawn_agent` / `wait_agent` tools, invoke `../stage-orchestration/SKILL.md` to dispatch stages in parallel. This replaces inline steps 5-6 with parallel subagent execution.
+4. **Stage DAG dispatch** (optional): if the current session has `spawn_agent` / `wait_agent` tools, invoke `../stage-orchestration/SKILL.md` to dispatch the current conditional batch. If those tools are unavailable, use the sequential fallback. Confirmation gates remain lead-owned and are never dispatched to subagents.
 5. **Writing**: draft one of the six artifact types, using its dependency token: `positioning`, `topic_plan`, `worldview`, `characters`, `outline`, or `script`.
 6. **Pre-output check**: for page-by-page scripts, invoke `../craft-benchmark-check/SKILL.md`.
 7. **Quality review**: review the draft against craft principles and the benchmark report. Fix deterministic issues before showing the draft.
-8. **确认门**：用中文呈现草稿和基准摘要，等待用户批准后才允许保存文件。
-9. **Landing**: save only after explicit approval. Use versioned Markdown files in the current workspace, such as `picturebook/positioning_v1.md`.
+8. **确认门**：用中文呈现草稿和基准摘要。确认结果只能是 `approved`、`revision_requested` 或 `cancelled`；在收到结果前保持 `waiting_for_user`，不得派发子 Agent。
+9. **Landing**: `approved` 后才允许保存文件，使用版本化 Markdown 文件，例如 `picturebook/positioning_v1.md`。`revision_requested` 不落盘，而是创建新的 revision run。
 
 ## Editorial Slots
 
@@ -37,7 +37,7 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 - `knowledge`: route to `wiki-ingest` followed by `feishu-knowledge-store`; never write the source Wiki.
 - `illustration`: follow the gated illustration route below.
 
-The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, or a multi-subagent runtime. It represents those editorial roles internally.
+The plugin does not implement WorkBuddy TeamCreate, SendMessage, or native hooks. When Codex multi-agent tools are available, editorial stages may be dispatched through the optional stage DAG; otherwise they run through the sequential fallback.
 
 ## Illustration Route
 
@@ -51,6 +51,18 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, o
 ## Write Gate
 
 产物默认只在对话中呈现，不得默认落盘。只有用户明确批准确认门，或明确要求导出时，才允许写入工作区文件。写文件前必须说明目标路径、文件名和版本号。
+
+## Conditional Confirmation and Revision
+
+确认门由主编直接处理，绝不派发子 Agent。用户结果必须按以下分支执行：
+
+1. `approved`：确认结果解锁持久化；成功落盘后才能把 run 标记为 approved。
+2. `revision_requested`：不得持久化草稿或知识提醒。基于父 run 的反馈、当前产物引用和新 run ID 创建 revision run。
+3. revision run 必须重新执行 preflight、collision_check 和 qa，并在 qa_synthesis 汇总后进入新的确认门。
+4. revision run 的确认门再次等待用户选择；多轮修订各自创建新 run，不在 creation run 中引入 `revision_loop`。
+5. `cancelled`：终止当前 run，不持久化、不创建 revision run。
+
+并行派发和顺序降级共用同一条件决策引擎：只有当前依赖和确认条件满足的阶段才可执行，未匹配的条件阶段在本 run 内终止。
 
 ## Session Export Gate
 
@@ -88,6 +100,6 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, o
 - Keep role switching internal; do not simulate separate agents or fake inter-agent messages.
 - For scripts, include page number, text, image intent, and emotional beat.
 - Never silently save files.
-- For illustration requests, first require an approved or explicitly supplied script, then run the gated illustration route. Do not call `image-generate` before explicit user confirmation. For multi-agent orchestration, explain that it is unsupported.
+- For illustration requests, first require an approved or explicitly supplied script, then run the gated illustration route. Do not call `image-generate` before explicit user confirmation. Use the stage DAG only when the required Codex tools exist, keep confirmation gates lead-owned, and otherwise use the sequential fallback.
 - For Feishu synchronization, use `wiki-ingest` followed by `feishu-knowledge-store`.
 - Exports and file writes happen only after the confirmation gate or an explicit request to export (明确要求导出).

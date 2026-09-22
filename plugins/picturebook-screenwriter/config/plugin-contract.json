@@ -87,6 +87,26 @@
     "wiki_lint": "read_only",
     "lexile_check": "optional_measured_only"
   },
+  "stage_workflow": {
+    "run_schema": "pb-stage-run-v2",
+    "confirmation_outcomes": [
+      "approved",
+      "revision_requested",
+      "cancelled"
+    ],
+    "revision_reruns": [
+      "preflight",
+      "collision_check",
+      "qa",
+      "qa_synthesis"
+    ],
+    "lead_owned_gates": [
+      "confirmation_gate",
+      "asset_confirmation",
+      "asset_final_confirmation"
+    ],
+    "skipped_is_terminal": true
+  },
   "illustration_route": {
     "sequence": [
       "staging-planner",

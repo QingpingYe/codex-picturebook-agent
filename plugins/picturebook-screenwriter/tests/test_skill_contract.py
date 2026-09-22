@@ -75,6 +75,17 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("lexile-check", text)
         self.assertIn("实测", text)
 
+    def test_skills_document_conditional_revision_workflow(self):
+        stage_skill = (
+            ROOT / "skills" / "stage-orchestration" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        entry_skill = ENTRY_SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("waiting_for_user", stage_skill)
+        self.assertIn("revision_requested", stage_skill)
+        self.assertIn("不得派发子 Agent", stage_skill)
+        self.assertIn("重新执行 preflight、collision_check 和 qa", entry_skill)
+
     def test_plugin_advertises_authoritative_feishu_knowledge(self):
         import json
         manifest = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))

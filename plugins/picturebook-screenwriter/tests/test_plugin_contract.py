@@ -154,6 +154,21 @@ class PluginContractTests(unittest.TestCase):
             },
         )
 
+    def test_contract_declares_conditional_stage_workflow(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            contract["stage_workflow"]["run_schema"],
+            "pb-stage-run-v2",
+        )
+        self.assertEqual(
+            contract["stage_workflow"]["confirmation_outcomes"],
+            ["approved", "revision_requested", "cancelled"],
+        )
+        self.assertTrue(
+            contract["stage_workflow"]["revision_reruns"]
+            == ["preflight", "collision_check", "qa", "qa_synthesis"]
+        )
+
     def test_entry_skill_forbids_implicit_file_writes(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
         self.assertIn("不得默认落盘", text)
