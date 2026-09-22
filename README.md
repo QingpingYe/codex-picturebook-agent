@@ -12,9 +12,6 @@ This repository is the active home for the Codex plugin. It packages:
 - Self-contained HTML preview
 - 多人协作飞书知识库同步与权威检索
 
-The original WorkBuddy expert files are kept locally as a reference archive and
-are not part of this repository.
-
 ## Add the plugin
 
 In the ChatGPT desktop app plugin marketplace, add:
@@ -59,14 +56,6 @@ Each writer should:
 3. Copy `plugins/picturebook-screenwriter/config/feishu-knowledge-base.example.json` to `.picturebook-screenwriter/feishu-knowledge-base.json`.
 
 The target Feishu Wiki is the authoritative shared knowledge source. Human edits are preserved. If the target Wiki is unavailable, the plugin can only use its last confirmed local cache after explicitly warning that the content is offline.
-
-## Local development
-
-The WorkBuddy source material is available at:
-
-```text
-E:\picturebook-screenwriter\workbuddy-expert
-```
 
 ## Verify locally
 
