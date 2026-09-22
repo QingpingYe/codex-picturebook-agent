@@ -502,6 +502,173 @@ class StageDagConditionalTest(unittest.TestCase):
         self.assertEqual(stages["knowledge_reminder"]["status"], "skipped")
 
 
+class StageDagRevisionTest(unittest.TestCase):
+
+    @staticmethod
+    def _revision_parent():
+        manifest = stage_dag._creation_template_manifest()
+        for stage_id in (
+            "session_init", "brief_gate", "knowledge_load",
+            "creation_delegate", "preflight", "collision_check",
+            "qa", "qa_synthesis",
+        ):
+            for status in ("ready", "running", "done"):
+                manifest = stage_dag.transition_stage(
+                    manifest, stage_id, status)
+        for status in ("ready", "running"):
+            manifest = stage_dag.transition_stage(
+                manifest, "confirmation_gate", status)
+        manifest = stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "done",
+            outcome="revision_requested",
+        )
+        return stage_dag.finalize_run(manifest, "revision_requested")
+
+    def test_creation_template_has_no_revision_loop(self):
+        manifest = stage_dag._creation_template_manifest()
+        stage_ids = [stage["stage_id"] for stage in manifest["stages"]]
+        self.assertNotIn("revision_loop", stage_ids)
+        persistence = next(
+            stage for stage in manifest["stages"]
+            if stage["stage_id"] == "persistence"
+        )
+        self.assertEqual(
+            persistence["when"],
+            {"stage_id": "confirmation_gate", "outcome": "approved"},
+        )
+
+    def test_build_revision_manifest_increments_iteration_and_preserves_root(self):
+        parent = self._revision_parent()
+        revision = stage_dag.build_revision_manifest(
+            parent,
+            feedback=[{
+                "page": 5,
+                "issue": "钩子偏弱",
+                "instruction": "加强悬念",
+            }],
+            artifact_ref="picturebook/script_v1.md",
+            run_id="20260922-example-0002",
+        )
+        self.assertEqual(revision["intent"], "revision")
+        self.assertEqual(revision["iteration"], 2)
+        self.assertEqual(revision["root_run_id"], parent["root_run_id"])
+        self.assertEqual(
+            revision["revision_of_run_id"], parent["run_id"])
+
+    def test_revision_template_reruns_checks_and_stops_at_new_gate(self):
+        revision = stage_dag.build_revision_manifest(
+            self._revision_parent(),
+            feedback=[{
+                "page": 5,
+                "issue": "钩子偏弱",
+                "instruction": "加强悬念",
+            }],
+            artifact_ref="picturebook/script_v1.md",
+            run_id="20260922-example-0002",
+        )
+        self.assertEqual(
+            [stage["stage_id"] for stage in revision["stages"]],
+            [
+                "revision_init",
+                "knowledge_load",
+                "revision_delegate",
+                "preflight",
+                "collision_check",
+                "qa",
+                "qa_synthesis",
+                "confirmation_gate",
+                "persistence",
+                "knowledge_reminder",
+            ],
+        )
+        stages = {
+            stage["stage_id"]: stage for stage in revision["stages"]
+        }
+        self.assertEqual(
+            stages["knowledge_load"]["depends_on"], ["revision_init"])
+        self.assertEqual(
+            stages["revision_delegate"]["depends_on"],
+            ["revision_init", "knowledge_load"],
+        )
+        self.assertEqual(
+            stages["preflight"]["depends_on"], ["revision_delegate"])
+        self.assertEqual(
+            stages["collision_check"]["depends_on"], ["revision_delegate"])
+        self.assertEqual(
+            stages["qa"]["depends_on"],
+            ["preflight", "collision_check"],
+        )
+        self.assertEqual(
+            stages["persistence"]["when"],
+            {"stage_id": "confirmation_gate", "outcome": "approved"},
+        )
+
+        for stage_id in (
+            "revision_init", "knowledge_load", "revision_delegate",
+            "preflight", "collision_check", "qa", "qa_synthesis",
+        ):
+            for status in ("ready", "running", "done"):
+                revision = stage_dag.transition_stage(
+                    revision, stage_id, status)
+        self.assertEqual(
+            stage_dag.next_batches(revision), [["confirmation_gate"]])
+
+    def test_build_revision_manifest_rejects_parent_not_completed(self):
+        parent = stage_dag._creation_template_manifest()
+        parent["outcome"] = "revision_requested"
+
+        with self.assertRaisesRegex(stage_dag.StageDagError, "completed"):
+            stage_dag.build_revision_manifest(
+                parent,
+                feedback=[{"page": 1, "issue": "问题", "instruction": "修改"}],
+                artifact_ref="picturebook/script_v1.md",
+                run_id="20260922-example-0002",
+            )
+
+    def test_build_revision_manifest_rejects_parent_without_revision_outcome(self):
+        parent = self._revision_parent()
+        parent["outcome"] = "approved"
+
+        with self.assertRaisesRegex(
+                stage_dag.StageDagError, "revision_requested"):
+            stage_dag.build_revision_manifest(
+                parent,
+                feedback=[{"page": 1, "issue": "问题", "instruction": "修改"}],
+                artifact_ref="picturebook/script_v1.md",
+                run_id="20260922-example-0002",
+            )
+
+    def test_build_revision_manifest_rejects_empty_feedback(self):
+        for feedback in ([], None, "not-a-list"):
+            with self.subTest(feedback=feedback):
+                with self.assertRaisesRegex(
+                        stage_dag.StageDagError, "revision_feedback"):
+                    stage_dag.build_revision_manifest(
+                        self._revision_parent(),
+                        feedback=feedback,
+                        artifact_ref="picturebook/script_v1.md",
+                        run_id="20260922-example-0002",
+                    )
+
+    def test_build_revision_manifest_rejects_missing_artifact_ref(self):
+        for artifact_ref in (None, "", "   "):
+            with self.subTest(artifact_ref=artifact_ref):
+                with self.assertRaisesRegex(
+                        stage_dag.StageDagError, "artifact_ref"):
+                    stage_dag.build_revision_manifest(
+                        self._revision_parent(),
+                        feedback=[{
+                            "page": 1,
+                            "issue": "问题",
+                            "instruction": "修改",
+                        }],
+                        artifact_ref=artifact_ref,
+                        run_id="20260922-example-0002",
+                    )
+
+
 class StageDagDecisionTest(unittest.TestCase):
 
     def test_resolve_stage_decisions_blocks_on_failed_dependency(self):
@@ -719,19 +886,19 @@ class StageDagCliTest(unittest.TestCase):
         parsed = json.loads(out)
         self.assertEqual(stage_dag.validate_manifest(parsed), parsed)
 
-    def test_cli_creation_template_has_twelve_stages(self):
+    def test_cli_creation_template_has_eleven_stages(self):
         code, out, err = self._run_cli(["--action", "creation-template"])
         self.assertEqual(code, 0)
         parsed = json.loads(out)
         validated = stage_dag.validate_manifest(parsed)
-        self.assertEqual(len(validated["stages"]), 12)
+        self.assertEqual(len(validated["stages"]), 11)
 
         stage_ids = [s["stage_id"] for s in validated["stages"]]
         expected_ids = [
             "session_init", "brief_gate", "knowledge_load",
             "creation_delegate", "preflight", "collision_check",
             "qa", "qa_synthesis", "confirmation_gate",
-            "revision_loop", "persistence", "knowledge_reminder",
+            "persistence", "knowledge_reminder",
         ]
         self.assertEqual(stage_ids, expected_ids)
 
@@ -753,9 +920,11 @@ class StageDagCliTest(unittest.TestCase):
         self.assertEqual(
             stage_map["confirmation_gate"]["depends_on"], ["qa_synthesis"])
         self.assertEqual(
-            stage_map["revision_loop"]["depends_on"], ["confirmation_gate"])
-        self.assertEqual(
             stage_map["persistence"]["depends_on"], ["confirmation_gate"])
+        self.assertEqual(
+            stage_map["persistence"]["when"],
+            {"stage_id": "confirmation_gate", "outcome": "approved"},
+        )
         self.assertEqual(
             stage_map["knowledge_reminder"]["depends_on"], ["persistence"])
 
@@ -777,23 +946,44 @@ class StageDagCliTest(unittest.TestCase):
         self.assertEqual(
             stage_map["persistence"]["assignee"], "pb-persistence-agent")
 
-    def test_cli_creation_template_parallel_batches(self):
+    def test_cli_creation_template_topological_order(self):
         code, out, err = self._run_cli(["--action", "creation-template"])
         parsed = json.loads(out)
-        batches = stage_dag.parallel_batches(parsed)
-        # session_init
-        # → {brief_gate, knowledge_load}
-        # → creation_delegate
-        # → {preflight, collision_check}
-        # → qa
-        # → qa_synthesis
-        # → confirmation_gate
-        # → {revision_loop, persistence}
-        # → knowledge_reminder
-        self.assertEqual(len(batches), 9)
-        self.assertIn(["brief_gate", "knowledge_load"], batches)
-        self.assertIn(["collision_check", "preflight"], batches)
-        self.assertIn(["persistence", "revision_loop"], batches)
+        self.assertEqual(stage_dag.topological_order(parsed), [
+            "session_init",
+            "brief_gate",
+            "knowledge_load",
+            "creation_delegate",
+            "preflight",
+            "collision_check",
+            "qa",
+            "qa_synthesis",
+            "confirmation_gate",
+            "persistence",
+            "knowledge_reminder",
+        ])
+
+    def test_cli_revision_template_prints_valid_manifest(self):
+        code, out, err = self._run_cli(["--action", "revision-template"])
+        self.assertEqual((code, err), (0, ""))
+        parsed = json.loads(out)
+        validated = stage_dag.validate_manifest(parsed)
+        self.assertEqual(validated["intent"], "revision")
+        self.assertEqual(
+            [stage["stage_id"] for stage in validated["stages"]],
+            [
+                "revision_init",
+                "knowledge_load",
+                "revision_delegate",
+                "preflight",
+                "collision_check",
+                "qa",
+                "qa_synthesis",
+                "confirmation_gate",
+                "persistence",
+                "knowledge_reminder",
+            ],
+        )
 
     def test_cli_illustration_template_has_eight_stages(self):
         code, out, err = self._run_cli(["--action", "illustration-template"])
@@ -876,7 +1066,7 @@ class StageDagIntegrationTest(unittest.TestCase):
         self.assertEqual(stage_dag.parallel_batches(manifest), [])
 
     def test_confirmation_gate_blocks_downstream(self):
-        """确认门 blocked 时，revision_loop 和 persistence 不进入执行批次。"""
+        """确认门 blocked 时，persistence 不进入执行批次。"""
         manifest = self._creation_template()
         # Fast-forward to confirmation_gate being blocked.
         manifest = self._fast_forward(manifest, [
@@ -891,14 +1081,14 @@ class StageDagIntegrationTest(unittest.TestCase):
             blocked_reason="awaiting confirmation",
         )
 
-        batches = stage_dag.parallel_batches(manifest)
-        all_scheduled = [sid for batch in batches for sid in batch]
-        self.assertNotIn("revision_loop", all_scheduled)
+        all_scheduled = [
+            sid for batch in stage_dag.next_batches(manifest) for sid in batch
+        ]
         self.assertNotIn("persistence", all_scheduled)
         self.assertNotIn("knowledge_reminder", all_scheduled)
 
-    def test_confirmation_gate_done_unblocks_persistence_and_revision(self):
-        """确认门 done 后，persistence 和 revision_loop 可并行。"""
+    def test_confirmation_gate_done_unblocks_persistence_only(self):
+        """确认门 approved 后，只放行 persistence。"""
         manifest = self._creation_template()
         manifest = self._fast_forward(manifest, [
             "session_init", "brief_gate", "knowledge_load",
@@ -915,8 +1105,7 @@ class StageDagIntegrationTest(unittest.TestCase):
             outcome="approved",
         )
 
-        batches = stage_dag.parallel_batches(manifest)
-        self.assertEqual(batches[0], ["persistence", "revision_loop"])
+        self.assertEqual(stage_dag.next_batches(manifest), [["persistence"]])
 
     def test_preflight_failed_stops_pipeline(self):
         """preflight failed 时，后续 qa / qa_synthesis 等不执行。"""
@@ -926,8 +1115,9 @@ class StageDagIntegrationTest(unittest.TestCase):
         ])
         manifest = stage_dag.transition_stage(manifest, "preflight", "failed")
 
-        batches = stage_dag.parallel_batches(manifest)
-        all_scheduled = [sid for batch in batches for sid in batch]
+        all_scheduled = [
+            sid for batch in stage_dag.next_batches(manifest) for sid in batch
+        ]
         self.assertNotIn("qa", all_scheduled)
         self.assertNotIn("confirmation_gate", all_scheduled)
 
@@ -942,12 +1132,9 @@ class StageDagIntegrationTest(unittest.TestCase):
         manifest = stage_dag.transition_stage(manifest, "preflight", "running")
         manifest = stage_dag.transition_stage(manifest, "preflight", "done")
 
-        # collision_check 在 preflight 之后的批次中被调度，qa 在 collision_check 之后的批次中出现。
-        batches = stage_dag.parallel_batches(manifest)
-        collision_batch_idx = next(
-            i for i, b in enumerate(batches) if "collision_check" in b)
-        qa_batch_idx = next(i for i, b in enumerate(batches) if "qa" in b)
-        self.assertGreater(qa_batch_idx, collision_batch_idx)
+        self.assertEqual(stage_dag.next_batches(manifest), [["collision_check"]])
+        manifest = self._fast_forward(manifest, ["collision_check"])
+        self.assertEqual(stage_dag.next_batches(manifest), [["qa"]])
 
     def test_fatal_preflight_rolls_back_to_creation_delegate(self):
         """preflight fatal → 回退到 creation_delegate 重派修订。"""
@@ -971,13 +1158,8 @@ class StageDagIntegrationTest(unittest.TestCase):
             "qa", "qa_synthesis",
         ])
 
-        batches = stage_dag.parallel_batches(manifest)
-        # persistence 可以被调度（在确认门之后的批次里），但确认门批次在前。
-        gate_batch_idx = next(
-            i for i, b in enumerate(batches) if "confirmation_gate" in b)
-        persistence_batch_idx = next(
-            i for i, b in enumerate(batches) if "persistence" in b)
-        self.assertGreater(persistence_batch_idx, gate_batch_idx)
+        self.assertEqual(
+            stage_dag.next_batches(manifest), [["confirmation_gate"]])
 
         for status in ("ready", "running"):
             manifest = stage_dag.transition_stage(manifest, "confirmation_gate", status)
@@ -987,8 +1169,7 @@ class StageDagIntegrationTest(unittest.TestCase):
             "done",
             outcome="approved",
         )
-        all_scheduled = [sid for batch in stage_dag.parallel_batches(manifest) for sid in batch]
-        self.assertIn("persistence", all_scheduled)
+        self.assertEqual(stage_dag.next_batches(manifest), [["persistence"]])
 
     def test_request_input_creates_knowledge_refill(self):
         """编剧 request_input → 主编创建 knowledge_refill 阶段并派发。"""
@@ -1025,7 +1206,7 @@ class StageDagIntegrationTest(unittest.TestCase):
             "output_refs": [],
         })
         validated_manifest = stage_dag.validate_manifest(manifest)
-        self.assertEqual(len(validated_manifest["stages"]), 13)
+        self.assertEqual(len(validated_manifest["stages"]), 12)
 
 
 if __name__ == "__main__":

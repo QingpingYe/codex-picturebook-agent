@@ -745,7 +745,7 @@ def _template_manifest():
 
 
 def _creation_template_manifest():
-    """spec 第 5 节定义的 12 阶段 creation 全流程模板。"""
+    """spec 第 5 节定义的 11 阶段 creation 全流程模板。"""
     lead = "picturebook-screenwriter-team-lead"
     return {
         "schema_version": RUN_SCHEMA,
@@ -783,14 +783,93 @@ def _creation_template_manifest():
             _v2_stage(
                 "confirmation_gate", lead, ["qa_synthesis"], "confirmation"),
             _v2_stage(
-                "revision_loop", "pb-screenwriter", ["confirmation_gate"], "revision"),
-            _v2_stage(
                 "persistence", "pb-persistence-agent",
-                ["confirmation_gate"], "none"),
+                ["confirmation_gate"], "none",
+                when={
+                    "stage_id": "confirmation_gate",
+                    "outcome": "approved",
+                }),
             _v2_stage(
                 "knowledge_reminder", lead, ["persistence"], "none"),
         ],
     }
+
+
+def _revision_template_manifest():
+    """spec 第 12 节定义的 revision 全流程模板。"""
+    lead = "picturebook-screenwriter-team-lead"
+    return {
+        "schema_version": RUN_SCHEMA,
+        "run_id": "00000000-revision-0001",
+        "root_run_id": "00000000-creation-0001",
+        "revision_of_run_id": "00000000-creation-0001",
+        "iteration": 2,
+        "intent": "revision",
+        "artifact_type": "script",
+        "mode": "full",
+        "project_root": "E:/workspace/example-project",
+        "status": "pending",
+        "outcome": None,
+        "revision_feedback": [],
+        "source_artifact_ref": None,
+        "stages": [
+            _v2_stage(
+                "revision_init", "pb-intake-agent", [], "none"),
+            _v2_stage(
+                "knowledge_load", "pb-knowledge-steward",
+                ["revision_init"], "authority"),
+            _v2_stage(
+                "revision_delegate", "pb-screenwriter",
+                ["revision_init", "knowledge_load"], "none"),
+            _v2_stage(
+                "preflight", "pb-preflight-agent",
+                ["revision_delegate"], "redline"),
+            _v2_stage(
+                "collision_check", "pb-knowledge-steward",
+                ["revision_delegate"], "collision"),
+            _v2_stage(
+                "qa", "pb-quality-reviewer",
+                ["preflight", "collision_check"], "quality"),
+            _v2_stage("qa_synthesis", lead, ["qa"], "none"),
+            _v2_stage(
+                "confirmation_gate", lead, ["qa_synthesis"], "confirmation"),
+            _v2_stage(
+                "persistence", "pb-persistence-agent",
+                ["confirmation_gate"], "none",
+                when={
+                    "stage_id": "confirmation_gate",
+                    "outcome": "approved",
+                }),
+            _v2_stage(
+                "knowledge_reminder", lead, ["persistence"], "none"),
+        ],
+    }
+
+
+def build_revision_manifest(parent_run, feedback, artifact_ref, run_id):
+    """从已请求修订的父 run 创建下一轮 revision run。"""
+    parent = validate_manifest(parent_run)
+    if parent["status"] != "completed":
+        raise StageDagError("父 run 必须 completed")
+    if parent["outcome"] != "revision_requested":
+        raise StageDagError("父 run outcome 必须为 revision_requested")
+    if not isinstance(feedback, list) or not feedback:
+        raise StageDagError("revision_feedback 必须非空")
+    errors = []
+    _require_nonempty_str(artifact_ref, "artifact_ref", errors)
+    if errors:
+        raise StageDagError(errors)
+
+    manifest = _revision_template_manifest()
+    manifest["run_id"] = run_id
+    manifest["root_run_id"] = parent["root_run_id"]
+    manifest["revision_of_run_id"] = parent["run_id"]
+    manifest["iteration"] = parent["iteration"] + 1
+    manifest["artifact_type"] = parent["artifact_type"]
+    manifest["project_root"] = parent["project_root"]
+    manifest["revision_feedback"] = copy.deepcopy(feedback)
+    manifest["source_artifact_ref"] = artifact_ref
+    return validate_manifest(manifest)
 
 
 def _illustration_template_manifest():
@@ -881,7 +960,8 @@ def run_cli(argv=None):
         required=True,
         choices=(
             "validate", "ready", "batches", "template", "migrate",
-            "creation-template", "illustration-template",
+            "creation-template", "revision-template",
+            "illustration-template",
         ),
     )
     args = parser.parse_args(argv)
@@ -892,6 +972,10 @@ def run_cli(argv=None):
             return 0
         if args.action == "creation-template":
             print(json.dumps(_creation_template_manifest(), ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "revision-template":
+            print(json.dumps(
+                _revision_template_manifest(), ensure_ascii=False, indent=2))
             return 0
         if args.action == "illustration-template":
             print(json.dumps(
