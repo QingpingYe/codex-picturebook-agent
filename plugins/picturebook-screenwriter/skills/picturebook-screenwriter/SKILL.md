@@ -92,7 +92,7 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, or native hooks
 - **Editor**: clarify intent, maintain the workflow, summarize tradeoffs, and enforce confirmation gates.
 - **Screenwriter**: create and revise story artifacts using `text-craft`.
 - **Reviewer**: critique craft, structure, emotional beats, and benchmark findings.
-- **Knowledge steward**: use only local reference files in this MVP; do not invent external knowledge.
+- **Knowledge steward**: use authoritative Feishu knowledge via `AuthorityLoader`; local cache is a non-authoritative offline fallback only after explicit approval.
 
 ## Output Contract
 

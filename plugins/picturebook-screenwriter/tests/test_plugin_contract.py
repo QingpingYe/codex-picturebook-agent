@@ -200,6 +200,26 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn("Codex 原生", text)
         self.assertIn("不依赖 WorkBuddy 团队运行时", text)
 
+    def test_plugin_readme_uses_current_multi_agent_boundary(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertNotIn("- 多 Agent / 子 Agent 团队执行\n", text)
+        self.assertIn("可选阶段 DAG", text)
+        self.assertIn("WorkBuddy", text)
+
+    def test_entry_skill_uses_authoritative_feishu_knowledge(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertNotIn("use only local reference files in this MVP", text)
+        self.assertIn("authoritative Feishu knowledge", text)
+
+    def test_readme_marketplace_name_matches_manifest(self):
+        marketplace = json.loads(
+            (ROOT.parent.parent / ".agents" / "plugins" / "marketplace.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        text = REPO_README.read_text(encoding="utf-8")
+        self.assertIn(f"@{marketplace['name']}", text)
+
 
 if __name__ == "__main__":
     unittest.main()

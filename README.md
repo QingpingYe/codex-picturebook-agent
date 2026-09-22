@@ -26,7 +26,7 @@ From Codex CLI, you can also run:
 
 ```powershell
 codex plugin marketplace add https://github.com/QingpingYe/codex-picturebook-agent.git --ref main
-codex plugin add picturebook-screenwriter@picturebook-local
+codex plugin add picturebook-screenwriter@picturebook-github
 ```
 
 ## Use the plugin

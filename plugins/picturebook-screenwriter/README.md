@@ -5,6 +5,7 @@
 ## 已支持
 
 - 主编式入口工作流：意图识别、简报门、角色切换、确认门、版本化落盘
+- 可选阶段 DAG：Codex 多 Agent 工具可用时派发子 Agent；不可用时顺序降级
 - `text-craft`：儿童绘本文本创作方法论
 - `craft-benchmark-check`：十五项文字工艺指标量化自测
 - `staging-planner`：跨页分镜站位与空间一致性规划
@@ -18,8 +19,8 @@
 
 ## 暂不支持
 
-- 多 Agent / 子 Agent 团队执行
-- hooks 与约束门禁
+- WorkBuddy TeamCreate / SendMessage / 持久多 Agent 团队运行时
+- 原生 hooks 与平台级硬约束
 - 未确认的默认图片 API 调用
 
 ## 飞书知识库
