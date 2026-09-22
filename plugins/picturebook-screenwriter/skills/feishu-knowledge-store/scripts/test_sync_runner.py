@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from control_plane import ControlPlaneCorrupt
 from pathlib import Path
 
@@ -12,6 +13,7 @@ if str(SCRIPTS) not in sys.path:
 from models import IndexEntry
 from runner_status import BootstrapState
 from sync_runner import SyncRunner
+from page_codec import render_remote_page
 
 
 class FakeControlPlane:
@@ -67,6 +69,62 @@ class FakeCli:
         return [{"title": "节点", "node_token": "node-1"}]
 
 
+def indexed_entry():
+    return IndexEntry(
+        key="海外绘本/小老鼠迈尔斯/worldview",
+        doc_token="doc-world", wiki_node_token="node-world",
+        source_revisions={"node-a": "17"}, last_ai_revision_id=4,
+        last_seen_revision_id=4, status="published",
+    )
+
+
+def indexed_remote_page(source_revision="17"):
+    return render_remote_page("# 世界观\n", {
+        "schema_version": 1,
+        "key": "海外绘本/小老鼠迈尔斯/worldview",
+        "page_type": "worldview",
+        "source_node_tokens": ["node-a"],
+        "source_revisions": {"node-a": source_revision},
+        "last_ai_revision_id": 4,
+    })
+
+
+class IndexedPlane(FakeControlPlane):
+    def __init__(self):
+        super().__init__()
+        self.index = {}
+        self.updated = []
+
+    def read_index(self):
+        return self.index
+
+    def update_index(self, entries):
+        for item in entries:
+            self.index[item.key] = item
+            self.updated.append(item)
+        return self.index
+
+
+class RoutingPublisher(FakePublisher):
+    def __init__(self):
+        super().__init__()
+        self.updated = []
+        self.current = {"revision_id": 4, "content": indexed_remote_page()}
+        self.history = {"revision_id": 4, "content": indexed_remote_page()}
+
+    def fetch_current(self, doc_token):
+        return self.current
+
+    def fetch_revision(self, doc_token, revision_id):
+        return self.history
+
+    def conditional_update(self, entry, current, merged_markdown, source_revisions):
+        self.updated.append((entry.key, merged_markdown, source_revisions))
+        return replace(entry, source_revisions=dict(source_revisions),
+                       last_ai_revision_id=current["revision_id"] + 2,
+                       last_seen_revision_id=current["revision_id"] + 2)
+
+
 class SyncRunnerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -107,7 +165,7 @@ class SyncRunnerTests(unittest.TestCase):
                 "source_node_tokens:\n  - node-a\n"
                 "source_revision_parts:\n  - \"17\"\n"
                 "---\n"
-                "# 世界观\n",
+                "# 世界观\n\n新增资料\n",
                 encoding="utf-8",
             )
             entries.append({
@@ -238,11 +296,47 @@ class SyncRunnerTests(unittest.TestCase):
         plane = FakeControlPlane()
         publisher = FakePublisher()
         runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher,
-                             control_plane=plane)
+                            control_plane=plane)
         runner.publish(self.run_dir)
         self.assertEqual(plane.acquired, 1)
         self.assertEqual(plane.released, 1)
         self.assertTrue(publisher.published)
+
+    def test_absent_index_key_is_first_published(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+        publisher = RoutingPublisher()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(publisher.published[0][0], "海外绘本/小老鼠迈尔斯/worldview")
+        self.assertEqual(report["published"], 1)
+
+    def test_existing_key_with_same_source_vector_is_preserved(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
+        publisher = RoutingPublisher()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(publisher.published, [])
+        self.assertEqual(publisher.updated, [])
+        self.assertEqual(report["preserved"], 1)
+        self.assertEqual(plane.updated[0].last_seen_revision_id, 4)
+
+    def test_existing_key_with_changed_source_vector_is_updated(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = replace(
+            indexed_entry(), source_revisions={"node-a": "16"}
+        )
+        publisher = RoutingPublisher()
+        publisher.current = {"revision_id": 4, "content": indexed_remote_page("16")}
+        publisher.history = {"revision_id": 4, "content": indexed_remote_page("16")}
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(publisher.published, [])
+        self.assertEqual(publisher.updated[0][0], "海外绘本/小老鼠迈尔斯/worldview")
+        self.assertEqual(report["published"], 1)
 
     def test_verify_is_read_only(self):
         self._write_manifest()
