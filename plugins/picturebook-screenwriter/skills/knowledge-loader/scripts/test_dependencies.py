@@ -110,6 +110,39 @@ class DependencyTests(unittest.TestCase):
         }
         self.assertEqual(find_stale_dependencies(record, index, bundle), ())
 
+    def test_current_bundle_with_unsynced_index_is_stale(self):
+        record = build_dependency_record(BUNDLE, "demo-script-v1", "script")
+        current_bundle = KnowledgeEvidenceBundle(
+            items=(KnowledgeEvidence(
+                key="海外绘本/小老鼠迈尔斯/worldview",
+                doc_token="doc-a",
+                revision_id=42,
+                title="worldview",
+                content="# 世界观",
+                source_revisions={"node-a": "17"},
+                index_synced=False,
+            ),),
+            warnings=("索引尚未同步",),
+            offline=False,
+            fetched_at="2026-09-22T10:00:00+08:00",
+        )
+        index = {
+            "海外绘本/小老鼠迈尔斯/worldview": IndexEntry(
+                key="海外绘本/小老鼠迈尔斯/worldview",
+                doc_token="doc-a",
+                wiki_node_token="node-a",
+                source_revisions={"node-a": "17"},
+                last_ai_revision_id=42,
+                last_seen_revision_id=42,
+                status="published",
+            )
+        }
+
+        stale = find_stale_dependencies(record, index, current_bundle)
+
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0].reason, "index_unsynced")
+
     def test_fetched_revision_wins_when_index_is_not_refreshed(self):
         old_record = build_dependency_record(BUNDLE, "demo-script-v1", "script")
         current_bundle = KnowledgeEvidenceBundle(

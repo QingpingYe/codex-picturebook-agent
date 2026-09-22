@@ -7,7 +7,14 @@ SCRIPTS = Path(__file__).parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from load_knowledge import KnowledgeEvidenceBundle, KnowledgeLoader, KnowledgeQuery
+from load_knowledge import (
+    KnowledgeEvidence,
+    KnowledgeEvidenceBundle,
+    KnowledgeLoader,
+    KnowledgeQuery,
+    bundle_from_dict,
+    bundle_to_dict,
+)
 from page_codec import render_remote_page
 
 
@@ -60,6 +67,7 @@ class KnowledgeLoaderTests(unittest.TestCase):
         bundle = loader.load(KnowledgeQuery(project_id="小老鼠迈尔斯", terms=("角色", "铃铛")))
         self.assertEqual(bundle.items[0].key, "海外绘本/小老鼠迈尔斯/characters")
         self.assertEqual(bundle.items[0].revision_id, 45)
+        self.assertTrue(bundle.items[0].index_synced)
         self.assertNotIn("系统元数据", bundle.items[0].content)
 
     def test_loader_includes_needs_review_warning(self):
@@ -95,6 +103,44 @@ class KnowledgeLoaderTests(unittest.TestCase):
         loader = KnowledgeLoader(plane, FakeCli())
         with self.assertRaisesRegex(ValueError, "revision"):
             loader.load(KnowledgeQuery(project_id="小老鼠迈尔斯"))
+
+    def test_loader_marks_page_ahead_of_index_as_not_synced(self):
+        plane = FakePlane()
+        behind_index = replace(
+            plane.read_index()["海外绘本/小老鼠迈尔斯/worldview"],
+            last_ai_revision_id=44, last_seen_revision_id=43,
+        )
+        plane.read_index = lambda: {behind_index.key: behind_index}
+        loader = KnowledgeLoader(plane, FakeCli())
+        bundle = loader.load(KnowledgeQuery(project_id="小老鼠迈尔斯"))
+
+        self.assertEqual(len(bundle.items), 1)
+        self.assertFalse(bundle.items[0].index_synced)
+        self.assertEqual(bundle.items[0].status, "published")
+        self.assertTrue(any("索引尚未同步" in warning for warning in bundle.warnings))
+
+    def test_bundle_serialization_preserves_index_sync_state(self):
+        item = KnowledgeEvidence(
+            key="海外绘本/小老鼠迈尔斯/worldview",
+            doc_token="doc-world",
+            revision_id=45,
+            title="海外绘本/小老鼠迈尔斯/worldview",
+            content="# 世界观",
+            source_revisions={"source": "r1"},
+            status="published",
+            index_synced=False,
+        )
+        bundle = KnowledgeEvidenceBundle(
+            items=(item,),
+            warnings=("索引尚未同步",),
+            offline=False,
+            fetched_at="2026-09-22T10:00:00+08:00",
+        )
+
+        restored = bundle_from_dict(bundle_to_dict(bundle))
+
+        self.assertIsNotNone(restored)
+        self.assertFalse(restored.items[0].index_synced)
 
     def test_loader_uses_exact_project_segment(self):
         loader = KnowledgeLoader(FakePlane(), FakeCli())

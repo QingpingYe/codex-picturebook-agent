@@ -173,6 +173,20 @@ AI 知识库的固定目录结构：
 
 状态必须写入同步索引，而不是只写在页面正文或本地文件中。`needs_review` 页面仍可被读取，但调用方必须提示“存在未处理冲突”，不得当作已完全验证的定稿知识。
 
+### 4.3 读路径一致性判定
+
+`AI_KB_INDEX_V1` 仍是唯一的远端同步状态权威。读取器可以在本地证据对象中附加 `index_synced`，但不得将该字段写回远端索引或页面。
+
+读取目标页后，按以下规则比较页面当前 revision 与索引 `last_seen_revision_id`：
+
+| 比较结果 | 行为 |
+| --- | --- |
+| 页面 revision 等于索引 `last_seen_revision_id` | 页面与索引已对齐，`index_synced=true` |
+| 页面 revision 小于索引 `last_seen_revision_id` | 页面倒退或索引超前，读取必须 fail closed |
+| 页面 revision 大于索引 `last_seen_revision_id` | 页面可能包含尚未同步进索引的人工编辑，返回证据时设置 `index_synced=false` 并报告“索引尚未同步” |
+
+`index_synced=false` 的证据不能覆盖最后确认的本地缓存。调用方可以读取其内容，但必须明确该证据尚未完成远端索引确认；后续陈旧检测必须报告 `index_unsynced`。
+
 ## 5. 同步索引格式
 
 `99_系统控制台/同步索引` 是共享状态清单。正文必须严格为：

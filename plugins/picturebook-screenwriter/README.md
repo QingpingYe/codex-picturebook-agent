@@ -55,7 +55,7 @@ python .\skills\feishu-knowledge-store\scripts\sync_runner.py publish --config <
 python .\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config <config> --run-dir <run_dir>
 ```
 
-`authority_cli.py` 只做只读检索。离线缓存不是权威版本，只有在用户显式批准后加 `--allow-offline-cache` 使用，输出必须继续说明“非权威”。
+`authority_cli.py` 只做只读检索。页面 revision 落后于远端索引时读取失败；页面前移但索引尚未同步时输出 `index_synced=false` 和警告，且不得覆盖最后确认缓存。离线缓存不是权威版本，只有在用户显式批准后加 `--allow-offline-cache` 使用，输出必须继续说明“非权威”。
 
 `lark_cli_bootstrap.py` 支持 `1.0.95` / `1.0.96`，按 `LARK_CLI_PATH`、`PATH`、`%APPDATA%\npm`、`%ProgramFiles%\nodejs` 和 Unix 标准 bin 目录的顺序查找；没有作者专用的盘符 fallback。缺 CLI 时会输出官方安装命令；只有在用户明确批准后，才加 `--install` 执行 `npx @larksuite/cli@latest install`。安装机需要 Node.js 16+，且每个用户安装后仍需本人执行 `lark-cli auth login`。
 

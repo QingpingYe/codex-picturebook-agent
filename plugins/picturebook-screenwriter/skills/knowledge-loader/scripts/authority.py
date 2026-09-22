@@ -36,6 +36,10 @@ class AuthorityLoader:
         missing = [page_type for page_type in query.page_types if page_type not in found]
         if missing:
             raise AuthorityGapError("缺少权威知识页：" + "、".join(missing))
-        if not bundle.offline and self.cache_store is not None:
+        if (
+            not bundle.offline
+            and all(item.index_synced for item in bundle.items)
+            and self.cache_store is not None
+        ):
             self.cache_store.save(bundle_to_dict(bundle))
         return bundle

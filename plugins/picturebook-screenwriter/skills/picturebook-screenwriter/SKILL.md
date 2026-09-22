@@ -69,11 +69,11 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, native hooks, o
 
 ## Knowledge Dependency Gate
 
-创作或修订前必须装载目标项目的权威知识：构造 `AuthorityQuery` 并调用 `AuthorityLoader.load()`。若必需页面缺失或页面元数据与索引不一致，明确报告“权威知识缺失”，不得用本地缓存或猜测内容替代。
+创作或修订前必须装载目标项目的权威知识：构造 `AuthorityQuery` 并调用 `AuthorityLoader.load()`。若必需页面缺失、页面 revision 落后于索引，或页面元数据与索引不一致，必须明确报告“权威知识缺失”，不得用本地缓存或猜测内容替代。若证据的 `index_synced=false`，必须在回复首段标明“索引尚未同步”，说明内容可读但未完成远端索引确认。
 
 草稿展示前，用 `check_collisions()` 扫描草稿与权威证据的共有术语，并向用户报告冲突；冲突是提醒，不自动改写。用户明确批准后，用 `build_dependency_record()` 生成锁定记录，再把 `render_dependency_record()` 输出的 `built_against` 追加到产物正文末尾作为最后一个章节。该章节记录每个引用知识页的 `key`、`doc_token`、`revision_id` 和 `source_revisions`。
 
-后续读取旧产物时，先用 `parse_dependency_record()` 从文件末尾提取 `built_against`，再用 `AuthorityLoader` 读取当前页面，并调用 `find_stale_dependencies(record, current_index, current_bundle)`。只要 `revision_id` 变化、条目缺失、状态为 `needs_review` 或 `archived`、当前读取不可用或仅能核对索引，都必须在回复首段标明“知识已陈旧”，列出原因，并询问是否基于当前权威知识修订。不得把陈旧或未验证产物描述为最新定稿。
+后续读取旧产物时，先用 `parse_dependency_record()` 从文件末尾提取 `built_against`，再用 `AuthorityLoader` 读取当前页面，并调用 `find_stale_dependencies(record, current_index, current_bundle)`。只要 `revision_id` 变化、条目缺失、状态为 `needs_review` 或 `archived`、`index_synced=false`、当前读取不可用或仅能核对索引，都必须在回复首段标明“知识已陈旧”，列出原因，并询问是否基于当前权威知识修订。不得把陈旧或未验证产物描述为最新定稿。
 
 ## Role Switching
 

@@ -32,6 +32,7 @@ class KnowledgeEvidence:
     content: str
     source_revisions: dict[str, str]
     status: Literal["published", "needs_review", "archived"] = "published"
+    index_synced: bool = True
 
 
 @dataclass(frozen=True)
@@ -94,12 +95,18 @@ class KnowledgeLoader:
                     )
                 if page.metadata["last_ai_revision_id"] != entry.last_ai_revision_id:
                     raise ValueError(f"页面与索引 last_ai_revision_id 不一致：{entry.key}")
-                if int(document["revision_id"]) != entry.last_seen_revision_id:
-                    warnings.append(f"{entry.key} 页面 revision 与索引不一致")
+                actual_revision = int(document["revision_id"])
+                if actual_revision < entry.last_seen_revision_id:
+                    raise ValueError(
+                        f"页面 revision 落后于索引 last_seen_revision_id：{entry.key}"
+                    )
+                index_synced = actual_revision == entry.last_seen_revision_id
+                if not index_synced:
+                    warnings.append(f"{entry.key} 页面 revision 新于索引，索引尚未同步")
                 score = sum(1 for term in query.terms if term in page.body)
                 if query.terms and score == 0:
                     continue
-                items.append((score, entry, page, document))
+                items.append((score, entry, page, document, index_synced))
                 if entry.status == "needs_review":
                     warnings.append(f"{entry.key} 存在待处理冲突")
             except PageCodecError:
@@ -115,8 +122,9 @@ class KnowledgeLoader:
                 content=page.body,
                 source_revisions=dict(entry.source_revisions),
                 status=entry.status,
+                index_synced=index_synced,
             )
-            for score, entry, page, document in items[:query.limit]
+            for score, entry, page, document, index_synced in items[:query.limit]
         )
 
         bundle = KnowledgeEvidenceBundle(
@@ -125,7 +133,10 @@ class KnowledgeLoader:
             offline=False,
             fetched_at=_now(),
         )
-        if self.cache_store is not None:
+        if (
+            self.cache_store is not None
+            and all(item.index_synced for item in evidence)
+        ):
             self.cache_store.save(bundle_to_dict(bundle))
         return bundle
 
@@ -141,6 +152,7 @@ def bundle_to_dict(bundle: KnowledgeEvidenceBundle) -> dict[str, Any]:
                 "content": item.content,
                 "source_revisions": item.source_revisions,
                 "status": item.status,
+                "index_synced": item.index_synced,
             }
             for item in bundle.items
         ],

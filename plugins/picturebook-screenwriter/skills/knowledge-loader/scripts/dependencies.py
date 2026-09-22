@@ -84,6 +84,7 @@ def find_stale_dependencies(
             continue
 
         current_revision = fetched["revision_id"]
+        current_index_synced = bool(_field(fetched, "index_synced", True))
         if current_revision != item["revision_id"]:
             stale.append(StaleReason(
                 key, "revision_changed", item["revision_id"], current_revision, status,
@@ -91,6 +92,10 @@ def find_stale_dependencies(
         elif current_is_offline:
             stale.append(StaleReason(
                 key, "current_offline", item["revision_id"], current_revision, status,
+            ))
+        elif not current_index_synced:
+            stale.append(StaleReason(
+                key, "index_unsynced", item["revision_id"], current_revision, status,
             ))
         elif status == "needs_review":
             stale.append(StaleReason(

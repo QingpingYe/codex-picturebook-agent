@@ -15,3 +15,7 @@
 ### Changed
 
 - Split WorkBuddy reference material out of the Codex plugin runtime.
+
+### Fixed
+
+- Knowledge loading now rejects page revisions behind the remote index, marks page-ahead evidence as `index_synced=false`, and prevents unsynced reads from replacing the last confirmed cache.

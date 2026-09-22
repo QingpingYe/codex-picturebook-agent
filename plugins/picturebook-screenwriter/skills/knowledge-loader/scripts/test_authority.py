@@ -154,7 +154,39 @@ class AuthorityCacheTests(unittest.TestCase):
         loader = AuthorityLoader(FakeControlPlane(), FakeCli(), cache_store=cache)
         bundle = loader.load(AuthorityQuery("小老鼠迈尔斯", "海外绘本", ("worldview",)))
         self.assertFalse(bundle.offline)
+        self.assertTrue(bundle.items[0].index_synced)
         self.assertEqual(cache.saved["items"][0]["key"], "海外绘本/小老鼠迈尔斯/worldview")
+
+    def test_unsynced_remote_load_does_not_replace_cache(self):
+        index = {
+            "海外绘本/小老鼠迈尔斯/worldview": IndexEntry(
+                key="海外绘本/小老鼠迈尔斯/worldview",
+                doc_token="doc-a",
+                wiki_node_token="node-a",
+                source_revisions={"node-a": "17"},
+                last_ai_revision_id=42,
+                last_seen_revision_id=41,
+                status="published",
+            )
+        }
+        page = render_remote_page("# 世界观\n\n人工更新正文", {
+            "key": "海外绘本/小老鼠迈尔斯/worldview",
+            "page_type": "worldview",
+            "source_node_tokens": ["node-a"],
+            "source_revisions": {"node-a": "17"},
+            "last_ai_revision_id": 42,
+        })
+        cache = RecordingCache()
+        loader = AuthorityLoader(
+            _StaticIndexPlane(index),
+            _StaticPageCli({"doc-a": (42, page)}),
+            cache_store=cache,
+        )
+
+        bundle = loader.load(AuthorityQuery("小老鼠迈尔斯", "海外绘本", ("worldview",)))
+
+        self.assertFalse(bundle.items[0].index_synced)
+        self.assertIsNone(cache.saved)
 
     def test_remote_failure_uses_cache_only_with_explicit_opt_in(self):
         class FailingPlane:
