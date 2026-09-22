@@ -15,7 +15,7 @@ class ReleaseSurfaceTests(unittest.TestCase):
     def test_manifest_version_marks_phase5_minor_release(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "0.3.2")
+        self.assertEqual(manifest["version"], "0.4.0")
 
     def test_manifest_describes_completed_art_phase(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -59,9 +59,9 @@ class ReleaseVersionTests(unittest.TestCase):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         self.assertIsNotNone(re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"]))
 
-    def test_release_target_is_0_3_2(self):
+    def test_release_target_is_0_4_0(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.2")
+        self.assertEqual(manifest["version"], "0.4.0")
 
     def test_changelog_records_phase5(self):
         text = (ROOT.parent.parent / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")

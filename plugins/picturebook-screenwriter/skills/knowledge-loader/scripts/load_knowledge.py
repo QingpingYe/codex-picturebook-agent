@@ -95,7 +95,7 @@ class KnowledgeLoader:
                 if page.metadata["last_ai_revision_id"] != entry.last_ai_revision_id:
                     raise ValueError(f"页面与索引 last_ai_revision_id 不一致：{entry.key}")
                 if int(document["revision_id"]) != entry.last_seen_revision_id:
-                    raise ValueError(f"页面与索引 revision 不一致：{entry.key}")
+                    warnings.append(f"{entry.key} 页面 revision 与索引不一致")
                 score = sum(1 for term in query.terms if term in page.body)
                 if query.terms and score == 0:
                     continue

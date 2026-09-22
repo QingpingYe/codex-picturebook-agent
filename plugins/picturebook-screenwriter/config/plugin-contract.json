@@ -6,6 +6,7 @@
     "text-craft",
     "craft-benchmark-check",
     "staging-planner",
+    "stage-orchestration",
     "wiki-ingest",
     "feishu-knowledge-store",
     "knowledge-loader",
