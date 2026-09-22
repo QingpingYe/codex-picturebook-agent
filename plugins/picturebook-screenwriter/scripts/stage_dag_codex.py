@@ -14,6 +14,11 @@ import stage_dag
 PLAN_SCHEMA = "pb-dispatch-plan-v2"
 LEAD_OWNER = "picturebook-screenwriter-team-lead"
 LEAD_OWNERS = {LEAD_OWNER}
+LEAD_OWNED_STAGE_IDS = {
+    "confirmation_gate",
+    "asset_confirmation",
+    "asset_final_confirmation",
+}
 CONFIRMATION_OUTCOMES = [
     "approved",
     "revision_requested",
@@ -50,6 +55,7 @@ def _plan_batches(manifest):
             if (
                 stages[stage_id]["assignee"] not in LEAD_OWNERS
                 and stages[stage_id]["gate"] != "confirmation"
+                and stage_id not in LEAD_OWNED_STAGE_IDS
             )
         ]
         if actionable:
@@ -104,7 +110,10 @@ def build_dispatch_plan(manifest):
 
     for stage_id in ready:
         stage = stages[stage_id]
-        if stage["gate"] == "confirmation":
+        if (
+            stage["gate"] == "confirmation"
+            or stage_id in LEAD_OWNED_STAGE_IDS
+        ):
             plan["status"] = "waiting_for_user"
             plan["decision_required"] = {
                 "stage_id": stage["stage_id"],

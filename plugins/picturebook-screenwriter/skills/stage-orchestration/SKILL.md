@@ -41,8 +41,9 @@ creation、revision 和 illustration 模板均使用 `pb-stage-run-v2`。creatio
    修订时用 `build_revision_manifest()` 创建 revision run。
 2. 用 `stage_dag_codex.py --action plan` 生成当前批次的派发计划。
    计划基于条件决策引擎，只返回当前可执行的 `lead_actions` 和
-   `next_batches`；依赖或条件尚未满足的后续阶段进入 `deferred_stages`，
-   不得把计划解释为未来无条件批次。
+   `next_batches`；只有带 `when` 条件且尚未满足的后续阶段会进入
+   `deferred_stages`，仅因依赖尚未完成而等待的阶段不会列出。不得把计划
+   解释为未来无条件批次。
 3. 若计划状态为 `waiting_for_user`，说明当前待执行的确认门必须由主编
    直接向用户呈现，不能派发子 Agent，也不能自动选择结果。等待用户返回
    `approved`、`revision_requested` 或 `cancelled` 后，再用

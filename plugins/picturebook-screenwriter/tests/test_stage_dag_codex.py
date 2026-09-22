@@ -162,6 +162,46 @@ class StageDagCodexAdapterTest(unittest.TestCase):
         )
         self.assertEqual(plan["next_batches"], [])
 
+    def test_misassigned_asset_gates_wait_and_are_not_dispatched(self):
+        gate_prerequisites = {
+            "asset_confirmation": (
+                "illustration_init",
+                "asset_extraction",
+            ),
+            "asset_final_confirmation": (
+                "illustration_init",
+                "asset_extraction",
+                "asset_confirmation",
+                "asset_preproduction",
+            ),
+        }
+
+        for gate_id, prerequisites in gate_prerequisites.items():
+            with self.subTest(gate_id=gate_id):
+                manifest = stage_dag._illustration_template_manifest()
+                for stage_id in prerequisites:
+                    for status in ("ready", "running", "done"):
+                        manifest = stage_dag.transition_stage(
+                            manifest,
+                            stage_id,
+                            status,
+                        )
+                gate = next(
+                    stage
+                    for stage in manifest["stages"]
+                    if stage["stage_id"] == gate_id
+                )
+                gate["assignee"] = "pb-screenwriter"
+
+                plan = stage_dag_codex.build_dispatch_plan(manifest)
+
+                self.assertEqual(plan["status"], "waiting_for_user")
+                self.assertEqual(
+                    plan["decision_required"]["stage_id"],
+                    gate_id,
+                )
+                self.assertEqual(plan["next_batches"], [])
+
     def test_approved_confirmation_plans_persistence_only(self):
         manifest = stage_dag._creation_template_manifest()
         manifest = self._fast_forward_without_gate(manifest)
