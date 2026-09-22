@@ -77,11 +77,7 @@ class ReleaseChecklistTests(unittest.TestCase):
     def test_release_checklist_names_all_gates(self):
         text = (ROOT.parent.parent / "docs" / "RELEASE.md").read_text(encoding="utf-8")
         for gate in (
-            "test_*.py",
-            "generate.test.js",
-            "run_regression.js",
-            "governance_check.py",
-            "package_check.py",
+            "run_plugin_tests.py",
             "validate_plugin.py",
             "PICTUREBOOK_EXPECTED_VERSION",
             "live Feishu",
@@ -90,10 +86,9 @@ class ReleaseChecklistTests(unittest.TestCase):
             with self.subTest(gate=gate):
                 self.assertIn(gate, text)
 
-    def test_readme_documents_governance_commands(self):
+    def test_readme_documents_aggregate_verification(self):
         text = (ROOT.parent.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn("python .\\scripts\\governance_check.py", text)
-        self.assertIn("python .\\scripts\\package_check.py", text)
+        self.assertIn("python .\\scripts\\run_plugin_tests.py", text)
 
     def test_readme_documents_workspace_config_discovery(self):
         text = PLUGIN_README.read_text(encoding="utf-8")

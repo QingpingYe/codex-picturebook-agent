@@ -2,39 +2,19 @@
 
 ## Offline gates
 
-1. Run every plugin Python test:
+1. Run every offline Python, Node, governance, and package gate:
 
    ```powershell
-   Get-ChildItem -LiteralPath .\plugins\picturebook-screenwriter -Recurse -Filter test_*.py |
-     ForEach-Object { python $_.FullName; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+   python .\scripts\run_plugin_tests.py
    ```
 
-2. Run the image-generate Node test:
+2. Run plugin structure validation:
 
    ```powershell
-   node --test .\plugins\picturebook-screenwriter\skills\image-generate\generate.test.js
+   python <codex-home>\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
    ```
 
-3. Run the staging regression:
-
-   ```powershell
-   node .\plugins\picturebook-screenwriter\skills\staging-planner\scripts\run_regression.js
-   ```
-
-4. Run plugin structure validation:
-
-   ```powershell
-   python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
-   ```
-
-5. Run governance and package checks:
-
-   ```powershell
-   python .\scripts\governance_check.py
-   python .\scripts\package_check.py
-   ```
-
-6. Confirm the version in `plugins/picturebook-screenwriter/.codex-plugin/plugin.json`, `docs/CHANGELOG.md`, and the release tag describe the same release. Run the release-version gate with the tag value:
+3. Confirm the version in `plugins/picturebook-screenwriter/.codex-plugin/plugin.json`, `docs/CHANGELOG.md`, and the release tag describe the same release. Run the release-version gate with the tag value:
 
    ```powershell
    $env:PICTUREBOOK_EXPECTED_VERSION = "<release-version>"
@@ -42,7 +22,7 @@
    Remove-Item Env:PICTUREBOOK_EXPECTED_VERSION
    ```
 
-7. Confirm no credentials, run directories, or `.picturebook-screenwriter` files are committed.
+4. Confirm no credentials, run directories, or `.picturebook-screenwriter` files are committed.
 
 ## Explicit live gates
 

@@ -60,17 +60,11 @@ The target Feishu Wiki is the authoritative shared knowledge source. Human edits
 ## Verify locally
 
 ```powershell
-python C:\Users\lvan\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .\plugins\picturebook-screenwriter
-python -m unittest discover -s .\plugins\picturebook-screenwriter\skills\craft-benchmark-check\scripts -p "test_*.py" -v
-node .\plugins\picturebook-screenwriter\skills\staging-planner\scripts\run_regression.js
+python .\scripts\run_plugin_tests.py
 ```
 
-## Release governance
-
-```powershell
-python .\scripts\governance_check.py
-python .\scripts\package_check.py
-```
+The aggregate runner executes every Python test, both Node checks, governance
+validation, and package validation.
 
 See `docs/RELEASE.md` before publishing.
 
