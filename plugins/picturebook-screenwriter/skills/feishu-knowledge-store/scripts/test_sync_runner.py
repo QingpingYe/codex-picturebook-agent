@@ -376,6 +376,22 @@ class SyncRunnerTests(unittest.TestCase):
             "index_update_failed: index readback did not match",
         )
 
+    def test_preserved_index_failure_is_queued_without_double_counting(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
+
+        def failed_update(entries):
+            raise ControlPlaneCorrupt("index readback did not match")
+
+        plane.update_index = failed_update
+        publisher = RoutingPublisher()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(report["queued"], 1)
+        self.assertEqual(report["preserved"], 0)
+        self.assertEqual(report["published"], 0)
+
     def test_missing_indexed_page_is_queued(self):
         self._write_manifest()
         plane = IndexedPlane()

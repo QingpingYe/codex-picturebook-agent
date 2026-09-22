@@ -106,7 +106,6 @@ class SyncRunner:
                             indexed,
                             last_seen_revision_id=current["revision_id"],
                         )
-                        preserved += 1
                     elif action.action == "update":
                         result = self._update_existing(remote_index[candidate.key], candidate, body)
                     else:
@@ -127,7 +126,9 @@ class SyncRunner:
                         })
                         queued += 1
                         continue
-                    if action.action != "preserve":
+                    if action.action == "preserve":
+                        preserved += 1
+                    else:
                         published += 1
                     successful_pages += 1
                     if successful_pages % 5 == 0:
