@@ -61,14 +61,14 @@ python .\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config <c
 
 ## 安装
 
-在仓库根目录执行：
+从 GitHub marketplace 安装：
 
 ```powershell
-codex plugin marketplace add <local-plugin-root>
-codex plugin add picturebook-screenwriter@picturebook-local
+codex plugin marketplace add QingpingYe/codex-picturebook-agent --ref main
+codex plugin add picturebook-screenwriter@picturebook-github
 ```
 
-如果本地 marketplace 已注册，只需执行第二条。
+如果 GitHub marketplace 已注册，只需执行第二条。
 
 ## 使用
 
