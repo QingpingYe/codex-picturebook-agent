@@ -15,6 +15,9 @@
 ### Changed
 
 - Split WorkBuddy reference material out of the Codex plugin runtime.
+- Stage workflows now represent approval and revision as exclusive outcomes.
+- Revision rounds create new runs and rerun preflight, collision, and QA checks.
+- v1 run manifests require explicit migration.
 
 ### Fixed
 

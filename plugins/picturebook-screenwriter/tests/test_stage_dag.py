@@ -1051,12 +1051,96 @@ class StageDagIntegrationTest(unittest.TestCase):
         return stage_dag._creation_template_manifest()
 
     @staticmethod
+    def _complete_confirmation(manifest, outcome):
+        for status in ("ready", "running"):
+            manifest = stage_dag.transition_stage(
+                manifest,
+                "confirmation_gate",
+                status,
+            )
+        return stage_dag.transition_stage(
+            manifest,
+            "confirmation_gate",
+            "done",
+            outcome=outcome,
+        )
+
+    @staticmethod
     def _fast_forward(manifest, stage_ids):
         """按 pending → ready → running → done 推进一组阶段。"""
         for sid in stage_ids:
             for status in ("ready", "running", "done"):
                 manifest = stage_dag.transition_stage(manifest, sid, status)
         return manifest
+
+    def test_creation_revision_round_reruns_required_checks(self):
+        creation = stage_dag._creation_template_manifest()
+        creation = self._fast_forward(creation, [
+            "session_init",
+            "brief_gate",
+            "knowledge_load",
+            "creation_delegate",
+            "preflight",
+            "collision_check",
+            "qa",
+            "qa_synthesis",
+        ])
+        creation = self._complete_confirmation(
+            creation,
+            "revision_requested",
+        )
+        creation = stage_dag.finalize_run(
+            creation,
+            "revision_requested",
+        )
+
+        revision = stage_dag.build_revision_manifest(
+            creation,
+            feedback=[{"page": 5, "issue": "钩子弱", "instruction": "加强"}],
+            artifact_ref="picturebook/script_v1.md",
+            run_id="20260922-example-0002",
+        )
+        stage_ids = [stage["stage_id"] for stage in revision["stages"]]
+
+        self.assertIn("preflight", stage_ids)
+        self.assertIn("collision_check", stage_ids)
+        self.assertIn("qa", stage_ids)
+        self.assertIn("qa_synthesis", stage_ids)
+        self.assertEqual(revision["iteration"], 2)
+
+    def test_repeated_revision_preserves_distinct_run_ids(self):
+        parent = stage_dag._creation_template_manifest()
+        parent = self._fast_forward(parent, [
+            "session_init",
+            "brief_gate",
+            "knowledge_load",
+            "creation_delegate",
+            "preflight",
+            "collision_check",
+            "qa",
+            "qa_synthesis",
+        ])
+        parent = self._complete_confirmation(
+            parent,
+            "revision_requested",
+        )
+        parent = stage_dag.finalize_run(parent, "revision_requested")
+        first = stage_dag.build_revision_manifest(
+            parent,
+            feedback=[{"page": 1, "issue": "问题", "instruction": "修改"}],
+            artifact_ref="picturebook/script_v1.md",
+            run_id="20260922-example-0002",
+        )
+        first["status"] = "completed"
+        first["outcome"] = "revision_requested"
+        second = stage_dag.build_revision_manifest(
+            first,
+            feedback=[{"page": 2, "issue": "问题", "instruction": "再修改"}],
+            artifact_ref="picturebook/script_v2.md",
+            run_id="20260922-example-0003",
+        )
+        self.assertNotEqual(first["run_id"], second["run_id"])
+        self.assertEqual(second["iteration"], 3)
 
     def test_light_mode_has_no_stages(self):
         """轻量/脑暴模式不进入 DAG 流程。"""

@@ -243,6 +243,55 @@ class StageDagCodexAdapterTest(unittest.TestCase):
             "create_revision_run",
         )
 
+    def test_revision_plan_defers_persistence_until_confirmation(self):
+        creation = stage_dag._creation_template_manifest()
+        creation = self._fast_forward_without_gate(creation)
+        creation = self._complete_confirmation(
+            creation,
+            "revision_requested",
+        )
+        creation = stage_dag.finalize_run(
+            creation,
+            "revision_requested",
+        )
+        revision = stage_dag.build_revision_manifest(
+            creation,
+            feedback=[{"page": 5, "issue": "钩子弱", "instruction": "加强"}],
+            artifact_ref="picturebook/script_v1.md",
+            run_id="20260922-example-0002",
+        )
+        for stage_id in (
+            "revision_init",
+            "knowledge_load",
+            "revision_delegate",
+            "preflight",
+            "collision_check",
+            "qa",
+            "qa_synthesis",
+        ):
+            for status in ("ready", "running", "done"):
+                revision = stage_dag.transition_stage(
+                    revision,
+                    stage_id,
+                    status,
+                )
+
+        revision_plan = stage_dag_codex.build_dispatch_plan(revision)
+
+        self.assertEqual(revision_plan["status"], "waiting_for_user")
+        self.assertEqual(
+            revision_plan["decision_required"]["stage_id"],
+            "confirmation_gate",
+        )
+        self.assertNotIn(
+            "persistence",
+            [
+                stage["stage_id"]
+                for batch in revision_plan["next_batches"]
+                for stage in batch["stages"]
+            ],
+        )
+
     def test_fallback_waits_for_lead_owned_confirmation(self):
         manifest = stage_dag._creation_template_manifest()
         manifest = self._fast_forward_without_gate(manifest)
