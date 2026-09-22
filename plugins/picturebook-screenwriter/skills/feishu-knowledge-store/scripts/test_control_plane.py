@@ -162,6 +162,18 @@ class ControlPlaneTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlPlaneCorrupt, "doc_token"):
             plane.read_index()
 
+    def test_index_rejects_source_delta_status_values(self):
+        for status in ("first_run", "new", "changed", "unchanged", "deleted", "unknown"):
+            with self.subTest(status=status):
+                plane = ControlPlane(FakeCli(index_content=index_content([{
+                    "key": "s/p/worldview", "doc_token": "doc-world",
+                    "wiki_node_token": "node-world",
+                    "source_revisions": {"source": "1"}, "last_ai_revision_id": 1,
+                    "last_seen_revision_id": 1, "status": status,
+                }])), control_tokens())
+                with self.assertRaises(ControlPlaneCorrupt):
+                    plane.read_index()
+
     def test_conflicting_acquire_refetches_once_then_reports_holder(self):
         cli = FakeCli()
         cli.conflict_once = True
