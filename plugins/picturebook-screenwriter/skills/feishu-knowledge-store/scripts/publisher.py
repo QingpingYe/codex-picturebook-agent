@@ -149,6 +149,16 @@ class Publisher:
             raise NeedsReview(f"current page is empty or unreadable: {doc_token}")
         return {"revision_id": revision, "content": content}
 
+    def fetch_revision(self, doc_token: str, revision_id: int) -> dict[str, Any]:
+        if isinstance(revision_id, bool) or not isinstance(revision_id, int) or revision_id <= 0:
+            raise NeedsReview(f"historical page has invalid revision: {doc_token}")
+        document = self.cli.fetch_doc_revision(doc_token, revision_id).get("data", {}).get("document", {})
+        revision = document.get("revision_id")
+        content = document.get("content")
+        if revision != revision_id or not isinstance(content, str) or not content:
+            raise NeedsReview(f"historical page is unreadable: {doc_token}@{revision_id}")
+        return {"revision_id": revision, "content": content}
+
     def publish_new(self, entry: IndexEntry, body: str, parent: str) -> IndexEntry:
         title = entry.key
         existing_nodes = [
