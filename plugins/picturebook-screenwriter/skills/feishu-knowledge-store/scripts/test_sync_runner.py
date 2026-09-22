@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from control_plane import ControlPlaneCorrupt
 from pathlib import Path
 
 SCRIPTS = Path(__file__).parent
@@ -29,6 +30,9 @@ class FakeControlPlane:
     def refresh_lock(self, lease, now):
         self.refreshed += 1
         return object()
+
+    def read_index(self):
+        return {}
 
     def update_index(self, entries):
         return {entry.key: entry for entry in entries}
@@ -92,12 +96,13 @@ class SyncRunnerTests(unittest.TestCase):
         entries = []
         for number in range(count):
             suffix = "" if count == 1 else f"-{number}"
+            project_id = "小老鼠迈尔斯" if count == 1 else f"小老鼠迈尔斯-{number}"
             candidate_name = f"worldview{suffix}.md"
             (staging / candidate_name).write_text(
                 "---\n"
                 "title: 世界观\n"
                 "series_id: 海外绘本\n"
-                "project_id: 小老鼠迈尔斯\n"
+                f"project_id: {project_id}\n"
                 "page_type: worldview\n"
                 "source_node_tokens:\n  - node-a\n"
                 "source_revision_parts:\n  - \"17\"\n"
@@ -107,11 +112,11 @@ class SyncRunnerTests(unittest.TestCase):
             )
             entries.append({
                 "path": candidate_name,
-                "key": f"海外绘本/小老鼠迈尔斯/worldview{suffix}",
+                "key": f"海外绘本/{project_id}/worldview",
                 "source_revisions": {"node-a": "17"},
                 "page_type": "worldview",
                 "series_id": "海外绘本",
-                "project_id": "小老鼠迈尔斯",
+                "project_id": project_id,
             })
         manifest = {
             "version": 9,
@@ -196,6 +201,29 @@ class SyncRunnerTests(unittest.TestCase):
                             control_plane=FakeControlPlane())
         runner.publish(self.run_dir)
         self.assertFalse(any(key == "system/bootstrap" for key, *_ in publisher.published))
+
+    def test_publish_reads_remote_index_before_writing(self):
+        self._write_manifest()
+        plane = RecordingPlane()
+        plane.read_index = lambda: {}
+        publisher = FakePublisher()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        runner.publish(self.run_dir)
+        self.assertEqual(publisher.published[0][2], "content-root")
+        self.assertEqual(plane.updated[0].key, "海外绘本/小老鼠迈尔斯/worldview")
+
+    def test_corrupt_remote_index_blocks_all_writes(self):
+        self._write_manifest()
+        publisher = FakePublisher()
+
+        class CorruptPlane(FakeControlPlane):
+            def read_index(self):
+                raise ControlPlaneCorrupt("invalid index schema")
+
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=CorruptPlane())
+        with self.assertRaises(ControlPlaneCorrupt):
+            runner.publish(self.run_dir)
+        self.assertEqual(publisher.published, [])
 
     def test_chinese_path_and_title_round_trip(self):
         self.run_dir = Path(self.tmp.name) / "中文运行目录" / "runs" / "run-1"

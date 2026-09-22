@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from control_plane import ControlPlaneCorrupt
 from models import IndexEntry
 from config import load_config
 from config_paths import resolve_config_path
 from runner_status import BootstrapState, RunStatus
+from page_codec import parse_candidate
 
 
 class SyncRunnerError(RuntimeError):
@@ -79,6 +81,7 @@ class SyncRunner:
         self.bootstrap_state = BootstrapState.IN_PROGRESS
         lease = self.control_plane.acquire_lock("sync-runner", datetime.now(timezone.utc))
         try:
+            remote_index = self.control_plane.read_index()
             tokens = self.publisher.initialize()
             parent = tokens["content"]
             published = 0
@@ -87,8 +90,7 @@ class SyncRunner:
             successful_pages = 0
             for raw in entries:
                 try:
-                    entry = self._entry(raw)
-                    body = self._candidate_body(run_dir, raw["path"])
+                    entry, body = self._candidate(raw, run_dir)
                     published_entry = self.publisher.publish_new(entry, body, parent)
                     self.control_plane.update_index([published_entry])
                     published += 1
@@ -172,6 +174,20 @@ class SyncRunner:
             last_seen_revision_id=0,
             status="published",
         )
+
+    @staticmethod
+    def _candidate(raw: dict[str, Any], run_dir: Path):
+        body = SyncRunner._candidate_body(run_dir, raw["path"])
+        parsed = parse_candidate(body)
+        if parsed.metadata["key"] != raw["key"]:
+            raise ValueError(f"candidate logical key mismatch: {raw['key']}")
+        entry = IndexEntry(
+            key=raw["key"], doc_token=raw.get("doc_token", raw["key"]),
+            wiki_node_token=raw.get("wiki_node_token", raw["key"]),
+            source_revisions=parsed.metadata["source_revisions"],
+            last_ai_revision_id=0, last_seen_revision_id=0, status="published",
+        )
+        return entry, parsed.body
 
     @staticmethod
     def _candidate_body(run_dir: Path, relative_path: str) -> str:
