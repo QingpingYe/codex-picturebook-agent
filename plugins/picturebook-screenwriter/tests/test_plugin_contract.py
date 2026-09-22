@@ -1,14 +1,21 @@
 import json
+import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import stage_dag
+
+
 CONTRACT = ROOT / "config" / "plugin-contract.json"
 ENTRY_SKILL = ROOT / "skills" / "picturebook-screenwriter" / "SKILL.md"
 MANIFEST = ROOT / ".codex-plugin" / "plugin.json"
 PLUGIN_README = ROOT / "README.md"
 REPO_README = ROOT.parent.parent / "README.md"
+ENFORCEMENT = ROOT.parent.parent / "docs" / "ENFORCEMENT.md"
 
 
 class PluginContractTests(unittest.TestCase):
@@ -154,30 +161,21 @@ class PluginContractTests(unittest.TestCase):
             },
         )
 
-    def test_contract_declares_conditional_stage_workflow(self):
+    def test_stage_workflow_uses_runtime_owner(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         self.assertEqual(
-            contract["stage_workflow"]["run_schema"],
-            "pb-stage-run-v2",
+            contract["stage_workflow"],
+            {
+                "run_schema": stage_dag.RUN_SCHEMA,
+                "runtime_source": "scripts/stage_dag.py",
+            },
         )
-        self.assertEqual(
-            contract["stage_workflow"]["confirmation_outcomes"],
-            ["approved", "revision_requested", "cancelled"],
-        )
-        self.assertTrue(
-            contract["stage_workflow"]["revision_reruns"]
-            == ["preflight", "collision_check", "qa", "qa_synthesis"]
-        )
-        self.assertEqual(
-            contract["stage_workflow"]["lead_owned_gates"],
-            [
-                "confirmation_gate",
-                "asset_confirmation",
-                "asset_final_confirmation",
-            ],
-        )
-        self.assertTrue(
-            contract["stage_workflow"]["skipped_is_terminal"])
+
+    def test_enforcement_matrix_documents_levels(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for level in ("runtime_required", "script_checked", "prompt_only"):
+            with self.subTest(level=level):
+                self.assertIn(level, text)
 
     def test_entry_skill_forbids_implicit_file_writes(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")

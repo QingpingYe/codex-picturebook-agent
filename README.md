@@ -66,6 +66,9 @@ python .\scripts\run_plugin_tests.py
 The aggregate runner executes every Python test, both Node checks, governance
 validation, and package validation.
 
+Runtime, script, and prompt-only gate boundaries are documented in
+`docs/ENFORCEMENT.md`.
+
 See `docs/RELEASE.md` before publishing.
 
 ## Feishu preflight
