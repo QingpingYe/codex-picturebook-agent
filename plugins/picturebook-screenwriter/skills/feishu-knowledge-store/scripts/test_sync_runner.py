@@ -14,6 +14,7 @@ from models import IndexEntry
 from runner_status import BootstrapState
 from sync_runner import SyncRunner
 from page_codec import render_remote_page
+from publisher import NeedsReview
 
 
 class FakeControlPlane:
@@ -57,7 +58,7 @@ class FakePublisher:
 
     def initialize(self):
         self.initialized = True
-        return {"content": "content-root"}
+        return {"content": "content-root", "conflict": "conflict-doc"}
 
     def publish_new(self, entry, body, parent):
         self.published.append((entry.key, body, parent))
@@ -109,6 +110,7 @@ class RoutingPublisher(FakePublisher):
     def __init__(self):
         super().__init__()
         self.updated = []
+        self.conflicts = []
         self.current = {"revision_id": 4, "content": indexed_remote_page()}
         self.history = {"revision_id": 4, "content": indexed_remote_page()}
 
@@ -123,6 +125,9 @@ class RoutingPublisher(FakePublisher):
         return replace(entry, source_revisions=dict(source_revisions),
                        last_ai_revision_id=current["revision_id"] + 2,
                        last_seen_revision_id=current["revision_id"] + 2)
+
+    def append_conflict(self, parent, record):
+        self.conflicts.append((parent, record))
 
 
 class SyncRunnerTests(unittest.TestCase):
@@ -337,6 +342,69 @@ class SyncRunnerTests(unittest.TestCase):
         self.assertEqual(publisher.published, [])
         self.assertEqual(publisher.updated[0][0], "海外绘本/小老鼠迈尔斯/worldview")
         self.assertEqual(report["published"], 1)
+
+    def test_target_page_without_index_entry_is_queued(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+        publisher = RoutingPublisher()
+
+        def existing_page(*args, **kwargs):
+            raise NeedsReview("logical key page already exists")
+
+        publisher.publish_new = existing_page
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(report["queued"], 1)
+        self.assertEqual(report["published"], 0)
+        self.assertEqual(publisher.conflicts[0][1]["key"], "海外绘本/小老鼠迈尔斯/worldview")
+
+    def test_page_success_with_index_failure_is_queued(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+
+        def failed_update(entries):
+            raise ControlPlaneCorrupt("index readback did not match")
+
+        plane.update_index = failed_update
+        publisher = RoutingPublisher()
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(report["queued"], 1)
+        self.assertEqual(report["published"], 0)
+        self.assertEqual(
+            publisher.conflicts[0][1]["reason"],
+            "index_update_failed: index readback did not match",
+        )
+
+    def test_missing_indexed_page_is_queued(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
+        publisher = RoutingPublisher()
+
+        def missing_page(doc_token):
+            raise NeedsReview("missing current page")
+
+        publisher.fetch_current = missing_page
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(report["queued"], 1)
+        self.assertEqual(report["failed"], 0)
+
+    def test_page_metadata_drift_from_index_is_queued(self):
+        self._write_manifest()
+        plane = IndexedPlane()
+        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
+        publisher = RoutingPublisher()
+        publisher.current = {"revision_id": 4, "content": indexed_remote_page("16")}
+        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
+        report = runner.publish(self.run_dir)
+        self.assertEqual(report["queued"], 1)
+        self.assertEqual(report["failed"], 0)
+        self.assertEqual(
+            publisher.conflicts[0][1]["reason"],
+            "remote page metadata does not match the remote index",
+        )
 
     def test_verify_is_read_only(self):
         self._write_manifest()

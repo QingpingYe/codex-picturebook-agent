@@ -117,7 +117,16 @@ class SyncRunner:
                         })
                         queued += 1
                         continue
-                    self.control_plane.update_index([result])
+                    try:
+                        self.control_plane.update_index([result])
+                    except Exception as index_error:
+                        self.publisher.append_conflict(tokens["conflict"], {
+                            "key": candidate.key,
+                            "reason": f"index_update_failed: {index_error}",
+                            "revision_id": result.last_seen_revision_id,
+                        })
+                        queued += 1
+                        continue
                     if action.action != "preserve":
                         published += 1
                     successful_pages += 1
@@ -125,6 +134,15 @@ class SyncRunner:
                         lease = self.control_plane.refresh_lock(
                             lease, datetime.now(timezone.utc)
                         )
+                except NeedsReview as error:
+                    key = raw.get("key", "<unknown>")
+                    revision = remote_index[key].last_seen_revision_id if key in remote_index else 0
+                    self.publisher.append_conflict(tokens["conflict"], {
+                        "key": key,
+                        "reason": str(error),
+                        "revision_id": revision,
+                    })
+                    queued += 1
                 except Exception as error:
                     failed += 1
                     errors.append(f"{raw.get('key', '<unknown>')}: {error}")
