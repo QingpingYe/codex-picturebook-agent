@@ -121,6 +121,12 @@ def _validate_manifest_structure(manifest):
         errors.append("stages 必须是非空数组（mode=light 时允许为空）")
         return errors
 
+    stage_by_id = {
+        stage.get("stage_id"): stage
+        for stage in stages
+        if isinstance(stage, dict)
+        and isinstance(stage.get("stage_id"), str)
+    }
     ids = set()
     for index, stage in enumerate(stages):
         if not isinstance(stage, dict):
@@ -128,7 +134,7 @@ def _validate_manifest_structure(manifest):
             continue
         sid = stage.get("stage_id")
         _require_nonempty_str(sid, f"stages[{index}].stage_id", errors)
-        if sid:
+        if isinstance(sid, str) and sid:
             if sid in ids:
                 errors.append(f"stage_id 重复：{sid}")
             ids.add(sid)
@@ -142,7 +148,13 @@ def _validate_manifest_structure(manifest):
             errors.append(f"stages[{index}].status 非法：{status!r}")
         outcome = stage.get("outcome")
         if stage.get("gate") == "confirmation":
-            if outcome is not None and outcome not in CONFIRMATION_OUTCOMES:
+            if (
+                outcome is not None
+                and (
+                    not isinstance(outcome, str)
+                    or outcome not in CONFIRMATION_OUTCOMES
+                )
+            ):
                 errors.append(
                     f"stages[{index}].outcome 非法：{outcome!r}")
         elif outcome is not None:
@@ -156,12 +168,31 @@ def _validate_manifest_structure(manifest):
             else:
                 _require_nonempty_str(
                     when.get("stage_id"), f"stages[{index}].when.stage_id", errors)
-                _require_nonempty_str(
-                    when.get("outcome"), f"stages[{index}].when.outcome", errors)
+                when_stage_id = when.get("stage_id")
+                when_outcome = when.get("outcome")
+                if (
+                    not isinstance(when_outcome, str)
+                    or when_outcome not in CONFIRMATION_OUTCOMES
+                ):
+                    errors.append(
+                        f"stages[{index}].when.outcome 非法："
+                        f"{when_outcome!r}")
+                condition_stage = (
+                    stage_by_id.get(when_stage_id)
+                    if isinstance(when_stage_id, str)
+                    else None
+                )
+                if (
+                    condition_stage is None
+                    or condition_stage.get("gate") != "confirmation"
+                ):
+                    errors.append(
+                        f"stages[{index}].when.stage_id 必须引用"
+                        " confirmation gate")
                 deps = stage.get("depends_on")
                 if (
                     isinstance(deps, list)
-                    and when.get("stage_id") not in deps
+                    and when_stage_id not in deps
                 ):
                     errors.append(
                         f"stages[{index}].when.stage_id 必须是直接依赖")
@@ -233,6 +264,67 @@ _V1_CREATION_STAGE_IDS = {
 _REQUIRED_V1_STAGE_IDS = _V1_CREATION_STAGE_IDS - {"revision_loop"}
 
 
+def _validate_v1_manifest_shape(manifest):
+    errors = []
+    for key in ("run_id", "intent", "artifact_type", "mode", "project_root"):
+        _require_nonempty_str(manifest.get(key), f"v1 {key}", errors)
+
+    stages = manifest.get("stages")
+    if not isinstance(stages, list):
+        errors.append("v1 stages 必须是数组")
+        return errors
+
+    seen_stage_ids = set()
+    for index, stage in enumerate(stages):
+        if not isinstance(stage, dict):
+            errors.append(f"v1 stages[{index}] 必须是对象")
+            continue
+
+        stage_id = stage.get("stage_id")
+        _require_nonempty_str(
+            stage_id, f"v1 stages[{index}].stage_id", errors)
+        if isinstance(stage_id, str) and stage_id:
+            if stage_id in seen_stage_ids:
+                errors.append(f"v1 stage_id 重复：{stage_id}")
+            seen_stage_ids.add(stage_id)
+
+        _require_nonempty_str(
+            stage.get("assignee"), f"v1 stages[{index}].assignee", errors)
+        _require_nonempty_str(
+            stage.get("gate"), f"v1 stages[{index}].gate", errors)
+
+        deps = stage.get("depends_on")
+        if not isinstance(deps, list):
+            errors.append(f"v1 stages[{index}].depends_on 必须是数组")
+        else:
+            for dep_index, dep in enumerate(deps):
+                _require_nonempty_str(
+                    dep,
+                    f"v1 stages[{index}].depends_on[{dep_index}]",
+                    errors,
+                )
+
+        status = stage.get("status")
+        if not isinstance(status, str) or status not in STAGE_STATUSES:
+            errors.append(f"v1 stages[{index}].status 非法：{status!r}")
+
+        outcome = stage.get("outcome")
+        if (
+            outcome is not None
+            and (
+                not isinstance(outcome, str)
+                or outcome not in CONFIRMATION_OUTCOMES
+            )
+        ):
+            errors.append(f"v1 stages[{index}].outcome 非法：{outcome!r}")
+
+        for key in ("input_refs", "output_refs"):
+            if not isinstance(stage.get(key), list):
+                errors.append(f"v1 stages[{index}].{key} 必须是数组")
+
+    return errors
+
+
 def migrate_manifest_v1(manifest):
     """把冻结的 v1 run manifest 显式迁移为可执行的 v2。"""
     if not isinstance(manifest, dict):
@@ -244,6 +336,10 @@ def migrate_manifest_v1(manifest):
     stages = migrated.get("stages")
     if not isinstance(stages, list):
         raise StageDagError("v1 stages 必须是数组")
+
+    shape_errors = _validate_v1_manifest_shape(manifest)
+    if shape_errors:
+        raise StageDagError(shape_errors)
 
     by_id = {stage.get("stage_id"): stage for stage in stages}
     unknown_stage_ids = sorted(set(by_id) - _V1_CREATION_STAGE_IDS)

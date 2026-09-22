@@ -150,6 +150,41 @@ class StageDagManifestTest(unittest.TestCase):
             stage_dag.validate_manifest(bad)
         self.assertTrue(any("when" in msg for msg in ctx.exception.errors))
 
+    def test_validate_manifest_rejects_invalid_when_outcome(self):
+        bad = _manifest()
+        bad["stages"][1]["when"] = {
+            "stage_id": "session_init",
+            "outcome": "banana",
+        }
+        with self.assertRaises(stage_dag.StageDagError) as ctx:
+            stage_dag.validate_manifest(bad)
+        self.assertTrue(
+            any("when.outcome" in msg for msg in ctx.exception.errors))
+
+    def test_validate_manifest_rejects_when_referencing_non_confirmation_stage(self):
+        bad = _manifest()
+        bad["stages"][1]["when"] = {
+            "stage_id": "session_init",
+            "outcome": "approved",
+        }
+        with self.assertRaises(stage_dag.StageDagError) as ctx:
+            stage_dag.validate_manifest(bad)
+        self.assertTrue(any("confirmation" in msg for msg in ctx.exception.errors))
+
+    def test_validate_manifest_rejects_non_string_when_values(self):
+        malformed_when_values = (
+            {"stage_id": ["session_init"], "outcome": "approved"},
+            {"stage_id": "session_init", "outcome": ["approved"]},
+        )
+
+        for when in malformed_when_values:
+            with self.subTest(when=when):
+                bad = _manifest()
+                bad["stages"][1]["when"] = when
+
+                with self.assertRaises(stage_dag.StageDagError):
+                    stage_dag.validate_manifest(bad)
+
 
 class StageDagMigrationTest(unittest.TestCase):
 
@@ -202,6 +237,53 @@ class StageDagMigrationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(stage_dag.StageDagError, "persistence"):
             stage_dag.migrate_manifest_v1(legacy)
+
+    def test_migrate_rejects_non_dict_stage(self):
+        legacy = stage_dag._creation_template_manifest_v1()
+        legacy["stages"].append("not-a-stage")
+
+        with self.assertRaisesRegex(
+                stage_dag.StageDagError, "stages\\[12\\] 必须是对象"):
+            stage_dag.migrate_manifest_v1(legacy)
+
+    def test_migrate_rejects_invalid_stage_id_shapes(self):
+        for stage_id in (None, ["session_init"], 1):
+            with self.subTest(stage_id=stage_id):
+                legacy = stage_dag._creation_template_manifest_v1()
+                if stage_id is None:
+                    legacy["stages"][0].pop("stage_id")
+                else:
+                    legacy["stages"][0]["stage_id"] = stage_id
+
+                with self.assertRaisesRegex(
+                        stage_dag.StageDagError, "stage_id"):
+                    stage_dag.migrate_manifest_v1(legacy)
+
+    def test_migrate_rejects_invalid_stage_shapes(self):
+        malformed_stages = {
+            "non_list_dependencies": {"depends_on": None},
+            "non_string_dependency": {"depends_on": [["session_init"]]},
+            "invalid_status": {"status": ["pending"]},
+            "non_confirmation_outcome": {"outcome": ["approved"]},
+        }
+
+        for name, override in malformed_stages.items():
+            with self.subTest(name=name):
+                legacy = stage_dag._creation_template_manifest_v1()
+                legacy["stages"][0].update(override)
+
+                with self.assertRaises(stage_dag.StageDagError):
+                    stage_dag.migrate_manifest_v1(legacy)
+
+    def test_migrate_rejects_missing_required_top_level_fields(self):
+        for key in ("run_id", "intent", "artifact_type", "mode", "project_root"):
+            with self.subTest(key=key):
+                legacy = stage_dag._creation_template_manifest_v1()
+                legacy.pop(key)
+
+                with self.assertRaisesRegex(
+                        stage_dag.StageDagError, key):
+                    stage_dag.migrate_manifest_v1(legacy)
 
 
 class StageDagSchedulingTest(unittest.TestCase):
