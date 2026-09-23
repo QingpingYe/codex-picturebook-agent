@@ -30,6 +30,7 @@ from jev_client import (
     JevClientError,
     UrllibTransport,
 )
+from routing import RoutingError, route_item
 from telemetry import (
     DecisionTrace,
     Stopwatch,
@@ -223,10 +224,59 @@ def build_pending_call(request: Mapping[str, Any]) -> dict:
     }
 
 
+def _answers_by_item(answers: Mapping[str, Any]) -> dict[str, dict]:
+    """Group flat `<item_id>::<question_id>` answers back into one dict per item.
+
+    Answer keys are the transport's only requirement: every answer must carry
+    the same id the question used, so the grouping is entirely mechanical.
+    """
+
+    grouped: dict[str, dict] = {}
+    for question_ref, answer in answers.items():
+        item_id, separator, question_id = str(question_ref).partition("::")
+        if not separator:
+            raise ContractError(
+                f"answer key {question_ref!r} must be '<item_id>::<question_id>'"
+            )
+        grouped.setdefault(item_id, {})[question_id] = answer
+    return grouped
+
+
+def _routes_for(
+    status: str, answers: Mapping[str, Any], operation_policy_entry: Mapping[str, Any]
+) -> tuple[dict, ...]:
+    """Route each answered item using the operation's policy.
+
+    A failed or incomplete operation produces no routes: an unrouted item must
+    be treated as needing review, never as cleared. That is also why an answer
+    set the routing engine cannot read produces no routes instead of an
+    exception: the provider call behind those answers has already been paid for,
+    so a malformed answer may cost its own item a route but must still leave the
+    operation with a terminal result.
+    """
+
+    if status != "succeeded" or not answers:
+        return ()
+    try:
+        grouped = _answers_by_item(answers)
+    except ContractError:
+        return ()
+    routes: list[dict] = []
+    for item_id, item_answers in grouped.items():
+        if not item_id:
+            continue
+        try:
+            routes.append(route_item(item_id, item_answers, operation_policy_entry))
+        except RoutingError:
+            continue
+    return tuple(routes)
+
+
 def build_result(
     *,
     request: Mapping[str, Any],
     status: str,
+    operation_policy_entry: Mapping[str, Any],
     payload: Mapping[str, Any] | None = None,
     error_class: str | None = None,
     attempts: int = 0,
@@ -244,6 +294,7 @@ def build_result(
         )
         usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
         resolved_model = payload.get("model")
+    routes = _routes_for(status, answers, operation_policy_entry)
     result = {
         "schema_version": "pb-jev-result-v1",
         "run_id": request["run_id"],
@@ -253,7 +304,7 @@ def build_result(
         "resolved_model": resolved_model,
         "policy_version": request["policy_version"],
         "answers": answers,
-        "routes": [],
+        "routes": list(routes),
         "usage": usage,
         "trace": dict(trace or {}) if status in RESULT_STATUSES_WITH_TRACE else {},
         "status": status,
@@ -417,6 +468,7 @@ def execute(request, config, client, clock=None) -> dict:
         )
         result = build_result(
             request=request, status="succeeded", payload=outcome.payload,
+            operation_policy_entry=entry,
             attempts=outcome.attempts, elapsed_ms=elapsed_ms, trace=trace,
             price_usd_per_million_input_tokens=(
                 config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
@@ -468,6 +520,7 @@ def _settle(
     )
     result = build_result(
         request=request, status=status, error_class=error_class,
+        operation_policy_entry=operation_policy(config.policy, request["operation"]),
         attempts=attempts, elapsed_ms=elapsed_ms, trace=trace,
         price_usd_per_million_input_tokens=(
             config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
@@ -569,6 +622,9 @@ def resume_operation(
             # call stays on disk until the user explicitly decides.
             return build_result(
                 request=request, status="outcome_unknown",
+                operation_policy_entry=operation_policy(
+                    config.policy, request["operation"]
+                ),
                 price_usd_per_million_input_tokens=(
                     config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
                 ),
@@ -589,6 +645,7 @@ def _superseded(request, config, operation_id, reason) -> dict:
     pending["attempt_status"] = "failed"
     result = build_result(
         request=request, status="failed", error_class="superseded",
+        operation_policy_entry=operation_policy(config.policy, request["operation"]),
         attempts=0, elapsed_ms=0,
         price_usd_per_million_input_tokens=(
             config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]

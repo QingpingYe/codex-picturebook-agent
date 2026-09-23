@@ -650,5 +650,108 @@ class CliTests(RunnerCase):
         self.assertEqual(code, 2)
 
 
+class RoutePopulationTests(RunnerCase):
+    """`routes` is per item: the answers are grouped and the rules applied."""
+
+    ITEM = "海外绘本/小老鼠迈尔斯/worldview#003"
+    CLEAR_ANSWERS = {
+        f"{ITEM}::relevant": {"type": "noul", "noul": 0.05},
+        f"{ITEM}::usable_evidence": {"type": "noul", "noul": 0.05},
+        f"{ITEM}::contradicts_task_assumption": {"type": "noul", "noul": 0.05},
+        f"{ITEM}::instruction_like_content": {"type": "noul", "noul": 0.05},
+    }
+    ITEM_QUESTIONS = {
+        f"{ITEM}::relevant": {"type": "noul", "instructions": "x"},
+        f"{ITEM}::usable_evidence": {"type": "noul", "instructions": "x"},
+        f"{ITEM}::contradicts_task_assumption": {"type": "noul", "instructions": "x"},
+        f"{ITEM}::instruction_like_content": {"type": "noul", "instructions": "x"},
+    }
+
+    def test_a_successful_result_routes_each_item(self):
+        body = json.dumps({
+            "model": "jev-1.13.0",
+            "answers": self.CLEAR_ANSWERS,
+            "usage": {"input_tokens": 100, "output_tokens": 10},
+        })
+        client, _ = self.client([TransportResponse(200, body, {})])
+        request = make_request()
+        request["questions"] = self.ITEM_QUESTIONS
+        policy = load_policy(default_policy_path())
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "exclude_soft", "label": "clearly_irrelevant",
+                       "all_of": [{"question_id": "relevant", "bands": ["clear"]}]}],
+        }
+        policy["operations"]["knowledge_relevance"]["question_templates"] = {
+            "relevant": {"type": "noul", "instructions": "x"},
+            "usable_evidence": {"type": "noul", "instructions": "x"},
+            "contradicts_task_assumption": {"type": "noul", "instructions": "x"},
+            "instruction_like_content": {"type": "noul", "instructions": "x"},
+        }
+        config = RunnerConfig(run_dir=self.run_dir, policy=policy)
+        result = run_operation(request, config, client)
+        self.assertEqual(result["routes"], [{
+            "item_id": self.ITEM,
+            "route": "exclude_soft",
+            "label": "clearly_irrelevant",
+        }])
+
+    def test_a_failed_result_carries_no_routes(self):
+        client, _ = self.client([TransportResponse(200, json.dumps(
+            {"model": "jev-1.13.0", "answers": {}, "usage": {}}), {})])
+        result = run_operation(make_request(), self.config, client)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["routes"], [])
+
+    def test_an_answer_key_without_an_item_separator_is_refused(self):
+        from jev_runner import _answers_by_item
+        from decision_contract import ContractError
+
+        with self.assertRaises(ContractError):
+            _answers_by_item({"relevant": {"type": "noul", "noul": 0.5}})
+
+    def test_an_unbandable_answer_leaves_its_item_unrouted(self):
+        # A choice answer to a noul question is a well-formed answer payload, so
+        # `validate_result` accepts it; it just cannot be placed in a band. The
+        # provider call is already paid for, so this has to settle as a terminal
+        # result rather than raise out of the runner, and the item that cannot be
+        # banded has to stay unrouted while its neighbour still routes normally.
+        other = self.ITEM.replace("#003", "#004")
+        body = json.dumps({
+            "model": "jev-1.13.0",
+            "answers": {
+                f"{self.ITEM}::relevant": {
+                    "type": "choice", "choice": "yes",
+                    "probabilities": {"yes": 1.0}, "confidence": 1.0,
+                },
+                f"{other}::relevant": {"type": "noul", "noul": 0.05},
+            },
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+        })
+        client, _ = self.client([TransportResponse(200, body, {})])
+        request = make_request(questions={
+            f"{self.ITEM}::relevant": {"type": "noul", "instructions": "x"},
+            f"{other}::relevant": {"type": "noul", "instructions": "x"},
+        })
+        result = run_operation(request, self.config, client)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual([route["item_id"] for route in result["routes"]], [other])
+        self.assertEqual(
+            read_json(result_path(self.run_dir, self.operation_id))["status"],
+            "succeeded",
+        )
+
+    def test_a_flat_question_id_set_still_settles_without_routes(self):
+        # Phase 1 shaped requests name questions without an item. They cannot be
+        # routed, and an unrouted item needs review, but the operation has to
+        # finish: aborting here would throw away a call that has already been
+        # paid for and leave a pending call with no terminal result.
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        result = run_operation(make_request(), self.config, client)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["routes"], [])
+        self.assertTrue(result_path(self.run_dir, self.operation_id).is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
