@@ -28,6 +28,20 @@ host policy enforces the call.
 | HTML build and session export output arguments | `script_checked` | `skills/illustration-export/scripts/build_html.py`, `skills/session-export/scripts/export_session.py` | Callers must provide the expected inputs before the scripts write files. |
 | Explicit user confirmation before image generation | `prompt_only` | Entry and `image-generate` Skill instructions | A caller that invokes the script directly is not blocked by a consent token. |
 | Confirmation gate and default dialog-only write policy | `prompt_only` | Entry Skill instructions | Scripts cannot prove that the user approved a write. |
+| Missing `TYPESAFE_API_KEY` means no request is constructed | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_client.py` | A missing, empty, or blank key returns `waiting_for_jev_key` and the transport is never called. |
+| Jev endpoint allowlist and disabled redirects | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_client.py` | Any URL other than `https://api.typesafe.ai/v1/systemone` is refused before the socket opens, and 3xx responses are never followed. |
+| Single-holder execution lease per operation | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_runner.py` | A second acquire while an unexpired lease exists raises `LeaseHeld`. This is a same-host local-file lease and **不提供跨主机互斥**. |
+| Terminal result lands before the pending call is cleared | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_runner.py` | `result.json` is written before `pending.json` is removed, and a resume that finds a terminal result finishes the bookkeeping instead of dispatching again. |
+| An ambiguous outcome is never resent automatically | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_runner.py` | A request that may have reached the service is recorded as `outcome_unknown`; resume reports that state again and refuses to dispatch without explicit user consent. |
+| The response model must equal the policy's pinned model | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_runner.py` | A response whose `model` differs from `pinned_model` is recorded as `model_version_mismatch` and never produces a succeeded result. |
+| Only `request.json` carries the state body on disk | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_runner.py` | `pending.json`, `decision-context.json`, the trace, and the result carry no input text; `request.json` is the one file the resume path needs, and it carries no credential. |
+| Credential arguments are refused on the command line | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_runner.py` | Any `--api-key` / `--token` / `--secret` style flag is rejected before the parser runs, and the value is never echoed. |
+| Pending call fingerprint and revision freshness | `script_checked` | `skills/jev-decision-runtime/scripts/jev_runner.py` | Resume compares the fingerprint and revision vector first and reports `superseded` on a mismatch, but a caller can still supply matching inputs. |
+| Jev request, result, and trace schema | `script_checked` | `skills/jev-decision-runtime/scripts/decision_contract.py` | Invalid requests, invalid results, and missing answer ids raise `ContractError`. |
+| Cost and token accounting | `script_checked` | `skills/jev-decision-runtime/scripts/telemetry.py` | Cost stays decimal and fixed-point; missing usage yields null tokens and null cost instead of a character-count guess. |
+| The first response asks for the execution choice | `prompt_only` | Entry Skill instructions | Scripts cannot prove the question really came first. |
+| A missing key waits instead of falling back to the plain LLM | `prompt_only` | Entry and `jev-decision-runtime` instructions | A caller that invokes the runner directly is not blocked by a consent token. |
+| Jev is only called after the user chooses it | `prompt_only` | Entry Skill instructions | There is no host-level prevention. |
 
 Use host-level permissions, approval prompts, or hooks when a guarantee must
 hold even if a model ignores the Skill instructions.

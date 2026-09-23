@@ -22,6 +22,11 @@ RUN_SCHEMA = "pb-stage-run-v2"
 TASK_SCHEMA = "pb-stage-task-v1"
 RESULT_SCHEMA = "pb-stage-result-v1"
 
+# Attached to a run manifest by the entry skill's execution choice gate. The
+# validator tolerates it as an ordinary extra field, so v2 manifests written
+# before the gate existed stay readable.
+DECISION_CONTEXT_SCHEMA = "pb-decision-context-v1"
+
 RUN_STATUSES = {
     "pending", "running", "blocked", "completed", "failed", "cancelled",
 }
@@ -1094,7 +1099,13 @@ def _validate_revision_source(project_root, artifact_ref):
         raise StageDagError(f"artifact_ref 不可读：{artifact_ref!r}")
 
 
-def build_revision_manifest(parent_run, feedback, artifact_ref, run_id):
+def build_revision_manifest(
+    parent_run,
+    feedback,
+    artifact_ref,
+    run_id,
+    decision_context=None,
+):
     """从已请求修订的父 run 创建下一轮 revision run。"""
     parent = validate_manifest(parent_run)
     if parent["status"] != "completed":
@@ -1120,6 +1131,8 @@ def build_revision_manifest(parent_run, feedback, artifact_ref, run_id):
     manifest["project_root"] = parent["project_root"]
     manifest["revision_feedback"] = copy.deepcopy(feedback)
     manifest["source_artifact_ref"] = artifact_ref
+    if decision_context is not None:
+        manifest["decision_context"] = copy.deepcopy(decision_context)
     return validate_manifest(manifest)
 
 

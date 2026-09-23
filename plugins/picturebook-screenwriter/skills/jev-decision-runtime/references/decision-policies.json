@@ -1,0 +1,28 @@
+{
+  "schema_version": "pb-jev-policy-v1",
+  "pinned_model": "jev-1.13.0",
+  "output_tokens_free": true,
+  "price_snapshot": {
+    "price_usd_per_million_input_tokens": "0.042",
+    "snapshot_date": "2026-09-23"
+  },
+  "operations": {
+    "knowledge_relevance": {
+      "policy_version": "knowledge-relevance-v1",
+      "calibration_status": "experimental",
+      "fallback_route": "escalate_llm",
+      "routing": {}
+    },
+    "text_quality_prefilter": {
+      "policy_version": "text-quality-prefilter-v1",
+      "calibration_status": "experimental",
+      "fallback_route": "escalate_llm",
+      "routing": {}
+    }
+  },
+  "notes": [
+    "question_templates 与 routing 表由 Phase 2/3 的 operation 策略填充。",
+    "experimental 期间 screened_clear 不得缩减普通 LLM 复核范围。",
+    "阈值必须由本项目的中文绘本样本校准后逐 operation 转为 calibrated。"
+  ]
+}

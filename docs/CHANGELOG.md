@@ -11,6 +11,7 @@
 - Self-contained HTML preview and illustration asset registry.
 - Workspace-first Feishu config discovery, config status, and read-only authority CLI.
 - Portable Feishu config discovery for project subdirectories, user directories, and shared plugin distribution.
+- Jev-assisted decision layer infrastructure: an explicit execution choice gate, `pb-decision-context-v1` propagation, credential waiting and recovery points, a single-holder execution lease, atomic terminal results, decimal cost estimation, and benchmark case alignment.
 
 ### Changed
 
@@ -18,6 +19,7 @@
 - Stage workflows now represent approval and revision as exclusive outcomes.
 - Revision rounds create new runs and rerun preflight, collision, and QA checks.
 - v1 run manifests require explicit migration.
+- The entry workflow now opens with an `## Execution Choice Gate` before intent classification on every top-level request.
 
 ### Fixed
 

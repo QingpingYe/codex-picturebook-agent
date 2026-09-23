@@ -223,5 +223,70 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn(f"@{marketplace['name']}", text)
 
 
+class JevExecutionChoiceContractTests(unittest.TestCase):
+    def _contract(self):
+        return json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+    def test_contract_declares_execution_choice_gate(self):
+        self.assertEqual(
+            self._contract()["execution_choice"],
+            {
+                "gate_position": "before_intent_classification",
+                "question_scope": "once_per_root_run",
+                "modes": ["llm", "jev_assisted"],
+                "pending_state": "waiting_for_execution_choice",
+                "decision_context_schema": "pb-decision-context-v1",
+            },
+        )
+
+    def test_contract_declares_jev_runtime_boundary(self):
+        runtime = self._contract()["jev_runtime"]
+        self.assertEqual(runtime["endpoint"], "https://api.typesafe.ai/v1/systemone")
+        self.assertEqual(runtime["credential_env"], "TYPESAFE_API_KEY")
+        self.assertEqual(runtime["credential_sources"], ["environment"])
+        self.assertEqual(runtime["key_logging"], "forbidden")
+        self.assertEqual(runtime["base_url_override"], "forbidden")
+        self.assertEqual(runtime["redirects"], "disabled")
+        self.assertEqual(runtime["pinned_model"], "jev-1.13.0")
+        self.assertEqual(runtime["moving_model_aliases"], "forbidden")
+        self.assertEqual(
+            runtime["operations"], ["knowledge_relevance", "text_quality_prefilter"]
+        )
+
+    def test_contract_registers_the_runtime_skill(self):
+        self.assertIn("jev-decision-runtime", self._contract()["skills"])
+
+    def test_execution_choice_schema_matches_the_runtime_constant(self):
+        self.assertEqual(
+            self._contract()["execution_choice"]["decision_context_schema"],
+            stage_dag.DECISION_CONTEXT_SCHEMA,
+        )
+
+
+class JevPhase1DocumentationTests(unittest.TestCase):
+    def test_enforcement_matrix_documents_the_jev_gates(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for required in (
+            "jev_runner.py",
+            "jev_client.py",
+            "waiting_for_jev_key",
+            "outcome_unknown",
+            "model_version_mismatch",
+            "request.json",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+    def test_enforcement_matrix_does_not_overclaim_the_lease(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        self.assertIn("不提供跨主机互斥", text)
+
+    def test_plugin_readme_documents_the_jev_credential_environment(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertIn("TYPESAFE_API_KEY", text)
+        self.assertIn("jev-decision-runtime", text)
+        self.assertIn("不得把密钥粘贴到对话中", text)
+
+
 if __name__ == "__main__":
     unittest.main()
