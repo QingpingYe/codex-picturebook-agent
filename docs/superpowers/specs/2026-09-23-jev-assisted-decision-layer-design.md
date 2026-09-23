@@ -53,12 +53,20 @@ Jev 只适合第 2 类。它返回 `Noul`、`Choice` 或 `Score` 类型化概率
 依据：
 
 - https://docs.typesafe.ai/models
+- https://docs.typesafe.ai/api
 - https://docs.typesafe.ai/model-jaggedness/jev-1.13
 - https://docs.typesafe.ai/primitives
 - https://docs.typesafe.ai/confidence
 - https://github.com/typesafe-ai/skills/blob/main/skills/typesafe-ai/SKILL.md
 
 文档《TypeSafe调研结论与绘本编剧工坊质检启发.md》关于“不能替代可解释终审”“计数留在代码”“原子问题由代码组合”的方向成立。文档中的第三方精确性能数字未提供全部原始复现实验链接，因此不作为本设计的验收基线；本插件必须自行测量中文绘本样本。
+
+本机已安装的 `typesafe-ai` skill 已核对。它是供 Codex/Agent 阅读的 Jev 设计指南和官方文档入口，说明如何选择 `Noul`、`Choice`、`Score`、拆分问题、设置阈值和处理失败；该 `SKILL.md` 没有定义可调用的 transport/runtime 接口，也没有提供会自动发送请求的运行时脚本。因此：
+
+- 可以在设计和实现期间使用该 skill 指导 Jev 集成；
+- 不能仅靠“调用 skill”完成一次 Jev API 请求；
+- 真正运行仍需要插件内的 HTTP/SDK client 和有效的 `TYPESAFE_API_KEY`；
+- 发布后的插件不能依赖某个用户目录下的全局 skill 路径，必须自带最小运行器。全局 `typesafe-ai` skill 存在时只作为开发与维护指导，不作为运行时依赖。
 
 ## 3. 目标
 
@@ -69,8 +77,9 @@ Jev 只适合第 2 类。它返回 `Noul`、`Choice` 或 `Score` 类型化概率
 5. 用确定型切分加 Jev 概率判断缩减送入普通 LLM 的知识上下文。
 6. 用 Jev 对全部活动红线和逐页质量维度做原子预筛，只把高风险、灰区和异常项升级给普通 LLM。
 7. 为普通 LLM 与 Jev 辅助两种路径生成同口径运行记录，便于结合 CC Switch 比较耗时、token 和成本。
-8. Jev 缺 key、超时、返回不完整或调用失败时，不得把任何项目判为通过，也不得静默切换执行路径。
-9. 保持项目权威、用户确认、写入许可和外部副作用仍由现有流程控制。
+8. Jev 缺少或无法认证 key 时进入可恢复的凭证等待状态；用户在本机安全配置后，从原待执行 operation 继续。
+9. Jev 超时、返回不完整或调用失败时，不得把任何项目判为通过，也不得静默切换执行路径。
+10. 保持项目权威、用户确认、写入许可和外部副作用仍由现有流程控制。
 
 ## 4. 非目标
 
@@ -106,6 +115,7 @@ Jev 只适合第 2 类。它返回 `Noul`、`Choice` 或 `Score` 类型化概率
 - 启用：将相关故事文本和知识片段发送给 TypeSafe Jev，
   用于知识筛选及文本质检预筛；创作、解释性终审和修改建议仍由普通 LLM 完成。
   尚未校准的检查会保留普通 LLM 全量复核，用于比较和校准。
+  若本机尚未配置 Jev key，选择后会暂停并引导你在本机安全配置，再从原任务继续。
 ```
 
 该问题不得与简报问题合并。用户未回答时，工作流保持 `waiting_for_execution_choice`，不继续执行。
@@ -121,16 +131,35 @@ Jev 只适合第 2 类。它返回 `Noul`、`Choice` 或 `Score` 类型化概率
 
 ### 5.3 Jev 不可用时
 
-用户选择 `jev_assisted` 后才检查 `TYPESAFE_API_KEY`。以下情况必须暂停并让用户选择“改用普通 LLM”或“停止本次工作流”：
+用户选择 `jev_assisted` 后才检查 `TYPESAFE_API_KEY`。缺少 key 时进入 `waiting_for_jev_key`，而不是失败、自动回退或重新询问执行方式。对用户使用固定提示：
 
-- 缺少 key；
-- 401/403；
+```text
+尚未检测到 TYPESAFE_API_KEY。请在运行 Codex 的本机环境中安全配置该变量，
+然后回复“已配置”；我会从当前待执行步骤继续。请不要把密钥粘贴到对话中。
+如果当前 Codex 进程无法读取新设置，请重启 Codex，回到本任务后回复“已配置”。
+```
+
+凭证等待与恢复规则：
+
+- 缺 key 发生在首个 API operation 之前时，保存 `run_id` 和可恢复的 workflow `resume_cursor`；发生在已构造请求之后时，额外保存不可变 `pending_call` 描述符，不保存 key 或 Authorization。
+- `pending_call` 至少包含 `operation_id`、operation 类型、请求 fingerprint、模型/策略版本，以及带 revision/hash 的输入引用；它必须足以从本地已有产物确定性重建原请求。
+- 用户回复已配置后，运行器重新读取环境变量，校验输入引用、revision 和 fingerprint，再恢复待执行 operation。
+- 若来源已变化，旧 `pending_call` 标记为 `superseded`，按当前输入重建新 operation 并在对话中说明；不得把变化后的输入冒充原请求续跑。
+- 不重新询问 Jev 选择，不重复已经完成的知识加载、确定型扫描或其他阶段。
+- 同一 `operation_id` 同时只能由一个 runner 持有未过期执行 lease；只有响应通过 schema 校验并以终态原子持久化后，才能清除 `pending_call`。
+- 请求已发出但无法判断服务端是否完成时，标记 `outcome_unknown`，不得自动重发；用户显式同意重试后才创建新 attempt，以免重复计费。
+- 401 视为 key 缺失或无效，进入 `waiting_for_jev_key`；403 进入 `waiting_for_jev_access`，提示检查 key、账号/组织权限和模型访问权，修正后仍可从相同恢复点继续。
+- 用户始终可以显式要求改用普通 LLM；只有这时才记录路径切换。
+- 凭证等待时间不计入 Jev API 延迟或模型耗时；这次未真正开始的调用不进入速度基准样本。
+
+以下非凭证情况必须暂停当前 operation，报告错误并等待用户重试、显式切换普通 LLM 或停止：
+
 - 422 请求契约错误；
 - 限次重试后仍为 429/529；
 - 网络超时或响应 schema 不完整；
 - 返回模型版本不符合已校准策略。
 
-不得静默回退普通 LLM，因为这会破坏用户对速度和成本路径的选择，也会使对比数据失真。
+任何情况都不得静默回退普通 LLM，因为这会破坏用户对速度和成本路径的选择，也会使对比数据失真。
 
 ## 6. 总体架构
 
@@ -169,6 +198,16 @@ plugins/picturebook-screenwriter/skills/jev-decision-runtime/
 
 入口技能、`knowledge-loader`、`pre_output-baseline` 与 `quality-baseline` 只依赖共享运行器，不各自实现 HTTP、重试或计费逻辑。
 
+已安装的全局 `typesafe-ai` skill 与共享运行器分工如下：
+
+| 组件 | 作用 | 是否能直接调用 Jev |
+| --- | --- | --- |
+| 全局 `typesafe-ai` skill | 提供原语选择、问题设计、阈值、失败处理和官方资料指引 | 否；它是 Agent 指令，不是 transport |
+| 插件内 `jev-decision-runtime` | 构造请求、认证、调用 API、校验响应、重试、路由和记录成本 | 是 |
+| `TYPESAFE_API_KEY` | 给 HTTP/SDK client 提供服务凭证 | 是运行前提，但绝不写入 skill、manifest 或 trace |
+
+首版优先使用插件自带、依赖最少的 HTTP client；未来即使 TypeSafe skill 或插件提供正式可调用工具，也只能新增可选 transport adapter，不能改变上层 operation 契约。
+
 ### 6.2 与 Stage DAG 的关系
 
 Stage DAG 继续只负责状态、依赖和确认条件，不引入 `jev` assignee，也不新增 Jev stage。
@@ -180,6 +219,9 @@ Stage DAG 继续只负责状态、依赖和确认条件，不引入 `jev` assign
   "schema_version": "pb-decision-context-v1",
   "mode": "jev_assisted",
   "selection_status": "confirmed",
+  "credential_status": "unchecked",
+  "resume_cursor": "after_execution_choice",
+  "pending_call": null,
   "selected_at": "2026-09-23T10:30:00+08:00",
   "external_text_processing_acknowledged": true
 }
@@ -188,6 +230,10 @@ Stage DAG 继续只负责状态、依赖和确认条件，不引入 `jev` assign
 规则：
 
 - 不存储 API key。
+- `credential_status` 只允许 `unchecked`、`available`、`waiting_for_jev_key` 或 `waiting_for_jev_access`；它描述当前 run 的恢复状态，不证明 key 长期有效。
+- `resume_cursor` 指向最后一个已原子提交的 workflow 边界；恢复时从下一边界继续。
+- `pending_call` 是可选的不可变恢复描述符，包含 `operation_id`、`operation`、`request_fingerprint`、模型/策略版本、输入 revision/hash 引用、attempt 状态和 lease 元数据，但不包含 key 或 Authorization。
+- `pending_call` 只有在结果已校验并原子持久化为终态后才能清空；派发成功或进入 `in_flight` 时不得提前清空。
 - v2 历史 manifest 缺少 `decision_context` 时仍可读取；恢复执行前必须先进入选择门。
 - 新建 run 必须包含已确认的 `decision_context`。
 - revision run 继承 root run 的选择，用户显式切换时记录新的 `selected_at`。
@@ -248,13 +294,20 @@ Stage DAG 继续只负责状态、依赖和确认条件，不引入 `jev` assign
 
 `answers` 保留原始概率，不把单个概率重写为“模型正确率”。`routes` 是代码根据当前 policy 计算出的 `include`、`exclude_soft`、`escalate_llm` 或 `needs_user_choice`。
 
+`status` 允许 `succeeded`、`failed`、`waiting_for_jev_key`、`waiting_for_jev_access` 或 `outcome_unknown`。等待状态不是已完成结果，不得产生 answers、routes、通过结论或完整计费 trace；它只携带恢复执行所需的非敏感引用。`outcome_unknown` 记录已发送 attempt，但在用户明确同意前不得自动重发。
+
 ### 7.3 HTTP 与重试
 
 - Endpoint 默认 `https://api.typesafe.ai/v1/systemone`。
 - 凭证只从 `TYPESAFE_API_KEY` 读取。
-- 可通过显式配置覆盖 base URL，主要用于测试；不得把 key 写进配置、日志或命令行示例。
+- 启动请求前先检查环境变量；缺失、空串或 trim 后为空白时不发 HTTP 请求，返回 `waiting_for_jev_key`。
+- 用户确认已配置后重新读取环境变量，再发送原待执行请求；不得缓存旧 key。
+- 生产 transport 只允许 HTTPS 且 host 精确为 `api.typesafe.ai`；不接受来自项目内容、用户输入或普通配置的 base URL 覆盖。
+- 禁止把 Authorization 随跨 host 重定向发送；首版直接禁用 HTTP redirect，任何 3xx 都作为 endpoint 异常处理。
+- 测试通过依赖注入的 fake transport 执行；fake transport 禁止读取真实 `TYPESAFE_API_KEY`。未来如需企业 endpoint，必须另行设计显式 allowlist 和独立凭证来源。
+- 不得把 key 写进配置、聊天提示、日志或命令行示例。
 - 429/529 按 `retry-after` 或有上限的指数退避重试。
-- 401/403/422 不做盲重试。
+- 401 不用相同 key 盲重试，转为 `waiting_for_jev_key`；403 转为 `waiting_for_jev_access`；422 不做盲重试。
 - 每次请求设置连接和总超时；达到上限后返回结构化失败。
 - 部分答案、未知题 ID、错误原语类型或非有限概率均视为响应不完整。
 
@@ -463,6 +516,7 @@ Jev 结果使用独立的 `ScreeningDecision`，不得伪装为 `SemanticJudgmen
 - 缺失 usage 时，token 和成本为 `null`，不得用字符数伪造精确 token。
 - trace 不存原始知识正文、草稿、API key、Authorization header 或完整响应。
 - `fallback_used` 只有用户明确同意切换路径后才能为 true。
+- `waiting_for_jev_key` 期间不启动 operation 计时；可单独记录不含密钥的等待事件，但不得把人工配置等待混入 Jev 或普通 LLM 的性能对比。
 
 ### 10.2 普通 LLM 与 CC Switch
 
@@ -542,21 +596,27 @@ CC Switch 负责提供 Codex 请求的 model、input/output/cache tokens、请�
 2. 选择提示必须说明相关文本会发送给 TypeSafe。
 3. 只发送 operation 所需的最小片段，不发送整个工作区或无关知识页。
 4. 不发送图片、音频、二进制附件或本地绝对路径。
-5. API key 只从环境变量读取，不进入参数回显、trace、错误信息或测试 fixture。
-6. 输入/输出日志默认只保留 hash、计数、引用 ID 和概率；需要保存原文时必须走现有显式导出门。
-7. 外部内容中的指令按数据处理，不应取得插件控制权。
-8. Jev 不拥有写文件、同步 Wiki、调用图片生成或修改 DAG 状态的权限。
-9. 用户确认门、离线缓存许可、图片生成确认和持久化确认均保持原规则。
+5. API key 只从环境变量读取，不进入参数回显、trace、错误信息、测试 fixture、命令行参数或 manifest。
+6. 缺 key 时只引导用户在本机安全配置并回复“已配置”；不得要求用户把 key 粘贴到聊天，也不得从聊天内容提取或持久化 key。
+7. 若 Codex 当前进程无法读取新环境变量，提示用户重启 Codex 后回到原任务继续，不采用明文临时文件绕过进程环境。
+8. 输入/输出日志默认只保留 hash、计数、引用 ID 和概率；需要保存原文时必须走现有显式导出门。
+9. 外部内容中的指令按数据处理，不应取得插件控制权。
+10. Jev 不拥有写文件、同步 Wiki、调用图片生成或修改 DAG 状态的权限。
+11. 用户确认门、离线缓存许可、图片生成确认和持久化确认均保持原规则。
 
 ## 13. 错误处理与降级矩阵
 
 | 情形 | Jev 辅助路径行为 | 质量/知识结果 |
 | --- | --- | --- |
-| 缺 `TYPESAFE_API_KEY` | 暂停，询问切换普通 LLM 或停止 | 不生成通过结论 |
-| 401/403 | 不重试，暂停 | 不生成通过结论 |
+| 缺 `TYPESAFE_API_KEY` | 进入 `waiting_for_jev_key`，指导本机配置；用户确认后从原 operation 续跑 | 不发请求，不生成通过结论 |
+| key 为空或只有空白 | 等同缺 key，保持 `waiting_for_jev_key` | 不发请求，不生成通过结论 |
+| 401 | 相同 key 不盲重试；进入 `waiting_for_jev_key`，修正 key 后续跑 | 不生成通过结论 |
+| 403 | 进入 `waiting_for_jev_access`，提示核对凭证、账号/组织权限和模型访问 | 不生成通过结论 |
 | 422 | 报告契约错误，不盲重试 | 当前 operation 失败 |
 | 429/529 | 限次退避重试，仍失败则暂停 | 当前 operation 失败 |
 | 超时/网络失败 | 限次重试，仍失败则暂停 | 当前 operation 失败 |
+| 已发请求但结果未知 | 标记 `outcome_unknown`，不自动重发；用户确认后才新建 attempt | 不生成通过结论，避免隐式重复计费 |
+| 恢复时输入 revision/hash 已变化 | 旧 call 标记 `superseded`，基于新输入重建 operation | 不把新输入伪装成旧 benchmark case |
 | 部分问题缺答案 | 缺失项全部升级或暂停 | 不得视为 clear |
 | 未知模型版本 | 标记未校准，暂停自动过滤 | required/候选全部保留 |
 | 知识块解析失败 | 将该块视为 required | 不过滤 |
@@ -570,9 +630,19 @@ CC Switch 负责提供 Codex 请求的 model、input/output/cache tokens、请�
 共享运行器：
 
 - 请求/响应 schema 校验；
-- key 缺失；
+- key 缺失时不发 HTTP 请求并返回 `waiting_for_jev_key`；
+- 空串/全空白 key 等同缺失；
+- 注入可用 key 后从同一 `resume_cursor` / `pending_call` 恢复，且不重复已完成阶段；
+- 401 后替换 key 可恢复，原 key 不盲重试；403 进入独立 access 等待状态；
+- pending call 的 fingerprint/revision freshness 校验；
+- lease 互斥、终态原子提交、完成前不清除 pending call；
+- `outcome_unknown` 不自动重发；
+- 生产 endpoint allowlist，fake transport 不读取真实环境 key；
+- 凭证等待不计入模型延迟或有效 benchmark 样本；
 - Authorization 不泄漏；
-- 401/403/422 不重试；
+- 聊天提示、manifest、trace、错误和命令行均不包含 key；
+- 全局 `typesafe-ai` skill 不存在时，插件内运行器仍能工作；
+- 422 不重试；
 - 429/529 与 timeout 限次重试；
 - `retry-after`；
 - 部分回答、错误题 ID、错误原语和非法概率；
@@ -606,6 +676,8 @@ CC Switch 负责提供 Codex 请求的 model、input/output/cache tokens、请�
 - 选择前不得加载知识、派发子 Agent 或调用 API；
 - 普通 LLM 路径不探测 Jev key；
 - Jev 路径才检查 key；
+- 缺 key 时提示本机配置，不提示在对话中提交 key；
+- 凭证恢复后不重复询问执行选择；
 - revision run 继承选择；
 - 新 root run 重新询问。
 
@@ -624,6 +696,9 @@ CC Switch 负责提供 Codex 请求的 model、input/output/cache tokens、请�
 - 入口执行选择门。
 - `decision_context` 传播。
 - 共享 Jev utility skill 与 HTTP client。
+- `waiting_for_jev_key` 凭证门、恢复点和安全提示。
+- pending call fingerprint、revision freshness、lease 与原子终态。
+- 生产 endpoint allowlist 与隔离真实凭证的 fake transport。
 - 请求/响应/trace 契约。
 - 计时、usage、成本估算和 benchmark case ID。
 - fake transport、错误处理和安全测试。
@@ -661,7 +736,10 @@ CC Switch 负责提供 Codex 请求的 model、input/output/cache tokens、请�
 7. 每个 operation 产出可审计的模型版本、策略版本、概率、路由、时间、usage 和成本估算。
 8. 同一 `benchmark_case_id` 能把两种路径的结果并排比较。
 9. trace 和错误输出不包含 API key、Authorization、完整正文或图片数据。
-10. 全部现有离线测试通过，新增测试覆盖成功、灰区、失败和显式切换路径。
+10. 缺少、空白或无效 key 时进入 `waiting_for_jev_key`；用户本机配置后能从已校验的恢复点继续，且不重复已完成阶段或污染测速数据。
+11. 403、来源变化和结果未知均有独立状态；系统不会误导用户反复换 key、用旧 fingerprint 续跑或在结果未知时自动产生重复调用。
+12. 即使目标用户没有安装全局 `typesafe-ai` skill，插件内共享运行器也能独立调用官方 API；该 skill 只作为设计与维护指导。
+13. 全部现有离线测试通过，新增测试覆盖成功、灰区、失败、凭证恢复和显式切换路径。
 
 ## 17. 后续扩展点
 
@@ -679,6 +757,8 @@ CC Switch 负责提供 Codex 请求的 model、input/output/cache tokens、请�
 - 用户先选路径，再执行插件任何实质工作。
 - 对用户呈现的是“普通 LLM”与“Jev 辅助”，不是两个等价生成模型。
 - Stage DAG 不感知供应商，只携带选择上下文。
+- 全局 `typesafe-ai` skill 指导问题设计，但实际调用由插件自带共享运行器完成。
+- 缺 key 时进入可恢复等待状态；用户本机配置后原地续跑，不要求在聊天中提交秘密。
 - Jev 只做原子概率判断，代码拥有政策和路由。
 - 普通 LLM 保留生成、解释性终审和修改建议。
 - 知识筛选只过滤 soft chunk；硬约束永久保留。
