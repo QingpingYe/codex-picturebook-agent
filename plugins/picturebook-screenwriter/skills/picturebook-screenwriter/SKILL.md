@@ -7,6 +7,42 @@ description: Picture book screenwriting workshop entry workflow. Use when the us
 
 把用户请求当作一次绘本编辑部工作流处理。你自己承担四个内部角色：主编、编剧、质检、知识管理。本插件是 Codex 原生实现，不依赖 WorkBuddy 的 TeamCreate、SendMessage 或原生 hooks；当前支持飞书权威知识检索与同步、需要用户明确确认的插画工作流，以及在 Codex 多 Agent 工具可用时的可选阶段 DAG 派发。多 Agent 工具不可用时，使用同一条件决策引擎顺序降级。
 
+## Execution Choice Gate
+
+本技能匹配到用户请求后，**第一件事**是建立执行选择。在拿到选择之前，不得做意图分类、简报追问、飞书或本地知识读取、子 Agent 派发、创作或质检、外部 API 调用或文件写入。工作流保持 `waiting_for_execution_choice`。
+
+第一响应只问一次，不得与简报问题合并：
+
+```text
+本次是否启用 Jev 辅助？
+
+- 不启用：沿用普通 LLM 完整流程。
+- 启用：将相关故事文本和知识片段发送给 TypeSafe Jev，
+  用于知识筛选及文本质检预筛；创作、解释性终审和修改建议仍由普通 LLM 完成。
+  尚未校准的检查会保留普通 LLM 全量复核，用于比较和校准。
+  若本机尚未配置 Jev key，选择后会暂停并引导你在本机安全配置，再从原任务继续。
+```
+
+规则：
+
+1. 只接受 `llm` 与 `jev_assisted` 两个值，并构造 `pb-decision-context-v1` 附加到 run manifest 和子 Agent task envelope。
+2. 选择作用于一个 root run 及其 revision runs；同一 root run 内不重复询问，新的顶层创作、审稿、知识或插画请求必须重新询问。
+3. 选择 `llm` 时**不得探测** `TYPESAFE_API_KEY`，也不得加载 Jev 运行器；只有选择 `jev_assisted` 后才检查凭证。
+4. 用户选择 `jev_assisted` 但当前意图没有首轮支持的 Jev 操作时，仍记录选择，并明确说明该阶段暂时沿用普通 LLM 或确定型脚本。
+5. 用户未回答时保持 `waiting_for_execution_choice`，不继续执行。
+6. 缺 key 时进入 `waiting_for_jev_key`，使用以下固定提示，**不得**要求用户把密钥粘贴到对话中，也不得自动回退普通 LLM：
+
+   ```text
+   尚未检测到 TYPESAFE_API_KEY。请在运行 Codex 的本机环境中安全配置该变量，
+   然后回复“已配置”；我会从当前待执行步骤继续。请不要把密钥粘贴到对话中。
+   如果当前 Codex 进程无法读取新设置，请重启 Codex，回到本任务后回复“已配置”。
+   ```
+
+7. 用户本机配置后回复“已配置”时，先校验输入 revision 与 fingerprint，再从原待执行 operation 续跑；不得重新询问执行选择，也不得重复已完成的知识加载或确定型扫描。
+8. 请求已发出但无法判断服务端是否完成时标记 `outcome_unknown`，不得自动重发。
+9. 只有用户明确要求切换时，才记录路径切换并把 `fallback_used` 记为 true。
+10. 不得把密钥写进插件目录、manifest、`decision-context.json`、trace 或日志。
+
 ## Workflow
 
 1. **Intent**: classify the request as `creation`, `revision`, `review`, `knowledge`, or `illustration`.

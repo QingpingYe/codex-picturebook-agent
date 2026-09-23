@@ -94,5 +94,31 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("多人协作飞书知识库同步与权威检索", manifest["interface"]["longDescription"])
 
 
+class ExecutionChoiceGateTests(unittest.TestCase):
+    def test_entry_asks_the_execution_choice_before_anything_else(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("## Execution Choice Gate", text)
+        self.assertIn("本次是否启用 Jev 辅助？", text)
+        self.assertLess(
+            text.index("## Execution Choice Gate"),
+            text.index("**Intent**"),
+            "执行选择门必须排在意图分类之前",
+        )
+
+    def test_entry_records_the_choice_as_decision_context(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("pb-decision-context-v1", text)
+        self.assertIn("waiting_for_execution_choice", text)
+
+    def test_entry_never_asks_for_a_key_in_the_chat(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("TYPESAFE_API_KEY", text)
+        self.assertIn("请不要把密钥粘贴到对话中", text)
+
+    def test_entry_does_not_probe_the_key_on_the_llm_path(self):
+        text = ENTRY_SKILL.read_text(encoding="utf-8")
+        self.assertIn("不得探测", text)
+
+
 if __name__ == "__main__":
     unittest.main()

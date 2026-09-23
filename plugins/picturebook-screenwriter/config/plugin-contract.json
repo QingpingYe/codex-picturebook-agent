@@ -92,6 +92,16 @@
     "run_schema": "pb-stage-run-v2",
     "runtime_source": "scripts/stage_dag.py"
   },
+  "execution_choice": {
+    "gate_position": "before_intent_classification",
+    "question_scope": "once_per_root_run",
+    "modes": [
+      "llm",
+      "jev_assisted"
+    ],
+    "pending_state": "waiting_for_execution_choice",
+    "decision_context_schema": "pb-decision-context-v1"
+  },
   "jev_runtime": {
     "skill": "jev-decision-runtime",
     "endpoint": "https://api.typesafe.ai/v1/systemone",
