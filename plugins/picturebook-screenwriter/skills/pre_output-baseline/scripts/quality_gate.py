@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -43,18 +43,17 @@ class QualityReport:
 
 def build_report(findings: Iterable[Finding]) -> QualityReport:
     values = tuple(findings)
-    violations = tuple(
-        finding for finding in values if finding.source in BLOCKING_SOURCES
-    )
-    blocked = tuple(
-        finding.message for finding in violations if finding.severity == "FAIL"
-    )
     # An authoritative finding is a recorded violation whether or not its
     # severity field still reads FAIL: a severity someone softened must not
-    # turn a confirmed red-line breach into a pass.
+    # turn a confirmed red-line breach into a pass, so every authority finding
+    # blocks and is named in `blocked_reasons`.
+    blocked = tuple(
+        finding.message for finding in values
+        if finding.source in BLOCKING_SOURCES
+    )
     status = "blocked" if blocked else (
         "needs_user_decision"
-        if violations or any(finding.severity == "FAIL" for finding in values)
+        if any(finding.severity == "FAIL" for finding in values)
         else "passed"
     )
     return QualityReport(status, values, blocked)
@@ -119,6 +118,7 @@ def promote_confirmed_redlines(
             result.append(replace(
                 finding,
                 source=AUTHORITY_SOURCE,
+                severity="FAIL",
                 message=f"{finding.message}；终审确认：{judgment.rationale}",
                 evidence=judgment.evidence or finding.evidence,
             ))

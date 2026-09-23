@@ -47,9 +47,11 @@ class BuildReportTests(unittest.TestCase):
         self.assertEqual(len(report.blocked_reasons), 2)
 
     def test_a_downgraded_authority_still_blocks(self):
-        # severity PASS on an authority source is still a recorded violation.
-        self.assertEqual(build_report([authority(severity="PASS")]).status,
-                         "needs_user_decision")
+        # severity PASS on an authority source is still a recorded violation:
+        # a softened severity must never turn a confirmed breach into a pass.
+        report = build_report([authority(severity="PASS")])
+        self.assertEqual(report.status, "blocked")
+        self.assertEqual(len(report.blocked_reasons), 1)
 
 
 class ApplyJudgmentsTests(unittest.TestCase):
@@ -85,6 +87,17 @@ class PromoteConfirmedRedlinesTests(unittest.TestCase):
         self.assertEqual(result[0].source, AUTHORITY_SOURCE)
         self.assertEqual(result[0].severity, "FAIL")
         self.assertIn("终审确认", result[0].message)
+
+    def test_a_confirmed_candidate_is_promoted_as_a_failure(self):
+        # A candidate recorded with a softer severity must still block once the
+        # review confirms it, otherwise promotion would create an authoritative
+        # finding that does not block.
+        result = promote_confirmed_redlines(
+            [proxy(severity="WARN")], [SemanticJudgment("R1", "FAIL", "确实违反", "第 5 页")]
+        )
+        self.assertEqual(result[0].source, AUTHORITY_SOURCE)
+        self.assertEqual(result[0].severity, "FAIL")
+        self.assertEqual(build_report(result).status, "blocked")
 
     def test_an_unconfirmed_proxy_hit_stays_a_candidate(self):
         result = promote_confirmed_redlines(
@@ -122,6 +135,31 @@ class RenderTests(unittest.TestCase):
         text = report_to_markdown(report)
         self.assertIn("## 质量报告", text)
         self.assertIn("阻断原因：", text)
+
+    def test_json_pins_the_confirmation_package_values(self):
+        # The package is consumed by other stages, so its field values are
+        # pinned for one fixture rather than only their shapes.
+        report = build_report([proxy(), authority("R2")])
+        self.assertEqual(report_to_json(report), {
+            "status": "blocked",
+            "findings": [
+                {
+                    "id": "R1",
+                    "source": PROXY_SOURCE,
+                    "severity": "FAIL",
+                    "message": "疑似红线",
+                    "evidence": "角色不能飞行",
+                },
+                {
+                    "id": "R2",
+                    "source": AUTHORITY_SOURCE,
+                    "severity": "FAIL",
+                    "message": "确认违反角色红线",
+                    "evidence": "角色不能飞行",
+                },
+            ],
+            "blocked_reasons": ["确认违反角色红线"],
+        })
 
 
 if __name__ == "__main__":
