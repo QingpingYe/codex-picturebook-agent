@@ -296,7 +296,14 @@ class JevPhase2DocumentationTests(unittest.TestCase):
 
     def test_enforcement_matrix_documents_the_screening_gates(self):
         text = ENFORCEMENT.read_text(encoding="utf-8")
-        for required in ("required_marking.py", "recall.py", "dependency_bundle"):
+        for required in (
+            "required_marking.py",
+            "recall.py",
+            "dependency_bundle",
+            "run_operation",
+            "more than one call to continue",
+            "re-sends a record it cannot read",
+        ):
             with self.subTest(required=required):
                 self.assertIn(required, text)
 

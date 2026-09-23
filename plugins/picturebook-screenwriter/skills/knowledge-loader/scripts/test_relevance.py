@@ -16,16 +16,20 @@ from decision_contract import load_policy, default_policy_path  # noqa: E402
 from chunker import Chunk  # noqa: E402
 from jev_client import (  # noqa: E402
     API_KEY_ENV,
+    CallOutcome,
     FakeTransport,
     JevClient,
     JevTransportOutcomeUnknown,
     TransportResponse,
 )
 from jev_runner import (  # noqa: E402
+    LeaseHeld,
     RunnerConfig,
+    acquire_lease,
     pending_operation_ids,
     read_json,
     request_path,
+    result_path,
     resume_operation,
 )
 from relevance import (  # noqa: E402
@@ -142,6 +146,20 @@ def answers_for(chunks, values=(0.05, 0.05, 0.05, 0.05)):
         ):
             payload[f"{chunk.chunk_id}::{question_id}"] = noul(value)
     return payload
+
+
+class ScriptedClient:
+    """Scripted outcomes, so one run can mix a failure with a wait."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    def call(self, request, *, before_dispatch=None):
+        if before_dispatch is not None:
+            before_dispatch()
+        self.calls.append(request)
+        return self.outcomes.pop(0)
 
 
 class BatchTests(unittest.TestCase):
@@ -725,6 +743,111 @@ class MultiBatchResumeTests(unittest.TestCase):
             {item["chunk_id"] for item in second.excluded_soft},
             {chunk.chunk_id for chunk in self.candidates},
         )
+
+    def test_a_failed_batch_leaves_no_call_to_continue(self):
+        transport = FakeTransport(responses=[
+            TransportResponse(500, "boom", {}) for _ in self._batches()
+        ])
+        outcome = self._screen(self._client(transport))
+        self.assertEqual(len(transport.calls), 2)
+
+        # A settled failure is not a call to continue. Leaving its pending
+        # record behind would make a later wait state unresumable, because
+        # `resume_operation` refuses a run that holds more than one.
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+        self.assertEqual(outcome.excluded_soft, ())
+
+    def test_a_failure_before_a_waiting_batch_leaves_one_resumable_call(self):
+        client = ScriptedClient([
+            CallOutcome("failed", 500, None, "transport_error", 1),
+            CallOutcome("waiting_for_jev_key", None, None, None, 0),
+        ])
+        first = self._screen(client)
+        self.assertEqual([result["status"] for result in first.results],
+                         ["failed", "waiting_for_jev_key"])
+
+        # The batch that is still waiting holds the one call to continue with,
+        # so the documented "configure the key, then continue" step works.
+        self.assertEqual(pending_operation_ids(self.run_dir), [self._operation_id(2)])
+        stored = read_json(request_path(self.run_dir, self._operation_id(2)))
+        resumed = resume_operation(
+            self._config(),
+            self._client(FakeTransport(responses=[self._batch_body(self._batches()[1])])),
+            stored["context_refs"],
+        )
+        self.assertEqual(resumed["status"], "succeeded")
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+
+    def test_a_held_lease_stops_the_screen_from_dispatching(self):
+        other = RunnerConfig(self.run_dir, self.policy, holder="another-runner")
+        acquire_lease(other, self._operation_id(1))
+
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        with self.assertRaises(LeaseHeld):
+            self._screen(self._client(transport))
+        self.assertEqual(transport.calls, [])
+
+    def test_an_unreadable_request_record_is_not_sent_again(self):
+        self._screen(
+            self._client(FakeTransport(error=JevTransportOutcomeUnknown("timeout")))
+        )
+        request_path(self.run_dir, self._operation_id(1)).write_text(
+            "not json", encoding="utf-8"
+        )
+
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        outcome = self._screen(self._client(transport))
+
+        # A record that cannot be read cannot rule out a billed attempt either,
+        # so this batch is kept rather than sent again, and the rest of the
+        # bundle stays unscreened behind it.
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(outcome.excluded_soft, ())
+        self.assertEqual(
+            {chunk.chunk_id for chunk in outcome.uncertain},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+
+    def test_a_stored_result_that_cannot_be_read_is_not_routed_from(self):
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        self._screen(self._client(transport))
+        path = result_path(self.run_dir, self._operation_id(1))
+        stored = read_json(path)
+        stored["answers"] = "nope"
+        path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+
+        second_transport = FakeTransport()
+        outcome = self._screen(self._client(second_transport))
+
+        # A record that does not satisfy the result contract is neither routed
+        # from nor paid for again: the batch is kept and flagged instead.
+        self.assertEqual(second_transport.calls, [])
+        self.assertEqual(outcome.excluded_soft, ())
+        self.assertEqual(
+            {chunk.chunk_id for chunk in outcome.uncertain},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+
+    def test_a_stored_result_with_unreadable_answer_ids_is_not_routed_from(self):
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        self._screen(self._client(transport))
+        path = result_path(self.run_dir, self._operation_id(1))
+        stored = read_json(path)
+        stored["answers"] = {"no-item-separator": noul(0.02)}
+        path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+
+        second_transport = FakeTransport()
+        outcome = self._screen(self._client(second_transport))
+        self.assertEqual(second_transport.calls, [])
+        self.assertEqual(outcome.excluded_soft, ())
 
     def test_a_changed_bundle_is_screened_again_instead_of_reused(self):
         transport = FakeTransport(

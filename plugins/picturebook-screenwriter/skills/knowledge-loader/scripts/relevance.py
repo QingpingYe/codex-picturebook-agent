@@ -19,15 +19,21 @@ if str(RUNTIME_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(RUNTIME_SCRIPTS))
 
 from chunker import Chunk, evidence_field  # noqa: E402
-from decision_contract import operation_policy  # noqa: E402
+from decision_contract import (  # noqa: E402
+    ContractError,
+    operation_policy,
+    validate_answer_ids,
+    validate_result,
+)
 from jev_runner import (  # noqa: E402
     RunnerConfig,
-    execute,
     operation_id_from_request,
     pending_path,
     read_json,
     request_path,
     result_path,
+    run_operation,
+    sync_decision_context,
 )
 from recall import partition  # noqa: E402
 from required_marking import mark_bundle  # noqa: E402
@@ -320,24 +326,39 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
     shared runner's own resume path uses, so a caller who re-runs the screen
     with new knowledge is screened again instead of being routed on the old
     evidence.
+
+    Anything on disk this screen cannot route from counts as an attempt that
+    may already have been billed, not as an absent record: a request record
+    that does not parse cannot be shown to describe the request in hand, and a
+    terminal record the contract rejects is no verdict this batch may be
+    routed from. Both keep their batch out of the screen, because sending it
+    again is the one mistake the run directory can no longer rule out.
     """
 
     operation_id = operation_id_from_request(request)
-    stored_request = read_json(request_path(config.run_dir, operation_id))
-    if (
-        stored_request is None
-        or request_fingerprint(stored_request) != request_fingerprint(request)
-    ):
-        # Nothing was screened for these exact inputs, so whatever the run
-        # directory holds belongs to other knowledge: it is neither a result to
-        # reuse nor an obstacle to dispatch.
+    stored_request_file = request_path(config.run_dir, operation_id)
+    if not stored_request_file.exists():
+        # No request was ever recorded for this operation, so nothing can have
+        # been billed for it.
+        return _StoredBatch()
+    stored_request = read_json(stored_request_file)
+    if stored_request is None:
+        return _StoredBatch(open_attempt=True)
+    if request_fingerprint(stored_request) != request_fingerprint(request):
+        # The record describes other knowledge: it is neither a result to
+        # reuse nor an obstacle to dispatch for these inputs.
         return _StoredBatch()
     stored_result = read_json(result_path(config.run_dir, operation_id))
-    if (
-        stored_result is not None
-        and stored_result.get("status") in REUSABLE_RESULT_STATUSES
-    ):
-        return _StoredBatch(result=stored_result)
+    if stored_result is not None:
+        if (
+            stored_result.get("status") in REUSABLE_RESULT_STATUSES
+            and _is_readable_result(stored_result, request)
+        ):
+            return _StoredBatch(result=stored_result)
+        # A terminal record this screen may not route from — one the contract
+        # rejects, or one no status makes reusable — still says a call was
+        # settled here, so its batch is kept instead of sent again.
+        return _StoredBatch(open_attempt=True)
     pending = read_json(pending_path(config.run_dir, operation_id))
     if pending is not None:
         return _StoredBatch(
@@ -349,6 +370,28 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
     return _StoredBatch(
         open_attempt=pending_path(config.run_dir, operation_id).exists()
     )
+
+
+def _is_readable_result(stored: Any, request: Mapping[str, Any]) -> bool:
+    """True when a stored result can be routed from as it stands.
+
+    The reuse path is the only path where a terminal record was not built by
+    this process. `execute` validates what it just built; a record read back
+    from an earlier run, hand-edited, or written by an older version has to
+    satisfy the same two things before anything is routed from it: the result
+    contract, and — for a succeeded record — an answer for every question this
+    batch asked, and none for anything else. A record whose answer ids name no
+    question of this request cannot be read as a verdict on it, so its batch is
+    kept rather than routed from it.
+    """
+
+    try:
+        validate_result(stored)
+        if stored.get("status") == "succeeded":
+            validate_answer_ids(request, stored)
+    except (ContractError,) + UNREADABLE_ANSWER_ERRORS:
+        return False
+    return True
 
 
 def screen_candidates(
@@ -375,6 +418,11 @@ def screen_candidates(
     evidence that was not collected. Re-running the screen once the credential
     is configured picks up from that point, reusing each batch that already
     settled instead of paying for it twice.
+
+    Every dispatch takes the shared runner's per-operation execution lease, so
+    a batch another runner holds is not sent either. A batch that settles as a
+    failure is retried by re-running the screen rather than through `resume`,
+    which leaves at most one call for the caller to continue with.
     """
 
     marked = mark_bundle(
@@ -443,7 +491,24 @@ def screen_candidates(
             stopped = True
             continue
         else:
-            result = execute(request, config, client, clock=clock)
+            # Dispatch through the shared runner's leased entry point, the same
+            # one the single-operation path uses: another runner holding this
+            # operation's lease must stop this batch from being sent at all.
+            result = run_operation(request, config, client, clock=clock)
+            if result["status"] == "failed":
+                # A settled failure is not a call to continue. The runner keeps
+                # the pending record so one failed operation stays resumable,
+                # but a screen holds one call per batch and `resume_operation`
+                # refuses a run that holds more than one: leaving this record
+                # behind would make a batch that only waits for the credential
+                # later on unresumable. Re-running the screen retries a failed
+                # batch instead, and its result and trace stay on disk.
+                pending_path(
+                    config.run_dir, operation_id_from_request(request)
+                ).unlink(missing_ok=True)
+                sync_decision_context(
+                    config, credential_status="available", pending_call=None
+                )
         results.append(result)
         answers_by_item = (
             _answers_by_item(result) if result["status"] == "succeeded" else {}
