@@ -384,3 +384,91 @@ def _settle(
 
 def run_operation(request, config, client, clock=None, now=None) -> dict:
     return execute(request, config, client, clock=clock)
+
+
+class NoPendingCall(RuntimeError):
+    """There is no recoverable pending call for this run."""
+
+
+class AmbiguousAttempt(RuntimeError):
+    """A previous attempt may have reached the service; consent is required."""
+
+
+def pending_operation_ids(run_dir: Any) -> list[str]:
+    root = Path(run_dir) / "jev"
+    if not root.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in root.iterdir()
+        if path.is_dir() and (path / "pending.json").is_file()
+    )
+
+
+def _refs_equal(left: Any, right: Any) -> bool:
+    return canonical_json(list(left or [])) == canonical_json(list(right or []))
+
+
+def resume_operation(
+    config: RunnerConfig,
+    client,
+    current_input_refs,
+    *,
+    allow_new_attempt: bool = False,
+    clock=None,
+) -> dict:
+    operation_ids = pending_operation_ids(config.run_dir)
+    if not operation_ids:
+        raise NoPendingCall("this run has no pending Jev call to resume")
+    if len(operation_ids) > 1:
+        raise NoPendingCall(
+            "this run has more than one pending Jev call: " + ", ".join(operation_ids)
+        )
+    operation_id = operation_ids[0]
+    pending = read_json(pending_path(config.run_dir, operation_id))
+    if pending is None:
+        raise NoPendingCall(f"pending call for {operation_id} is unreadable")
+    request = read_json(request_path(config.run_dir, operation_id))
+    if request is None:
+        raise NoPendingCall(f"stored request for {operation_id} is unreadable")
+
+    if not _refs_equal(current_input_refs, pending.get("input_refs")):
+        return _superseded(request, config, operation_id, "input_revisions_changed")
+    if request_fingerprint(request) != pending.get("request_fingerprint"):
+        return _superseded(request, config, operation_id, "request_fingerprint_mismatch")
+    if pending.get("attempt_status") == "outcome_unknown":
+        if not allow_new_attempt:
+            # The attempt may have been billed, so nothing is re-sent. The
+            # operation stays in its own `outcome_unknown` state (not
+            # `superseded`, which means "the inputs moved on") and the pending
+            # call stays on disk until the user explicitly decides.
+            return build_result(
+                request=request, status="outcome_unknown",
+                price_usd_per_million_input_tokens=(
+                    config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
+                ),
+            )
+        raise AmbiguousAttempt(
+            "a previous attempt may have been billed; Phase 1 does not create "
+            "new attempts automatically"
+        )
+    return execute(request, config, client, clock=clock)
+
+
+def _superseded(request, config, operation_id, reason) -> dict:
+    pending = build_pending_call(request)
+    pending["attempt_status"] = "failed"
+    result = build_result(
+        request=request, status="failed", error_class="superseded",
+        attempts=0, elapsed_ms=0,
+        price_usd_per_million_input_tokens=(
+            config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
+        ),
+    )
+    result["trace"] = {"superseded_reason": reason}
+    validate_result(result)
+    write_atomic(pending_path(config.run_dir, operation_id), pending)
+    sync_decision_context(
+        config, credential_status="available", pending_call=pending,
+    )
+    return result

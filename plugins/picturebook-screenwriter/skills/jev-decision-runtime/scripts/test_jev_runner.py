@@ -8,16 +8,28 @@ from decision_contract import (
     load_policy,
     default_policy_path,
 )
-from jev_client import API_KEY_ENV, ENDPOINT, FakeTransport, JevClient, TransportResponse
+from jev_client import (
+    API_KEY_ENV,
+    ENDPOINT,
+    FakeTransport,
+    JevClient,
+    JevTransportOutcomeUnknown,
+    TransportResponse,
+)
 from jev_runner import (
+    AmbiguousAttempt,
+    NoPendingCall,
     RunnerConfig,
     context_path,
+    execute,
     operation_dir,
     operation_id_for,
     pending_path,
+    pending_operation_ids,
     read_decision_context,
     read_json,
     request_path,
+    resume_operation,
     result_path,
     run_operation,
     trace_path,
@@ -284,6 +296,140 @@ class RequestGateTests(RunnerCase):
         with self.assertRaises(ContractError):
             run_operation(make_request(), config, client)
         self.assertEqual(transport.calls, [])
+
+
+class ResumeTests(RunnerCase):
+    def _wait_for_key(self):
+        client, transport = self.client(environ={})
+        result = run_operation(make_request(), self.config, client)
+        self.assertEqual(result["status"], "waiting_for_jev_key")
+        return transport
+
+    def test_pending_operation_ids_lists_the_waiting_operation(self):
+        self._wait_for_key()
+        self.assertEqual(pending_operation_ids(self.run_dir), [self.operation_id])
+
+    def test_resume_continues_the_same_operation_after_the_key_appears(self):
+        self._wait_for_key()
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        result = resume_operation(
+            self.config, client, make_request()["context_refs"]
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertFalse(pending_path(self.run_dir, self.operation_id).exists())
+
+    def test_resume_does_not_re_load_knowledge_or_ask_again(self):
+        self._wait_for_key()
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        resume_operation(self.config, client, make_request()["context_refs"])
+        context = read_decision_context(self.run_dir)
+        self.assertEqual(context["mode"], "jev_assisted")
+        self.assertEqual(context["selection_status"], "confirmed")
+
+    def test_changed_input_revisions_supersede_the_old_pending_call(self):
+        self._wait_for_key()
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        moved = [{"ref_id": "海外绘本/小老鼠迈尔斯/worldview", "kind": "knowledge_page",
+                  "revisions": {"node-a": "18"}}]
+        result = resume_operation(self.config, client, moved)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_class"], "superseded")
+        self.assertEqual(transport.calls, [])
+        self.assertFalse(result_path(self.run_dir, self.operation_id).exists())
+
+    def test_resume_without_a_pending_call_is_refused(self):
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        with self.assertRaises(NoPendingCall):
+            resume_operation(self.config, client, make_request()["context_refs"])
+
+    def test_a_corrupt_stored_request_is_not_replayed(self):
+        # A crash can leave a truncated request.json behind. Replaying it would
+        # re-send a request nobody can read, so an unreadable file counts as
+        # "nothing to resume" and the caller has to rebuild the operation.
+        self._wait_for_key()
+        request_path(self.run_dir, self.operation_id).write_text(
+            "{not json", encoding="utf-8"
+        )
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        with self.assertRaises(NoPendingCall):
+            resume_operation(self.config, client, make_request()["context_refs"])
+        self.assertEqual(transport.calls, [])
+
+    def test_two_pending_operations_cannot_be_resumed_by_guess(self):
+        # decision_context.pending_call has a single slot while the run
+        # directory can hold several waiting operations, so the context always
+        # describes the most recent one. Resume must enumerate the disk and
+        # refuse, never guess which operation the user meant.
+        client, _ = self.client(environ={})
+        run_operation(make_request(), self.config, client)
+        run_operation(
+            make_request(operation_instance="batch-002"), self.config, client
+        )
+        self.assertEqual(
+            pending_operation_ids(self.run_dir),
+            [self.operation_id, f"{self.operation_id}-batch-002"],
+        )
+        context = read_decision_context(self.run_dir)
+        self.assertEqual(
+            context["pending_call"]["operation_id"],
+            f"{self.operation_id}-batch-002",
+        )
+        resume_client, transport = self.client(
+            [TransportResponse(200, success_body(), {})]
+        )
+        with self.assertRaises(NoPendingCall):
+            resume_operation(
+                self.config, resume_client, make_request()["context_refs"]
+            )
+        self.assertEqual(transport.calls, [])
+
+    def test_switching_to_llm_dispatches_nothing_and_keeps_the_pending_call(self):
+        # "Switch back to the plain LLM" must not be read as "this waiting call
+        # is resolved": no request goes out, and the pending call stays visible
+        # until the user deals with it.
+        self._wait_for_key()
+        llm_config = RunnerConfig(
+            run_dir=self.config.run_dir,
+            policy=self.config.policy,
+            execution_mode="llm",
+        )
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        with self.assertRaises(ContractError):
+            execute(make_request(), llm_config, client)
+        self.assertEqual(transport.calls, [])
+        self.assertTrue(pending_path(self.run_dir, self.operation_id).is_file())
+
+    def test_a_tampered_request_fingerprint_is_refused(self):
+        self._wait_for_key()
+        stored = read_json(request_path(self.run_dir, self.operation_id))
+        stored["state"] = "被改写过的 state"
+        write_atomic(request_path(self.run_dir, self.operation_id), stored)
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        result = resume_operation(self.config, client, make_request()["context_refs"])
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_class"], "superseded")
+        self.assertEqual(transport.calls, [])
+
+    def test_an_ambiguous_attempt_needs_explicit_consent_to_resend(self):
+        client, transport = self.client(error=JevTransportOutcomeUnknown("read timed out"))
+        first = run_operation(make_request(), self.config, client)
+        self.assertEqual(first["status"], "outcome_unknown")
+
+        retry_client, retry_transport = self.client(
+            [TransportResponse(200, success_body(), {})]
+        )
+        refused = resume_operation(
+            self.config, retry_client, make_request()["context_refs"]
+        )
+        self.assertEqual(refused["status"], "outcome_unknown")
+        self.assertEqual(retry_transport.calls, [])
+        with self.assertRaises(AmbiguousAttempt):
+            resume_operation(
+                self.config, retry_client, make_request()["context_refs"],
+                allow_new_attempt=True,
+            )
+        self.assertEqual(retry_transport.calls, [])
 
 
 if __name__ == "__main__":
