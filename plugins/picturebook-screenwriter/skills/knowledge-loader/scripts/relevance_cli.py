@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 # The operation is composed from two skills: this CLI lives with the knowledge
 # side but drives the shared decision runtime, so both script directories join
@@ -62,6 +64,38 @@ def _split_terms(raw: str) -> tuple[str, ...]:
     return tuple(term.strip() for term in raw.split(",") if term.strip())
 
 
+def _require_bundle_shape(bundle: Any) -> None:
+    """Refuse a file that cannot be screened as an authority evidence bundle.
+
+    The chunker reads a page `key` and its `content` from every item, so an item
+    missing either one cannot be screened at all. Reading such a file used to
+    end in an `AttributeError` traceback once an output flag was set, and in a
+    successful-looking report of an empty screen (`required_count = 0`,
+    `candidate_count = 0`) when none was: the caller could not tell a screen of
+    nothing from a bundle that was never read.
+    """
+
+    if not isinstance(bundle, Mapping):
+        raise ContractError(
+            "bundle must be a JSON object of evidence items, "
+            f"got {type(bundle).__name__}"
+        )
+    items = bundle.get("items")
+    if isinstance(items, (str, bytes, bytearray)) or not isinstance(items, Sequence):
+        raise ContractError("bundle must carry an `items` list of evidence objects")
+    for position, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            raise ContractError(f"bundle item {position} must be an evidence object")
+        if not isinstance(item.get("content"), str):
+            raise ContractError(
+                f"bundle item {position} must carry its page body as a text `content`"
+            )
+        if not isinstance(item.get("key"), str) or not item["key"]:
+            raise ContractError(
+                f"bundle item {position} must carry a non-empty text `key`"
+            )
+
+
 def _resolve_run_id(args: argparse.Namespace) -> str:
     """Name the run, defaulting to the run directory but never past the contract.
 
@@ -110,6 +144,7 @@ def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=No
     try:
         run_id = _resolve_run_id(args)
         bundle = json.loads(Path(args.bundle).read_text(encoding="utf-8"))
+        _require_bundle_shape(bundle)
         policy = load_policy(args.policy or default_policy_path())
         config = RunnerConfig(run_dir=Path(args.run_dir), policy=policy)
         factory = transport_factory or UrllibTransport

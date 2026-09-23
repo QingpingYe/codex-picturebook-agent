@@ -17,7 +17,7 @@ if str(RUNTIME_SCRIPTS) not in sys.path:
 from jev_client import API_KEY_ENV, FakeTransport, TransportResponse  # noqa: E402
 from relevance_cli import main  # noqa: E402
 
-from test_relevance import KEY, answers_for, bundle, mark_bundle  # noqa: E402
+from test_relevance import KEY, answers_for, bundle, evidence, mark_bundle  # noqa: E402
 
 
 # A 200 body only counts as responded-to when it answers every question the
@@ -175,6 +175,65 @@ class RelevanceCliTests(unittest.TestCase):
         # The screening call had already been made: the failure is reported
         # instead of the report being lost to a traceback.
         self.assertEqual(len(transport.calls), 1)
+
+    def test_a_bundle_that_cannot_be_read_is_refused_before_anything_is_paid(self):
+        # None of these shapes is an evidence bundle, and each one used to
+        # escape the report: with an output flag set the dependency bundle
+        # raised `'list' object has no attribute 'items'`, and without one the
+        # CLI exited 0 on a screen of nothing.
+        complete = evidence()
+        written = self.run_dir / "filtered.json"
+        shapes = {
+            "a list at the top level": [complete],
+            "an item that is not an object": {"items": [None]},
+            "an items value that is not a list": {"items": "abc"},
+            "an item with no key":
+                {"items": [{k: v for k, v in complete.items() if k != "key"}]},
+            "an item with no content":
+                {"items": [{k: v for k, v in complete.items() if k != "content"}]},
+            "an item whose content is not text":
+                {"items": [{**complete, "content": 5}]},
+        }
+        for position, (name, payload) in enumerate(shapes.items()):
+            with self.subTest(shape=name):
+                path = self.run_dir / f"bad-bundle-{position}.json"
+                path.write_text(
+                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+                )
+                code, out, err, transport = self._run(
+                    ["--bundle", str(path), "--run-dir", str(self.run_dir),
+                     "--artifact-type", "script", "--task", "t", "--brief", "b",
+                     "--filtered-out", str(written)],
+                    responses=[screened_body()],
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(out, "")
+                self.assertEqual(json.loads(err)["status"], "error")
+                self.assertEqual(transport.calls, [])
+                self.assertFalse(written.exists())
+
+    def test_a_bundle_with_no_pages_is_screened_as_nothing(self):
+        # The refusal is about a file that cannot be read as a bundle, not about
+        # a bundle that carries no pages: an authority read that matched nothing
+        # is reported honestly, and still sends no request.
+        path = self.run_dir / "empty-bundle.json"
+        path.write_text(
+            json.dumps({"items": [], "warnings": [], "offline": False,
+                        "fetched_at": "2026-09-23T10:30:00+08:00"},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+        code, out, _, transport = self._run(
+            ["--bundle", str(path), "--run-dir", str(self.run_dir),
+             "--artifact-type", "script", "--task", "t", "--brief", "b"],
+            responses=[screened_body()],
+        )
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(payload["required_count"], 0)
+        self.assertEqual(payload["candidate_count"], 0)
+        self.assertEqual(payload["results"], [])
+        self.assertEqual(transport.calls, [])
 
     def test_usage_errors_exit_two(self):
         code, _, _, _ = self._run([])

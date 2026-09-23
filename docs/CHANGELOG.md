@@ -12,7 +12,7 @@
 - Workspace-first Feishu config discovery, config status, and read-only authority CLI.
 - Portable Feishu config discovery for project subdirectories, user directories, and shared plugin distribution.
 - Jev-assisted decision layer infrastructure: an explicit execution choice gate, `pb-decision-context-v1` propagation, credential waiting and recovery points, a single-holder execution lease, atomic terminal results, decimal cost estimation, and benchmark case alignment.
-- `knowledge_relevance`：权威知识分块、硬约束标记、软候选召回与 Jev 相关性甄别；精简后的证据包进入普通 LLM 上下文，未精简的版本向量保留给依赖锁。
+- `knowledge_relevance`: authority pages are chunked, hard-constraint chunks are marked unfilterable, soft candidates are recalled, and Jev screens those candidates; the reduced evidence bundle feeds the ordinary model context while the unfiltered revision vector stays available to the dependency lock.
 
 ### Changed
 
