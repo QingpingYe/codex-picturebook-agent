@@ -400,3 +400,94 @@ def operation_policy(policy: Mapping[str, Any], operation: str) -> dict:
     if not isinstance(entry, Mapping):
         raise ContractError(f"policy has no entry for operation {operation!r}")
     return dict(entry)
+
+
+SELECTION_STATUSES = ("confirmed",)
+ATTEMPT_STATUSES = ("pending", "in_flight", "failed", "outcome_unknown")
+
+INITIAL_RESUME_CURSOR = "after_execution_choice"
+OPERATION_CURSOR_PREFIX = "after_operation:"
+
+
+def operation_cursor(operation_id: str) -> str:
+    return f"{OPERATION_CURSOR_PREFIX}{operation_id}"
+
+
+def validate_resume_cursor(value: str) -> None:
+    if value == INITIAL_RESUME_CURSOR:
+        return
+    if value.startswith(OPERATION_CURSOR_PREFIX) and len(value) > len(OPERATION_CURSOR_PREFIX):
+        return
+    raise ContractError(f"unknown decision_context.resume_cursor: {value!r}")
+
+
+def validate_pending_call(payload: Any) -> None:
+    payload = _require_object(payload, "pending_call")
+    _require_nonempty_str(payload, "operation_id", "pending_call")
+    operation = _require_nonempty_str(payload, "operation", "pending_call")
+    if operation not in OPERATIONS:
+        raise ContractError(f"pending_call.operation is not supported yet: {operation}")
+    _require_nonempty_str(payload, "request_fingerprint", "pending_call")
+    _require_nonempty_str(payload, "policy_version", "pending_call")
+    _require_nonempty_str(payload, "requested_model", "pending_call")
+    attempt_status = _require_nonempty_str(payload, "attempt_status", "pending_call")
+    if attempt_status not in ATTEMPT_STATUSES:
+        raise ContractError(f"pending_call.attempt_status must be one of {ATTEMPT_STATUSES}")
+    refs = payload.get("input_refs")
+    if not isinstance(refs, list) or not refs:
+        raise ContractError("pending_call.input_refs must be a non-empty array")
+    for index, ref in enumerate(refs):
+        _validate_context_ref(ref, f"pending_call.input_refs[{index}]")
+    assert_no_credential_fields(payload, "pending_call")
+
+
+def validate_decision_context(payload: Any) -> None:
+    payload = _require_object(payload, "decision_context")
+    if payload.get("schema_version") != CONTEXT_SCHEMA:
+        raise ContractError(f"decision_context.schema_version must be {CONTEXT_SCHEMA!r}")
+    mode = payload.get("mode")
+    if mode not in EXECUTION_MODES:
+        raise ContractError(f"decision_context.mode must be one of {EXECUTION_MODES}")
+    selection_status = payload.get("selection_status")
+    if selection_status not in SELECTION_STATUSES:
+        raise ContractError(
+            f"decision_context.selection_status must be one of {SELECTION_STATUSES}"
+        )
+    credential_status = payload.get("credential_status")
+    if credential_status not in CREDENTIAL_STATUSES:
+        raise ContractError(
+            f"decision_context.credential_status must be one of {CREDENTIAL_STATUSES}"
+        )
+    validate_resume_cursor(_require_nonempty_str(payload, "resume_cursor", "decision_context"))
+    _require_nonempty_str(payload, "selected_at", "decision_context")
+    if not isinstance(payload.get("external_text_processing_acknowledged"), bool):
+        raise ContractError(
+            "decision_context.external_text_processing_acknowledged must be a boolean"
+        )
+    pending_call = payload.get("pending_call")
+    if pending_call is not None:
+        validate_pending_call(pending_call)
+    assert_no_credential_fields(payload, "decision_context")
+
+
+def build_decision_context(
+    *,
+    mode: str,
+    external_text_processing_acknowledged: bool,
+    selected_at: str,
+    resume_cursor: str = INITIAL_RESUME_CURSOR,
+    credential_status: str = "unchecked",
+    pending_call: Any = None,
+) -> dict:
+    context = {
+        "schema_version": CONTEXT_SCHEMA,
+        "mode": mode,
+        "selection_status": "confirmed",
+        "credential_status": credential_status,
+        "resume_cursor": resume_cursor,
+        "pending_call": pending_call,
+        "selected_at": selected_at,
+        "external_text_processing_acknowledged": bool(external_text_processing_acknowledged),
+    }
+    validate_decision_context(context)
+    return context

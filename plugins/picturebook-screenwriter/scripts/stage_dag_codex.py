@@ -210,6 +210,9 @@ def format_task_envelope(manifest, stage):
         "output_paths": list(target["output_refs"]),
         "return_channel": "lead",
     }
+    decision_context = validated.get("decision_context")
+    if decision_context is not None:
+        task["decision_context"] = copy.deepcopy(decision_context)
     return stage_dag.validate_task(task, validated)
 
 

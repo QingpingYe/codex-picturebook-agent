@@ -406,5 +406,45 @@ class StageDagCodexAdapterTest(unittest.TestCase):
         )
 
 
+class TaskEnvelopeDecisionContextTests(unittest.TestCase):
+    def _manifest_with_context(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest["decision_context"] = {
+            "schema_version": "pb-decision-context-v1",
+            "mode": "llm",
+            "selection_status": "confirmed",
+            "credential_status": "unchecked",
+            "resume_cursor": "after_execution_choice",
+            "pending_call": None,
+            "selected_at": "2026-09-23T10:30:00+08:00",
+            "external_text_processing_acknowledged": False,
+        }
+        return manifest
+
+    def test_envelope_carries_the_manifest_decision_context(self):
+        manifest = self._manifest_with_context()
+        envelope = stage_dag_codex.format_task_envelope(
+            manifest, manifest["stages"][1]
+        )
+        self.assertEqual(envelope["decision_context"], manifest["decision_context"])
+        self.assertEqual(envelope["stage_id"], "brief_gate")
+        self.assertEqual(stage_dag.validate_task(envelope, manifest), envelope)
+
+    def test_envelope_omits_decision_context_when_absent(self):
+        manifest = stage_dag._creation_template_manifest()
+        envelope = stage_dag_codex.format_task_envelope(
+            manifest, manifest["stages"][1]
+        )
+        self.assertNotIn("decision_context", envelope)
+
+    def test_envelope_copies_the_context_instead_of_aliasing_it(self):
+        manifest = self._manifest_with_context()
+        envelope = stage_dag_codex.format_task_envelope(
+            manifest, manifest["stages"][1]
+        )
+        manifest["decision_context"]["credential_status"] = "waiting_for_jev_key"
+        self.assertEqual(envelope["decision_context"]["credential_status"], "unchecked")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

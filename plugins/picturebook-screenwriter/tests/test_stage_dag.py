@@ -1634,5 +1634,60 @@ class StageDagIntegrationTest(unittest.TestCase):
         self.assertEqual(len(validated_manifest["stages"]), 12)
 
 
+class DecisionContextPropagationTest(StageDagRevisionTest):
+    CONTEXT = {
+        "schema_version": "pb-decision-context-v1",
+        "mode": "jev_assisted",
+        "selection_status": "confirmed",
+        "credential_status": "available",
+        "resume_cursor": "after_execution_choice",
+        "pending_call": None,
+        "selected_at": "2026-09-23T10:30:00+08:00",
+        "external_text_processing_acknowledged": True,
+    }
+    FEEDBACK = [{"page": 5, "issue": "钩子偏弱", "instruction": "加强悬念"}]
+
+    def test_schema_constant_is_published(self):
+        self.assertEqual(stage_dag.DECISION_CONTEXT_SCHEMA, "pb-decision-context-v1")
+
+    def test_revision_manifest_inherits_decision_context(self):
+        revision = stage_dag.build_revision_manifest(
+            self._revision_parent(),
+            feedback=self.FEEDBACK,
+            artifact_ref=self.artifact_ref,
+            run_id="20260923-example-0002",
+            decision_context=self.CONTEXT,
+        )
+        self.assertEqual(revision["decision_context"], self.CONTEXT)
+
+    def test_revision_manifest_without_context_keeps_the_legacy_shape(self):
+        revision = stage_dag.build_revision_manifest(
+            self._revision_parent(),
+            feedback=self.FEEDBACK,
+            artifact_ref=self.artifact_ref,
+            run_id="20260923-example-0002",
+        )
+        self.assertNotIn("decision_context", revision)
+
+    def test_revision_manifest_copies_the_context_instead_of_aliasing_it(self):
+        context = copy.deepcopy(self.CONTEXT)
+        revision = stage_dag.build_revision_manifest(
+            self._revision_parent(),
+            feedback=self.FEEDBACK,
+            artifact_ref=self.artifact_ref,
+            run_id="20260923-example-0002",
+            decision_context=context,
+        )
+        context["credential_status"] = "waiting_for_jev_key"
+        self.assertEqual(revision["decision_context"]["credential_status"], "available")
+
+    def test_manifest_validator_still_tolerates_the_new_field(self):
+        manifest = stage_dag._creation_template_manifest()
+        manifest["decision_context"] = dict(self.CONTEXT)
+        self.assertEqual(
+            stage_dag.validate_manifest(manifest)["decision_context"], self.CONTEXT
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

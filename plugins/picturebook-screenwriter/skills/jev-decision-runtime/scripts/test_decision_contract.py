@@ -1,19 +1,26 @@
 import unittest
 
 from decision_contract import (
+    ATTEMPT_STATUSES,
+    CONTEXT_SCHEMA,
     ContractError,
     OPERATIONS,
     POLICY_SCHEMA,
     REQUEST_SCHEMA,
     RESULT_SCHEMA,
     assert_no_credential_fields,
+    build_decision_context,
     default_policy_path,
     load_policy,
+    operation_cursor,
     operation_policy,
     validate_answer_ids,
+    validate_decision_context,
+    validate_pending_call,
     validate_policy,
     validate_request,
     validate_result,
+    validate_resume_cursor,
 )
 
 
@@ -296,6 +303,90 @@ class PolicyContractTests(unittest.TestCase):
     def test_operation_policy_rejects_an_unknown_operation(self):
         with self.assertRaises(ContractError):
             operation_policy(make_policy(), "write_the_story")
+
+
+def make_context(**overrides):
+    context = build_decision_context(
+        mode="jev_assisted",
+        external_text_processing_acknowledged=True,
+        selected_at="2026-09-23T10:30:00+08:00",
+    )
+    context.update(overrides)
+    return context
+
+
+def make_pending_call(**overrides):
+    pending = {
+        "operation_id": "20260923-example-0001-knowledge_relevance",
+        "operation": "knowledge_relevance",
+        "request_fingerprint": "sha256:" + "1" * 64,
+        "policy_version": "knowledge-relevance-v1",
+        "requested_model": "jev-1.13.0",
+        "attempt_status": "pending",
+        "input_refs": [
+            {
+                "ref_id": "海外绘本/小老鼠迈尔斯/worldview",
+                "kind": "knowledge_page",
+                "revisions": {"node-a": "17"},
+            }
+        ],
+    }
+    pending.update(overrides)
+    return pending
+
+
+class DecisionContextTests(unittest.TestCase):
+    def test_context_defaults_to_the_initial_cursor(self):
+        context = make_context()
+        self.assertEqual(context["schema_version"], CONTEXT_SCHEMA)
+        self.assertEqual(context["resume_cursor"], "after_execution_choice")
+        self.assertEqual(context["credential_status"], "unchecked")
+        self.assertIsNone(context["pending_call"])
+        validate_decision_context(context)
+
+    def test_unknown_mode_is_rejected(self):
+        with self.assertRaises(ContractError):
+            validate_decision_context(make_context(mode="jev_probably"))
+
+    def test_unconfirmed_selection_is_rejected(self):
+        with self.assertRaises(ContractError):
+            validate_decision_context(make_context(selection_status="maybe"))
+
+    def test_unknown_credential_status_is_rejected(self):
+        with self.assertRaises(ContractError):
+            validate_decision_context(make_context(credential_status="checking"))
+
+    def test_context_accepts_a_pending_call(self):
+        validate_decision_context(make_context(
+            credential_status="waiting_for_jev_key",
+            pending_call=make_pending_call(attempt_status="failed"),
+        ))
+
+    def test_context_carries_no_credential_shaped_field(self):
+        with self.assertRaises(ContractError):
+            validate_decision_context(make_context(api_key="sk-nope"))
+
+    def test_resume_cursor_vocabulary(self):
+        validate_resume_cursor("after_execution_choice")
+        validate_resume_cursor(operation_cursor("20260923-example-0001-knowledge_relevance"))
+        for bad in ("", "later", "after_operation:"):
+            with self.subTest(bad=bad), self.assertRaises(ContractError):
+                validate_resume_cursor(bad)
+
+    def test_pending_call_attempt_status_vocabulary(self):
+        for status in ATTEMPT_STATUSES:
+            with self.subTest(status=status):
+                validate_pending_call(make_pending_call(attempt_status=status))
+        with self.assertRaises(ContractError):
+            validate_pending_call(make_pending_call(attempt_status="probably"))
+
+    def test_pending_call_needs_at_least_one_input_ref(self):
+        with self.assertRaises(ContractError):
+            validate_pending_call(make_pending_call(input_refs=[]))
+
+    def test_pending_call_rejects_unknown_operation(self):
+        with self.assertRaises(ContractError):
+            validate_pending_call(make_pending_call(operation="write_the_story"))
 
 
 if __name__ == "__main__":
