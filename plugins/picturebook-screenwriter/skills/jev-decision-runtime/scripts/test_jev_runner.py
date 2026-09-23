@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from decision_contract import (
@@ -18,16 +19,20 @@ from jev_client import (
 )
 from jev_runner import (
     AmbiguousAttempt,
+    LeaseHeld,
     NoPendingCall,
     RunnerConfig,
+    acquire_lease,
     context_path,
     execute,
+    lease_path,
     operation_dir,
     operation_id_for,
     pending_path,
     pending_operation_ids,
     read_decision_context,
     read_json,
+    release_lease,
     request_path,
     resume_operation,
     result_path,
@@ -430,6 +435,71 @@ class ResumeTests(RunnerCase):
                 allow_new_attempt=True,
             )
         self.assertEqual(retry_transport.calls, [])
+
+
+class LeaseTests(RunnerCase):
+    def test_acquire_then_release_frees_the_operation(self):
+        lease = acquire_lease(self.config, self.operation_id)
+        self.assertEqual(lease.holder, "primary")
+        release_lease(self.config, self.operation_id, "primary")
+        acquire_lease(self.config, self.operation_id)
+
+    def test_a_second_holder_is_refused_while_the_lease_is_active(self):
+        acquire_lease(self.config, self.operation_id)
+        with self.assertRaises(LeaseHeld):
+            acquire_lease(self.config, self.operation_id)
+
+    def test_an_expired_lease_can_be_taken_over(self):
+        start = datetime(2026, 9, 23, 10, 30, tzinfo=timezone.utc)
+        acquire_lease(
+            self.config, self.operation_id,
+            now=start,
+        )
+        later = start + timedelta(minutes=self.config.lease_ttl_minutes + 1)
+        lease = acquire_lease(self.config, self.operation_id, now=later)
+        self.assertEqual(lease.holder, "primary")
+
+    def test_release_by_another_holder_is_refused(self):
+        acquire_lease(self.config, self.operation_id)
+        with self.assertRaises(LeaseHeld):
+            release_lease(self.config, self.operation_id, "someone-else")
+
+    def test_the_lease_is_released_after_a_successful_run(self):
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        run_operation(make_request(), self.config, client)
+        self.assertFalse(lease_path(self.run_dir, self.operation_id).exists())
+
+    def test_the_lease_is_released_after_a_waiting_run(self):
+        client, _ = self.client(environ={})
+        run_operation(make_request(), self.config, client)
+        self.assertFalse(lease_path(self.run_dir, self.operation_id).exists())
+
+    def test_a_run_in_progress_blocks_a_second_runner(self):
+        acquire_lease(self.config, self.operation_id)
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        with self.assertRaises(LeaseHeld):
+            run_operation(make_request(), self.config, client)
+        self.assertEqual(transport.calls, [])
+
+
+class OutcomeUnknownTests(RunnerCase):
+    def test_an_unknown_outcome_keeps_the_pending_call_resumable(self):
+        client, _ = self.client(error=JevTransportOutcomeUnknown("read timed out"))
+        result = run_operation(make_request(), self.config, client)
+        self.assertEqual(result["status"], "outcome_unknown")
+        pending = read_json(pending_path(self.run_dir, self.operation_id))
+        self.assertEqual(pending["attempt_status"], "outcome_unknown")
+
+    def test_an_unknown_outcome_writes_a_trace_but_no_result(self):
+        client, _ = self.client(error=JevTransportOutcomeUnknown("read timed out"))
+        run_operation(make_request(), self.config, client)
+        self.assertTrue(trace_path(self.run_dir, self.operation_id, 1).is_file())
+        self.assertFalse(result_path(self.run_dir, self.operation_id).exists())
+
+    def test_the_lease_is_released_after_an_ambiguous_outcome(self):
+        client, _ = self.client(error=JevTransportOutcomeUnknown("read timed out"))
+        run_operation(make_request(), self.config, client)
+        self.assertFalse(lease_path(self.run_dir, self.operation_id).exists())
 
 
 if __name__ == "__main__":

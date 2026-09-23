@@ -8,6 +8,7 @@ import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,91 @@ class RunnerConfig:
     execution_mode: str = "jev_assisted"
     holder: str = "primary"
     lease_ttl_minutes: int = 15
+
+
+class LeaseHeld(RuntimeError):
+    """Another runner holds an unexpired lease for this operation."""
+
+
+@dataclass(frozen=True)
+class Lease:
+    operation_id: str
+    holder: str
+    started_at: str
+    expires_at: str
+
+    def to_dict(self) -> dict:
+        return {
+            "operation_id": self.operation_id,
+            "holder": self.holder,
+            "started_at": self.started_at,
+            "expires_at": self.expires_at,
+        }
+
+
+def _lease_expired(lease: Mapping[str, Any], reference: datetime) -> bool:
+    try:
+        expires_at = datetime.fromisoformat(str(lease["expires_at"]))
+    except (KeyError, TypeError, ValueError):
+        return True
+    if expires_at.tzinfo is None:
+        return True
+    return expires_at <= reference
+
+
+def _reference_time(now: datetime | None) -> datetime:
+    return now if now is not None else datetime.now(timezone.utc)
+
+
+def acquire_lease(config: RunnerConfig, operation_id: str, now: datetime | None = None) -> Lease:
+    """Take the per-operation execution lease, creating it exclusively.
+
+    This is a same-host local-file lease. It does not coordinate across hosts.
+    """
+
+    path = lease_path(config.run_dir, operation_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    reference = _reference_time(now)
+    lease = Lease(
+        operation_id=operation_id,
+        holder=config.holder,
+        started_at=reference.isoformat(timespec="milliseconds"),
+        expires_at=(reference + timedelta(minutes=config.lease_ttl_minutes)).isoformat(
+            timespec="milliseconds"
+        ),
+    )
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        existing = read_json(path)
+        if existing is None:
+            raise LeaseHeld(f"{operation_id} has an unreadable lease file")
+        if not _lease_expired(existing, reference):
+            raise LeaseHeld(
+                f"{operation_id} is held by {existing.get('holder')!r} "
+                f"until {existing.get('expires_at')!r}"
+            )
+        write_atomic(path, lease.to_dict())
+        return lease
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(lease.to_dict(), stream, ensure_ascii=False, sort_keys=True)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return lease
+
+
+def release_lease(config: RunnerConfig, operation_id: str, holder: str) -> None:
+    path = lease_path(config.run_dir, operation_id)
+    existing = read_json(path)
+    if existing is None:
+        return
+    if existing.get("holder") != holder:
+        raise LeaseHeld(
+            f"{operation_id} lease is held by {existing.get('holder')!r}, not {holder!r}"
+        )
+    path.unlink(missing_ok=True)
 
 
 def operation_id_for(run_id: str, operation: str, instance: str = "") -> str:
@@ -383,7 +469,12 @@ def _settle(
 
 
 def run_operation(request, config, client, clock=None, now=None) -> dict:
-    return execute(request, config, client, clock=clock)
+    operation_id = operation_id_from_request(request)
+    lease = acquire_lease(config, operation_id, now=now)
+    try:
+        return execute(request, config, client, clock=clock)
+    finally:
+        release_lease(config, operation_id, lease.holder)
 
 
 class NoPendingCall(RuntimeError):
@@ -452,7 +543,11 @@ def resume_operation(
             "a previous attempt may have been billed; Phase 1 does not create "
             "new attempts automatically"
         )
-    return execute(request, config, client, clock=clock)
+    lease = acquire_lease(config, operation_id)
+    try:
+        return execute(request, config, client, clock=clock)
+    finally:
+        release_lease(config, operation_id, lease.holder)
 
 
 def _superseded(request, config, operation_id, reason) -> dict:
