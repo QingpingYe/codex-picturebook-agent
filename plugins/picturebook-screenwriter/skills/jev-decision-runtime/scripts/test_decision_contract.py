@@ -97,6 +97,13 @@ class RequestContractTests(unittest.TestCase):
             with self.subTest(operation=operation):
                 validate_request(make_request(operation=operation))
 
+    def test_a_run_id_that_escapes_the_run_directory_is_rejected(self):
+        # run_id is interpolated into the on-disk operation directory, so it
+        # must not be able to leave <run_dir>/jev/.
+        for bad in ("../../escaped-run", "a/b", "a\\b", "..", "run:1", "run id"):
+            with self.subTest(run_id=bad), self.assertRaises(ContractError):
+                validate_request(make_request(run_id=bad))
+
     def test_credential_shaped_fields_are_rejected(self):
         broken = make_request()
         broken["api_key"] = "sk-should-never-be-here"

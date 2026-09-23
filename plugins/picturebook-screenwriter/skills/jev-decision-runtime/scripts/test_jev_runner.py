@@ -25,6 +25,7 @@ from jev_runner import (
     NoPendingCall,
     RunnerConfig,
     acquire_lease,
+    build_pending_call,
     context_path,
     execute,
     lease_path,
@@ -350,6 +351,30 @@ class ResumeTests(RunnerCase):
         client, _ = self.client([TransportResponse(200, success_body(), {})])
         with self.assertRaises(NoPendingCall):
             resume_operation(self.config, client, make_request()["context_refs"])
+
+    def test_resume_finishes_the_bookkeeping_when_the_result_already_landed(self):
+        # A crash between writing result.json and clearing pending.json leaves
+        # both on disk. The work is already done and billed, so resuming must
+        # return the recorded result instead of sending a second request.
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        run_operation(make_request(), self.config, client)
+        stored = read_json(result_path(self.run_dir, self.operation_id))
+        write_atomic(
+            pending_path(self.run_dir, self.operation_id),
+            build_pending_call(make_request()),
+        )
+        resume_client, transport = self.client(
+            [TransportResponse(200, success_body(), {})]
+        )
+        result = resume_operation(
+            self.config, resume_client, make_request()["context_refs"]
+        )
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(result, stored)
+        self.assertFalse(pending_path(self.run_dir, self.operation_id).exists())
+        context = read_decision_context(self.run_dir)
+        self.assertIsNone(context["pending_call"])
+        self.assertEqual(context["resume_cursor"], f"after_operation:{self.operation_id}")
 
     def test_a_corrupt_stored_request_is_not_replayed(self):
         # A crash can leave a truncated request.json behind. Replaying it would

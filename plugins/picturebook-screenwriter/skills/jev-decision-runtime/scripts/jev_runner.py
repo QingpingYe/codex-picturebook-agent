@@ -524,6 +524,18 @@ def resume_operation(
             "this run has more than one pending Jev call: " + ", ".join(operation_ids)
         )
     operation_id = operation_ids[0]
+    stored_result = read_json(result_path(config.run_dir, operation_id))
+    if stored_result is not None:
+        # A crash between writing the terminal result and clearing the pending
+        # call leaves both files behind. The operation is already done and its
+        # request already paid for, so finish the bookkeeping instead of
+        # dispatching a second, billable call.
+        pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
+        sync_decision_context(
+            config, credential_status="available", pending_call=None,
+            resume_cursor=operation_cursor(operation_id),
+        )
+        return stored_result
     pending = read_json(pending_path(config.run_dir, operation_id))
     if pending is None:
         raise NoPendingCall(f"pending call for {operation_id} is unreadable")

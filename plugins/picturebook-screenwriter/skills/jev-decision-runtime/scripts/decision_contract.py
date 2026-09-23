@@ -48,6 +48,11 @@ MOVING_MODEL_ALIASES = ("jev-latest", "jev-preview")
 # pending call, and result distinct.
 _INSTANCE_RE = re.compile(r"[A-Za-z0-9_-]+")
 
+# run_id and operation_instance are both interpolated into the on-disk
+# operation directory, so neither may carry a path separator or a parent
+# reference.
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+
 # Mirrors scripts/package_check.py so both credential sweeps agree on what a
 # credential-shaped field name looks like. Suffix matching keeps the token
 # counters (input_tokens / output_tokens) out of the net.
@@ -158,7 +163,12 @@ def validate_request(payload: Any) -> None:
     payload = _require_object(payload, "request")
     if payload.get("schema_version") != REQUEST_SCHEMA:
         raise ContractError(f"request.schema_version must be {REQUEST_SCHEMA!r}")
-    _require_nonempty_str(payload, "run_id", "request")
+    run_id = _require_nonempty_str(payload, "run_id", "request")
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise ContractError(
+            "request.run_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}: it becomes "
+            "part of the on-disk operation directory"
+        )
     operation = _require_nonempty_str(payload, "operation", "request")
     if operation not in OPERATIONS:
         raise ContractError(f"request.operation is not supported yet: {operation}")
