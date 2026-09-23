@@ -11,8 +11,18 @@ sys.path.insert(0, str(ROOT / "skills" / "jev-decision-runtime" / "scripts"))
 sys.path.insert(0, str(ROOT / "skills" / "knowledge-loader" / "scripts"))
 
 from decision_contract import default_policy_path, load_policy  # noqa: E402
-from jev_client import API_KEY_ENV, FakeTransport, JevClient, TransportResponse  # noqa: E402
-from jev_runner import RunnerConfig, pending_operation_ids  # noqa: E402
+from jev_client import (  # noqa: E402
+    API_KEY_ENV,
+    CallOutcome,
+    FakeTransport,
+    JevClient,
+    TransportResponse,
+)
+from jev_runner import (  # noqa: E402
+    RunnerConfig,
+    pending_operation_ids,
+    read_decision_context,
+)
 from load_knowledge import bundle_from_dict  # noqa: E402
 from dependencies import build_dependency_record  # noqa: E402
 from collision import check_collisions  # noqa: E402
@@ -101,6 +111,20 @@ def bundle():
 
 def noul(value):
     return {"type": "noul", "noul": value}
+
+
+class ScriptedClient:
+    """Scripted outcomes, so one run can mix a failure with an ambiguous call."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    def call(self, request, *, before_dispatch=None):
+        if before_dispatch is not None:
+            before_dispatch()
+        self.calls.append(request)
+        return self.outcomes.pop(0)
 
 
 IRRELEVANT = (0.02, 0.02, 0.02, 0.02)
@@ -340,6 +364,71 @@ class Phase2IntegrationTests(unittest.TestCase):
         filtered = filtered_bundle(bundle(), outcome)
         worldview = next(i for i in filtered["items"] if i["key"] == WORLDVIEW_KEY)
         self.assertIn("不能飞行", worldview["content"])
+
+    def test_a_settled_batch_keeps_the_other_batchs_open_call_on_record(self):
+        # One `pending_call` slot, several batches: a batch that reaches a
+        # terminal state may only clear that slot when nothing else is still
+        # waiting. Here batch-001 settles while batch-002's call came back
+        # `outcome_unknown`, and the context — which `stage_dag` copies into a
+        # revision manifest — has to keep naming the call that may have been
+        # billed instead of reporting that there is nothing to continue.
+        policy = load_policy(default_policy_path())
+        policy["operations"][OPERATION]["max_items_per_request"] = 2
+        second_batch = f"{RUN_ID}-{OPERATION}-batch-002"
+
+        first = self._screen_scripted(policy, ScriptedClient([
+            CallOutcome("failed", 500, None, "http_error", 1),
+            CallOutcome("outcome_unknown", None, None, "transport_outcome_unknown", 1),
+        ]))
+        self.assertEqual([result["status"] for result in first.results],
+                         ["failed", "outcome_unknown"])
+        self.assertEqual(pending_operation_ids(self.run_dir), [second_batch])
+
+        batch = self._batches(policy)[0]
+        for settled_as, outcome in (
+            ("failed", CallOutcome("failed", 500, None, "http_error", 1)),
+            ("succeeded", CallOutcome(
+                "succeeded", 200, self._answers_body(batch), None, 1
+            )),
+        ):
+            with self.subTest(settled_as=settled_as):
+                client = ScriptedClient([outcome])
+                second = self._screen_scripted(policy, client)
+                self.assertEqual(len(client.calls), 1)
+                self.assertTrue(second.results)
+
+                context = read_decision_context(self.run_dir)
+                self.assertEqual(context["pending_call"]["operation_id"],
+                                 second_batch)
+                self.assertEqual(context["pending_call"]["attempt_status"],
+                                 "outcome_unknown")
+
+    def _batches(self, policy):
+        return plan_batches(
+            self.candidates(), policy["operations"][OPERATION]["max_items_per_request"]
+        )
+
+    def _answers_body(self, batch):
+        answers = {}
+        for chunk in batch:
+            for question_id, value in zip(
+                ("relevant", "usable_evidence", "contradicts_task_assumption",
+                 "instruction_like_content"),
+                IRRELEVANT,
+            ):
+                answers[f"{chunk.chunk_id}::{question_id}"] = noul(value)
+        return json.dumps({
+            "model": "jev-1.13.0", "answers": answers,
+            "usage": {"input_tokens": 200, "output_tokens": 20},
+        })
+
+    def _screen_scripted(self, policy, client):
+        return screen_candidates(
+            run_id=RUN_ID, policy=policy, artifact_type="script",
+            task_description="起草第 5 页", brief="分享主题，3-6 岁",
+            bundle=bundle(), config=RunnerConfig(self.run_dir, policy),
+            client=client,
+        )
 
 
 if __name__ == "__main__":

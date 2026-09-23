@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from decision_contract import (
+    ATTEMPT_STATUSES,
     ContractError,
     load_policy,
     default_policy_path,
@@ -21,8 +22,10 @@ from jev_client import (
 from jev_runner import (
     AmbiguousAttempt,
     CREDENTIAL_ARGUMENT_PREFIXES,
+    HARMLESS_ATTEMPT_STATUSES,
     LeaseHeld,
     NoPendingCall,
+    OPEN_ATTEMPT_STATUSES,
     RunnerConfig,
     acquire_lease,
     build_pending_call,
@@ -37,6 +40,7 @@ from jev_runner import (
     pending_operation_ids,
     read_decision_context,
     read_json,
+    remaining_pending_call,
     release_lease,
     request_path,
     resume_operation,
@@ -740,6 +744,72 @@ class DiscardFailedPendingCallTests(RunnerCase):
         acquire_lease(other, self.operation_id)
         self.assertFalse(discard_failed_pending_call(make_request(), self.config))
         self.assertTrue(path.is_file())
+
+
+class RunLevelPendingCallTests(RunnerCase):
+    """`decision-context.json` has one `pending_call` slot for the whole run."""
+
+    def _waiting_operation(self, instance=""):
+        """Leave one operation on disk waiting for the credential."""
+
+        client, _ = self.client(environ={})
+        result = run_operation(
+            make_request(operation_instance=instance) if instance else make_request(),
+            self.config,
+            client,
+        )
+        self.assertEqual(result["status"], "waiting_for_jev_key")
+        return f"{self.operation_id}-{instance}" if instance else self.operation_id
+
+    def test_every_attempt_status_is_either_open_or_harmless(self):
+        # The screening path dispatches a batch again only for the statuses
+        # classified as harmless, and keeps it for the open ones; anything the
+        # two tuples do not cover has to fall on the conservative side. Pinning
+        # the union against the contract's own vocabulary is what keeps a status
+        # added to `ATTEMPT_STATUSES` from being read as "safe to send".
+        self.assertEqual(
+            set(HARMLESS_ATTEMPT_STATUSES) | set(OPEN_ATTEMPT_STATUSES),
+            set(ATTEMPT_STATUSES),
+        )
+        self.assertEqual(
+            set(HARMLESS_ATTEMPT_STATUSES) & set(OPEN_ATTEMPT_STATUSES), set()
+        )
+
+    def test_a_successful_write_keeps_another_operations_open_call(self):
+        other_id = self._waiting_operation(instance="batch-002")
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        result = run_operation(make_request(), self.config, client)
+        self.assertEqual(result["status"], "succeeded")
+
+        self.assertEqual(pending_operation_ids(self.run_dir), [other_id])
+        context = read_decision_context(self.run_dir)
+        self.assertEqual(context["pending_call"]["operation_id"], other_id)
+        self.assertEqual(context["pending_call"]["attempt_status"], "pending")
+
+    def test_a_discarded_failure_keeps_another_operations_open_call(self):
+        client, _ = self.client([TransportResponse(500, "boom", {})])
+        run_operation(make_request(), self.config, client)
+        other_id = self._waiting_operation(instance="batch-002")
+
+        self.assertTrue(discard_failed_pending_call(make_request(), self.config))
+        self.assertEqual(pending_operation_ids(self.run_dir), [other_id])
+        context = read_decision_context(self.run_dir)
+        self.assertEqual(context["pending_call"]["operation_id"], other_id)
+
+    # `resume_operation` refuses a run that holds more than one pending record
+    # before it reaches its own terminal-write branch, so its use of the same
+    # helper is a guard against a record written in that window rather than a
+    # state a test can put the runner into. The two branches below are the
+    # reachable ones.
+    def test_the_slot_is_cleared_when_nothing_else_is_waiting(self):
+        # The other half of the rule: the context still stops claiming a pending
+        # call once the run really has none.
+        self._waiting_operation()
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        self.assertIsNone(remaining_pending_call(self.config, self.operation_id))
+        run_operation(make_request(), self.config, client)
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+        self.assertIsNone(read_decision_context(self.run_dir)["pending_call"])
 
 
 class CliTests(RunnerCase):

@@ -63,6 +63,15 @@ _ATTEMPT_STATUS_FOR_OUTCOME = {
 # may already have been billed.
 OPEN_ATTEMPT_STATUSES = ("outcome_unknown", "in_flight")
 
+# The attempt statuses that leave nothing open behind them: `pending` is a call
+# that is still waiting for the credential (nothing reached the transport) and
+# `failed` is a settled failure the caller retries by re-running. Together with
+# `OPEN_ATTEMPT_STATUSES` these classify every status the request contract's
+# `ATTEMPT_STATUSES` declares, so a record carrying anything else — hand-edited,
+# or written by a version that knew a status this build does not — is a record
+# that cannot be shown to be harmless and is treated like an unreadable one.
+HARMLESS_ATTEMPT_STATUSES = ("pending", "failed")
+
 
 @dataclass(frozen=True)
 class RunnerConfig:
@@ -347,13 +356,30 @@ def result_answers_request(
     never calibrated is refused with it.
     """
 
-    trace = result.get("trace")
-    if not isinstance(trace, Mapping):
-        return False
-    recorded = trace.get("input_sha256")
-    if not isinstance(recorded, str) or not recorded:
+    recorded = recorded_request_sha256(result)
+    if recorded is None:
         return False
     return recorded == sha256_hex(canonical_json(request))
+
+
+def recorded_request_sha256(result: Mapping[str, Any]) -> str | None:
+    """The request hash a stored result says it answered, when it names one.
+
+    `trace.input_sha256` is the only field tying a terminal record to the
+    request it answered, so it is read in one place. A record that names no
+    request at all and one that names a different request are both refused, but
+    they are different findings for the caller — a missing identity means the
+    file proves nothing, a different one means the file is the earlier edit's
+    verdict — so the screening path can tell them apart in its report.
+    """
+
+    trace = result.get("trace")
+    if not isinstance(trace, Mapping):
+        return None
+    recorded = trace.get("input_sha256")
+    if not isinstance(recorded, str) or not recorded:
+        return None
+    return recorded
 
 
 def read_decision_context(run_dir: Any) -> dict | None:
@@ -533,8 +559,11 @@ def execute(request, config, client, clock=None) -> dict:
         write_atomic(result_path(config.run_dir, operation_id), result)
         write_atomic(trace_path(config.run_dir, operation_id, outcome.attempts), trace)
         pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
+        # This operation is terminal, but the run may hold another one's open
+        # call: the context keeps naming it until that call is settled too.
         sync_decision_context(
-            config, credential_status="available", pending_call=None,
+            config, credential_status="available",
+            pending_call=remaining_pending_call(config, operation_id),
             resume_cursor=operation_cursor(operation_id),
         )
         return result
@@ -614,7 +643,9 @@ def discard_failed_pending_call(request, config, *, now=None) -> bool:
     for other knowledge, an attempt that may have been billed, or a record that
     cannot be read — is left exactly as it is, because the one mistake the run
     directory can no longer rule out is a second call for a batch that may
-    already have been paid for. Those records stay visible as pending calls.
+    already have been paid for. Those records stay visible as pending calls, and
+    the run-level `pending_call` slot keeps naming one of them when the run
+    holds another operation's open call.
     """
 
     operation_id = operation_id_from_request(request)
@@ -632,7 +663,8 @@ def discard_failed_pending_call(request, config, *, now=None) -> bool:
             return False
         pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
         sync_decision_context(
-            config, credential_status="available", pending_call=None
+            config, credential_status="available",
+            pending_call=remaining_pending_call(config, operation_id),
         )
         return True
     finally:
@@ -656,6 +688,31 @@ def pending_operation_ids(run_dir: Any) -> list[str]:
         for path in root.iterdir()
         if path.is_dir() and (path / "pending.json").is_file()
     )
+
+
+def remaining_pending_call(config: RunnerConfig, operation_id: str) -> dict | None:
+    """The pending call another operation of this run still holds, if any.
+
+    `decision-context.json` carries a single `pending_call` slot while the run
+    directory can hold several waiting operations, so an operation that just
+    became terminal may only clear that slot when the run has nothing else to
+    continue: clearing it while `pending_operation_ids` still finds a record
+    tells every reader of the context — including a revision manifest that
+    copies it, as `stage_dag` does — that there is no call to pick up, while the
+    record on disk still says one may have been billed. The first operation in
+    the order `resume_operation` enumerates them supplies the descriptor. A
+    record that cannot be read supplies nothing, which is the one shape this
+    slot cannot carry; that record still stops its own batch on the screening
+    path and still blocks `resume`, which enumerate the directory itself.
+    """
+
+    for other in pending_operation_ids(config.run_dir):
+        if other == operation_id:
+            continue
+        record = read_json(pending_path(config.run_dir, other))
+        if record is not None:
+            return record
+    return None
 
 
 def _refs_equal(left: Any, right: Any) -> bool:
@@ -703,7 +760,8 @@ def resume_operation(
         try:
             pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
             sync_decision_context(
-                config, credential_status="available", pending_call=None,
+                config, credential_status="available",
+                pending_call=remaining_pending_call(config, operation_id),
                 resume_cursor=operation_cursor(operation_id),
             )
             return stored_result

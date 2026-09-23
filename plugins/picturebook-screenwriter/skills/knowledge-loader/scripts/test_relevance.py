@@ -929,12 +929,126 @@ class MultiBatchResumeTests(unittest.TestCase):
         outcome = self._screen(self._client(second_transport))
 
         # A record that does not say which request it answered is not evidence
-        # about this one: it is neither routed from nor paid for again.
+        # about this one: it is neither routed from nor paid for again. It is
+        # reported as unreadable rather than stale, because it names no request
+        # at all — "answers another request" is a claim this file cannot make.
         self.assertEqual(second_transport.calls, [])
         self.assertEqual(outcome.excluded_soft, ())
         self.assertEqual(
             [entry["reason"] for entry in outcome.blocked_records],
-            ["stale_result"],
+            ["unreadable_result"],
+        )
+
+    def test_a_result_record_that_cannot_be_read_is_not_sent_again(self):
+        # `read_json` returns None both for a file that does not parse and for
+        # one that parses to something other than an object, so "no result here"
+        # and "a result this screen cannot read" used to look the same. Sending
+        # the batch again on either of those bytes would pay a second time and
+        # overwrite the only record of what the first call cost — the request
+        # and pending records already keep their batch for the same reason.
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        self._screen(self._client(transport))
+        path = result_path(self.run_dir, self._operation_id(1))
+
+        for payload in ("!! not json !!", "[1, 2]"):
+            with self.subTest(payload=payload):
+                path.write_text(payload, encoding="utf-8")
+                second_transport = FakeTransport()
+                outcome = self._screen(self._client(second_transport))
+
+                self.assertEqual(second_transport.calls, [])
+                self.assertEqual(outcome.excluded_soft, ())
+                self.assertEqual(
+                    {chunk.chunk_id for chunk in outcome.uncertain},
+                    {chunk.chunk_id for chunk in self.candidates},
+                )
+                self.assertEqual(
+                    [entry["reason"] for entry in outcome.blocked_records],
+                    ["unreadable_result"],
+                )
+                self.assertEqual(
+                    [entry["path"] for entry in outcome.blocked_records], [str(path)]
+                )
+                self.assertEqual(path.read_text(encoding="utf-8"), payload)
+
+    def test_a_pending_record_with_an_unplaceable_status_is_not_sent_again(self):
+        # Only the statuses that leave nothing open behind them — a call still
+        # waiting for the credential, and a settled failure the caller retries
+        # by re-running — let a batch be dispatched again. A record naming
+        # anything else, or naming nothing, cannot be shown to be harmless, so
+        # it keeps its batch the way an unparsable record does.
+        self._screen(self._client(FakeTransport(), key=None))
+        path = pending_path(self.run_dir, self._operation_id(1))
+
+        for payload in ({"attempt_status": "half-sent"}, {}):
+            with self.subTest(payload=payload):
+                record = read_json(path)
+                record.pop("attempt_status", None)
+                record.update(payload)
+                write_atomic(path, record)
+
+                transport = FakeTransport()
+                outcome = self._screen(self._client(transport))
+
+                self.assertEqual(transport.calls, [])
+                self.assertEqual(outcome.excluded_soft, ())
+                self.assertEqual(
+                    {chunk.chunk_id for chunk in outcome.uncertain},
+                    {chunk.chunk_id for chunk in self.candidates},
+                )
+                self.assertEqual(
+                    [entry["reason"] for entry in outcome.blocked_records],
+                    ["unreadable_pending"],
+                )
+                self.assertEqual(
+                    [entry["path"] for entry in outcome.blocked_records], [str(path)]
+                )
+
+    def test_a_waiting_record_still_lets_the_screen_dispatch_its_batch(self):
+        # The positive control for the rule above: a record that is waiting for
+        # the credential has opened nothing, so re-running the screen spends the
+        # one paid call for that batch — the documented "configure the key, then
+        # continue" step, taken through the screen instead of `resume`.
+        self._screen(self._client(FakeTransport(), key=None))
+        self.assertEqual(
+            pending_operation_ids(self.run_dir), [self._operation_id(1)]
+        )
+
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        outcome = self._screen(self._client(transport))
+
+        self.assertEqual(len(transport.calls), 2)
+        self.assertEqual(
+            [result["status"] for result in outcome.results],
+            ["succeeded", "succeeded"],
+        )
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+
+    def test_a_settled_failure_record_still_lets_the_screen_retry_its_batch(self):
+        # The other harmless status: the caller's documented retry is to run the
+        # screen again, so a `failed` record on disk must not read as an open
+        # call. The screen's own cleanup normally removes it first; this writes
+        # one directly, which is what a cleaned-up-but-not-removed record (a
+        # held lease, a crash between the dispatch and the cleanup) looks like.
+        self._screen(self._client(FakeTransport(), key=None))
+        path = pending_path(self.run_dir, self._operation_id(1))
+        record = read_json(path)
+        record["attempt_status"] = "failed"
+        write_atomic(path, record)
+
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        outcome = self._screen(self._client(transport))
+
+        self.assertEqual(len(transport.calls), 2)
+        self.assertEqual(
+            [result["status"] for result in outcome.results],
+            ["succeeded", "succeeded"],
         )
 
     def test_a_second_screens_in_flight_record_survives_the_cleanup(self):

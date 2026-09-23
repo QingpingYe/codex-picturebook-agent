@@ -26,12 +26,14 @@ from decision_contract import (  # noqa: E402
     validate_result,
 )
 from jev_runner import (  # noqa: E402
+    HARMLESS_ATTEMPT_STATUSES,
     OPEN_ATTEMPT_STATUSES,
     RunnerConfig,
     discard_failed_pending_call,
     operation_id_from_request,
     pending_path,
     read_json,
+    recorded_request_sha256,
     request_path,
     result_answers_request,
     result_path,
@@ -358,13 +360,21 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
 
     Anything on disk this screen cannot route from counts as an attempt that
     may already have been billed, not as an absent record: a request record
-    that does not parse cannot be shown to describe the request in hand, and a
+    that does not parse cannot be shown to describe the request in hand, a
     terminal record the contract rejects, whose status is not reusable, or
     which was written for other knowledge is no verdict this batch may be
-    routed from. All of them keep their batch out of the screen, because
-    sending it again is the one mistake the run directory can no longer rule
-    out, and each is named in the outcome so the caller can act on the file
-    that stopped the run.
+    routed from, and a pending record whose attempt status is not one that
+    leaves nothing open behind it cannot be shown to be free to dispatch. All
+    of them keep their batch out of the screen, because sending it again is the
+    one mistake the run directory can no longer rule out, and each is named in
+    the outcome so the caller can act on the file that stopped the run.
+
+    "Reads as no record" and "exists but cannot be read as one" are different
+    answers, so every record that exists is checked for existence as well as
+    content: `read_json` returns `None` both for a file that does not parse and
+    for one that parses to something other than an object, and treating either
+    as an absent record would re-send a batch whose earlier call cannot be
+    ruled out — and overwrite the only record of what that call cost.
     """
 
     operation_id = operation_id_from_request(request)
@@ -380,7 +390,8 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
         # The record describes other knowledge: it is neither a result to
         # reuse nor an obstacle to dispatch for these inputs.
         return _StoredBatch()
-    stored_result = read_json(result_path(config.run_dir, operation_id))
+    stored_result_file = result_path(config.run_dir, operation_id)
+    stored_result = read_json(stored_result_file)
     if stored_result is not None:
         if (
             stored_result.get("status") in REUSABLE_RESULT_STATUSES
@@ -394,18 +405,38 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
         # this happens are told apart by the record's own identity: a result
         # that answers another request is stale, and one that answers this
         # request but fails the contract is unreadable.
-        reason = (
-            "stale_result"
-            if not result_answers_request(stored_result, request)
-            else "unreadable_result"
-        )
-        return _blocking_record(result_path(config.run_dir, operation_id), reason)
+        answers_this_request = result_answers_request(stored_result, request)
+        if answers_this_request:
+            # It answers this request but cannot be routed from, so it fails
+            # the contract rather than being anybody else's verdict.
+            reason = "unreadable_result"
+        elif recorded_request_sha256(stored_result) is not None:
+            reason = "stale_result"
+        else:
+            # A record that names no request at all: hand-written, or written
+            # by a version that did not record one. It is no more readable as a
+            # verdict than a file that does not parse, so it is not reported as
+            # answering something else.
+            reason = "unreadable_result"
+        return _blocking_record(stored_result_file, reason)
+    if stored_result_file.exists():
+        # A file that is there but does not read back as an object: the same
+        # shape as an unreadable request record, and the same answer — keep the
+        # batch instead of paying for it again.
+        return _blocking_record(stored_result_file, "unreadable_result")
     pending_file = pending_path(config.run_dir, operation_id)
     pending = read_json(pending_file)
     if pending is not None:
-        if pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES:
+        attempt_status = pending.get("attempt_status")
+        if attempt_status in OPEN_ATTEMPT_STATUSES:
             return _blocking_record(pending_file, "open_attempt")
-        return _StoredBatch()
+        if attempt_status in HARMLESS_ATTEMPT_STATUSES:
+            return _StoredBatch()
+        # A status this build cannot place — an attempt someone else is driving,
+        # or a value from a version that knew more statuses — cannot be shown to
+        # leave nothing open, so it is treated exactly like a record that does
+        # not parse.
+        return _blocking_record(pending_file, "unreadable_pending")
     # A pending record that exists but cannot be read cannot rule out a billed
     # attempt either; a missing one means no attempt was recorded for these
     # inputs, so the batch is safe to dispatch.
