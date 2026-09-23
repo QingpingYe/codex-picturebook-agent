@@ -42,11 +42,11 @@ host policy enforces the call.
 | The first response asks for the execution choice | `prompt_only` | Entry Skill instructions | Scripts cannot prove the question really came first. |
 | A missing key waits instead of falling back to the plain LLM | `prompt_only` | Entry and `jev-decision-runtime` instructions | A caller that invokes the runner directly is not blocked by a consent token. |
 | Jev is only called after the user chooses it | `prompt_only` | Entry Skill instructions | There is no host-level prevention. |
-| 硬约束块不可被过滤 | `runtime_required` | `skills/knowledge-loader/scripts/required_marking.py` | 未发布来源、索引未同步、未知页型、无标题前言与全部 `machine-data` 约束块一律标记 required。 |
-| `exclude_soft` 只作用于召回命中的软块 | `runtime_required` | `skills/knowledge-loader/scripts/recall.py` | 未召回的软块无条件保留，永不进入 Jev。 |
-| 锁 bundle 保留完整版本向量 | `runtime_required` | `skills/knowledge-loader/scripts/relevance.py` | `dependency_bundle()` 返回未精简的证据包；精简只作用于模型上下文。 |
-| 路由 band 与规则首命中 | `script_checked` | `skills/jev-decision-runtime/scripts/routing.py` | 规则与阈值来自策略文件；脚本不能证明阈值已按中文样本校准。 |
-| 相关性问题模板与规则 | `prompt_only` | `references/decision-policies.json` + 技能指令 | 模板文本由策略提供，是否调用甄别仍取决于技能指令。 |
+| Hard-constraint blocks cannot be filtered | `runtime_required` | `skills/knowledge-loader/scripts/required_marking.py` | Unpublished sources, an unsynced index, an unknown page type, an untitled preamble, and every `machine-data` block are marked required. |
+| `exclude_soft` only reaches a recalled soft block | `runtime_required` | `skills/knowledge-loader/scripts/recall.py` | A soft block that recall did not select is kept unconditionally and never reaches Jev. |
+| The lock bundle keeps the whole revision vector | `runtime_required` | `skills/knowledge-loader/scripts/relevance.py` | `dependency_bundle()` returns the unreduced evidence bundle; reduction applies to the model context only. |
+| Routing bands and first-match rule order | `script_checked` | `skills/jev-decision-runtime/scripts/routing.py` | Rules and thresholds come from the policy file; the script cannot prove the thresholds were calibrated on Chinese samples. |
+| Relevance question templates and routing rules | `prompt_only` | `references/decision-policies.json` plus the Skill instructions | The policy supplies the template text, and whether screening runs at all still depends on the Skill instructions. |
 
 Use host-level permissions, approval prompts, or hooks when a guarantee must
 hold even if a model ignores the Skill instructions.

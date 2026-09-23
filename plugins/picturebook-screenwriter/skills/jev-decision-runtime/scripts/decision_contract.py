@@ -62,6 +62,17 @@ _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _CREDENTIAL_SUFFIXES = ("api_key", "apikey", "authorization", "password", "secret", "token")
 
 
+def is_valid_run_id(value: Any) -> bool:
+    """True when `value` is safe to interpolate into the operation directory.
+
+    Callers that name a run themselves (a CLI deriving one from a directory,
+    for instance) check this before building a request, so the refusal can name
+    the flag that fixes it instead of surfacing as a request-contract error.
+    """
+
+    return isinstance(value, str) and bool(_RUN_ID_RE.fullmatch(value))
+
+
 class ContractError(ValueError):
     """A request, result, context, or policy payload violated the contract."""
 
@@ -167,7 +178,7 @@ def validate_request(payload: Any) -> None:
     if payload.get("schema_version") != REQUEST_SCHEMA:
         raise ContractError(f"request.schema_version must be {REQUEST_SCHEMA!r}")
     run_id = _require_nonempty_str(payload, "run_id", "request")
-    if not _RUN_ID_RE.fullmatch(run_id):
+    if not is_valid_run_id(run_id):
         raise ContractError(
             "request.run_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}: it becomes "
             "part of the on-disk operation directory"

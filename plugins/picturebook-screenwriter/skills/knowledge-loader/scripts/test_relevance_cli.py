@@ -115,6 +115,67 @@ class RelevanceCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["run_id"], self.run_dir.resolve().name)
 
+    def test_an_explicit_run_id_overrides_the_run_directory_name(self):
+        code, out, _, _ = self._run(
+            ["--bundle", str(self.bundle_path), "--run-dir", str(self.run_dir),
+             "--artifact-type", "script", "--task", "t", "--brief", "b",
+             "--run-id", "run-01"],
+            responses=[screened_body()],
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["run_id"], "run-01")
+        # The run id, not the directory, names the on-disk operation directory.
+        operation_dirs = [path.name for path in (self.run_dir / "jev").iterdir()]
+        self.assertTrue(operation_dirs)
+        self.assertTrue(all(name.startswith("run-01-") for name in operation_dirs))
+
+    def test_a_directory_name_that_cannot_name_a_run_is_refused(self):
+        # A directory name may carry dots, spaces, or CJK, none of which the
+        # request contract accepts as a run id.
+        unsafe = self.run_dir / "草稿 run.01"
+        unsafe.mkdir()
+        argv = ["--bundle", str(self.bundle_path), "--run-dir", str(unsafe),
+                "--artifact-type", "script", "--task", "t", "--brief", "b"]
+        code, out, err, transport = self._run(argv, responses=[screened_body()])
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(json.loads(err)["status"], "error")
+        self.assertIn("--run-id", err)
+        # The refusal lands before the operation is dispatched, so nothing is paid for.
+        self.assertEqual(transport.calls, [])
+
+        code, out, _, _ = self._run(argv + ["--run-id", "draft-01"],
+                                    responses=[screened_body()])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["run_id"], "draft-01")
+
+    def test_an_explicit_run_id_is_held_to_the_contract(self):
+        code, out, err, _ = self._run(
+            ["--bundle", str(self.bundle_path), "--run-dir", str(self.run_dir),
+             "--artifact-type", "script", "--task", "t", "--brief", "b",
+             "--run-id", "draft 01"],
+            responses=[screened_body()],
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("--run-id", json.loads(err)["error"])
+
+    def test_an_unwritable_bundle_path_reports_the_documented_error(self):
+        # bundle.json is a file, so this path cannot be created.
+        blocked = self.bundle_path / "filtered.json"
+        code, out, err, transport = self._run(
+            ["--bundle", str(self.bundle_path), "--run-dir", str(self.run_dir),
+             "--artifact-type", "script", "--task", "t", "--brief", "b",
+             "--filtered-out", str(blocked)],
+            responses=[screened_body()],
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(json.loads(err)["status"], "error")
+        # The screening call had already been made: the failure is reported
+        # instead of the report being lost to a traceback.
+        self.assertEqual(len(transport.calls), 1)
+
     def test_usage_errors_exit_two(self):
         code, _, _, _ = self._run([])
         self.assertEqual(code, 2)

@@ -18,7 +18,12 @@ for scripts_path in (RUNTIME_SCRIPTS, SCRIPT_DIR):
     if str(scripts_path) not in sys.path:
         sys.path.insert(0, str(scripts_path))
 
-from decision_contract import ContractError, default_policy_path, load_policy  # noqa: E402
+from decision_contract import (  # noqa: E402
+    ContractError,
+    default_policy_path,
+    is_valid_run_id,
+    load_policy,
+)
 from jev_client import JevClient, JevClientError, UrllibTransport  # noqa: E402
 from jev_runner import (  # noqa: E402
     AmbiguousAttempt,
@@ -26,6 +31,7 @@ from jev_runner import (  # noqa: E402
     NoPendingCall,
     RunnerConfig,
     reject_credential_arguments,
+    write_atomic,
 )
 from relevance import (  # noqa: E402
     OPERATION,
@@ -47,12 +53,39 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--declared-key", action="append", default=[])
     parser.add_argument("--filtered-out", help="write the reduced context bundle here")
     parser.add_argument("--dependency-out", help="write the unfiltered lock bundle here")
+    parser.add_argument("--run-id", help="override the run directory name as the run id")
     parser.add_argument("--policy")
     return parser
 
 
 def _split_terms(raw: str) -> tuple[str, ...]:
     return tuple(term.strip() for term in raw.split(",") if term.strip())
+
+
+def _resolve_run_id(args: argparse.Namespace) -> str:
+    """Name the run, defaulting to the run directory but never past the contract.
+
+    A directory name is the convention every other runner CLI in this plugin
+    follows, but it is not guaranteed to be a legal `run_id`: dots, spaces, CJK,
+    or an over-long name all fail the request contract. An unusable default is
+    refused here, where the message can name `--run-id`, instead of surfacing
+    later as a request-contract error.
+    """
+
+    if args.run_id:
+        if not is_valid_run_id(args.run_id):
+            raise ContractError(
+                f"--run-id {args.run_id!r} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,127}}"
+            )
+        return args.run_id
+    derived = Path(args.run_dir).resolve().name
+    if not is_valid_run_id(derived):
+        raise ContractError(
+            f"run directory name {derived!r} is not a legal run id "
+            "(it must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}); "
+            "pass --run-id to name the run explicitly"
+        )
+    return derived
 
 
 def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=None) -> int:
@@ -75,14 +108,12 @@ def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=No
         return 2 if exit_error.code else 0
 
     try:
+        run_id = _resolve_run_id(args)
         bundle = json.loads(Path(args.bundle).read_text(encoding="utf-8"))
         policy = load_policy(args.policy or default_policy_path())
         config = RunnerConfig(run_dir=Path(args.run_dir), policy=policy)
         factory = transport_factory or UrllibTransport
         client = JevClient(factory(), environ=environ)
-        # The run directory is named after the run id, which is how every other
-        # runner CLI in this plugin resolves it.
-        run_id = Path(args.run_dir).resolve().name
         outcome = screen_candidates(
             run_id=run_id,
             policy=policy,
@@ -96,23 +127,20 @@ def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=No
             declared_keys=tuple(args.declared_key),
             terms=_split_terms(args.terms),
         )
+        # Both bundles are written inside the guard, with the runtime's atomic
+        # writer: an unwritable path must reach the documented JSON error
+        # instead of losing the whole report to a traceback after the screening
+        # call has already been paid for.
+        if args.filtered_out:
+            write_atomic(args.filtered_out, filtered_bundle(bundle, outcome))
+        if args.dependency_out:
+            write_atomic(args.dependency_out, dependency_bundle(bundle))
     except (ContractError, JevClientError, NoPendingCall, LeaseHeld, AmbiguousAttempt) as error:
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False), file=err)
         return 1
     except (OSError, ValueError) as error:
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False), file=err)
         return 1
-
-    if args.filtered_out:
-        Path(args.filtered_out).write_text(
-            json.dumps(filtered_bundle(bundle, outcome), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    if args.dependency_out:
-        Path(args.dependency_out).write_text(
-            json.dumps(dependency_bundle(bundle), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
 
     print(json.dumps({
         "schema_version": "pb-relevance-report-v1",

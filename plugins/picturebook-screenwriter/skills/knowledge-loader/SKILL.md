@@ -31,6 +31,7 @@ description: 只读检索飞书权威知识库，为编剧工作流提供带 rev
 python scripts/relevance_cli.py \
     --bundle <authority bundle.json> \
     --run-dir <run_dir> \
+    [--run-id <run_id>] \
     --artifact-type script \
     --task "起草第 5 页" \
     --brief "分享主题，3-6 岁" \
@@ -44,6 +45,8 @@ python scripts/relevance_cli.py \
 - `--dependency-out` 写出的证据包**未被精简**，用于 `build_dependency_record()`；锁记录必须覆盖全部权威页面，否则排除一个块会让该页的陈旧检测失效。
 - 硬约束块、未被召回的软块、以及任何无法分类的内容一律保留；只有召回命中的软块才可能拿到 `exclude_soft`。
 - 甄别不修改权威知识，也不改写 `revision_id` / `source_revisions` / `doc_token`。
+- run id 默认取 `--run-dir` 的目录名；目录名不符合 `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`（含点号、空格、中文或过长）时命令拒绝执行，并提示显式传入 `--run-id`。
+- 命令在甄别完成后一律返回 0：即使所有条目都降级为等待 key 或失败，也只体现在 `results[].status` 里。只检查退出码会把它误读成“已通过”。
 
 ## 输出
 
