@@ -26,6 +26,10 @@ from required_marking import mark_bundle  # noqa: E402
 RUN_ID = "20260923-integration-0001"
 WORLDVIEW_KEY = "海外绘本/小老鼠迈尔斯/worldview"
 CORRECTIONS_KEY = "海外绘本/小老鼠迈尔斯/corrections"
+# A page with no hard-constraint section at all: every chunk of it is a soft
+# candidate, so the reduced context can lose the whole page while the lock
+# record still has to carry it.
+REFERENCES_KEY = "海外绘本/小老鼠迈尔斯/references"
 
 WORLDVIEW_BODY = """# 世界观总纲
 
@@ -55,6 +59,17 @@ CORRECTIONS_BODY = """# 纠正台账
 - 2026-09-01：新增一条禁止词。
 """
 
+REFERENCES_BODY = """# 参考资料
+
+## 参考书目
+
+- 《森林的故事》
+
+## 备选素材
+
+- 树屋草图
+"""
+
 
 def item(key, body):
     return {
@@ -71,7 +86,11 @@ def item(key, body):
 
 def bundle():
     return {
-        "items": (item(WORLDVIEW_KEY, WORLDVIEW_BODY), item(CORRECTIONS_KEY, CORRECTIONS_BODY)),
+        "items": (
+            item(WORLDVIEW_KEY, WORLDVIEW_BODY),
+            item(CORRECTIONS_KEY, CORRECTIONS_BODY),
+            item(REFERENCES_KEY, REFERENCES_BODY),
+        ),
         "warnings": (),
         "offline": False,
         "fetched_at": "2026-09-23T10:30:00+08:00",
@@ -151,10 +170,31 @@ class Phase2IntegrationTests(unittest.TestCase):
         )
         self.assertEqual(
             {entry["key"] for entry in record.evidence},
-            {WORLDVIEW_KEY, CORRECTIONS_KEY},
+            {WORLDVIEW_KEY, CORRECTIONS_KEY, REFERENCES_KEY},
         )
         self.assertEqual(
-            [entry["revision_id"] for entry in record.evidence], [17, 17]
+            [entry["revision_id"] for entry in record.evidence], [17, 17, 17]
+        )
+
+    def test_the_lock_record_keeps_a_page_the_reduced_context_dropped(self):
+        # The references page has no required section, so with every candidate
+        # cleared the page leaves the model context entirely. The two bundles
+        # must still be distinguishable: the lock record describes the knowledge
+        # the artifact was built against, and dropping a page from it would stop
+        # the artifact going stale when that page changes.
+        original = bundle()
+        outcome = self._screen(self.candidates(), values=(0.0, 0.0, 0.0, 0.0))
+        self.assertIn(REFERENCES_KEY, {entry["key"] for entry in outcome.excluded_soft})
+        self.assertEqual(
+            [entry["key"] for entry in filtered_bundle(original, outcome)["items"]],
+            [WORLDVIEW_KEY, CORRECTIONS_KEY],
+        )
+        record = build_dependency_record(
+            bundle_from_dict(dependency_bundle(original)), "picturebook/script_v1.md", "script"
+        )
+        self.assertEqual(
+            [entry["key"] for entry in record.evidence],
+            [WORLDVIEW_KEY, CORRECTIONS_KEY, REFERENCES_KEY],
         )
 
     def test_the_reduced_context_never_touches_the_version_vector(self):
@@ -162,13 +202,19 @@ class Phase2IntegrationTests(unittest.TestCase):
         filtered = filtered_bundle(original, self._screen(
             self.candidates(), values=(0.0, 0.0, 0.0, 0.0)
         ))
-        for before, after in zip(original["items"], filtered["items"]):
-            with self.subTest(key=before["key"]):
-                self.assertEqual(after["revision_id"], before["revision_id"])
-                self.assertEqual(after["source_revisions"], before["source_revisions"])
-                self.assertEqual(after["doc_token"], before["doc_token"])
-                self.assertEqual(after["status"], before["status"])
-                self.assertEqual(after["index_synced"], before["index_synced"])
+        # Keyed rather than zipped: a page whose chunks were all excluded is
+        # absent from the reduced context, and zipping would stop comparing
+        # there without saying so.
+        before = {entry["key"]: entry for entry in original["items"]}
+        after = {entry["key"]: entry for entry in filtered["items"]}
+        self.assertEqual(set(after), {WORLDVIEW_KEY, CORRECTIONS_KEY})
+        for key, entry in after.items():
+            with self.subTest(key=key):
+                self.assertEqual(entry["revision_id"], before[key]["revision_id"])
+                self.assertEqual(entry["source_revisions"], before[key]["source_revisions"])
+                self.assertEqual(entry["doc_token"], before[key]["doc_token"])
+                self.assertEqual(entry["status"], before[key]["status"])
+                self.assertEqual(entry["index_synced"], before[key]["index_synced"])
 
     def test_the_reduced_context_is_still_a_valid_bundle(self):
         filtered = filtered_bundle(bundle(), self._screen(

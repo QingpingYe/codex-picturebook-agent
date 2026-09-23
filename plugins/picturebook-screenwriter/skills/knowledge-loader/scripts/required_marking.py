@@ -72,7 +72,12 @@ REQUIRED_MACHINE_DATA_BLOCKS = (
     "scale_contact",
 )
 
-_HEADING_LINE = re.compile(r"^#{1,6}\s+(.*?)\s*$")
+# The structural rule `chunker` uses needs whitespace after the hashes, because
+# a space-less `##标题` is ambiguous in general prose. The marker scan resolves
+# that ambiguity the other way: `##创作红线不变量` is exactly how a hand-written
+# page loses the required mark, and the scan only decides whether to keep a
+# chunk, so reading one line too many can only over-mark a section as required.
+_HEADING_LINE = re.compile(r"^#+\s*(.*?)\s*$")
 # The declared list above is the audit vocabulary, not the boundary of what
 # counts as a constraint block: any `<!-- machine-data: name -->` anchor marks
 # a block the machine reads, so an unlisted or differently spaced anchor is a

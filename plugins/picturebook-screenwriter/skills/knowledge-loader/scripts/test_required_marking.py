@@ -366,6 +366,41 @@ class SwallowedHeadingTests(unittest.TestCase):
         self.assertFalse(chunks["世界观总纲 / 场景清单"].required)
 
 
+class SpaceLessHeadingTests(unittest.TestCase):
+    """A hard-constraint heading written without a space still protects."""
+
+    BODY = (
+        "# 世界观总纲\n\n"
+        "## 核心价值主张\n\n"
+        "勇气不是不害怕，而是害怕时仍然向前。\n\n"
+        "##创作红线不变量\n\n"
+        "- 迈尔斯不能飞行。\n\n"
+        "## 场景清单\n\n"
+        "- 森林\n"
+    )
+
+    def test_a_red_line_heading_written_without_a_space_is_still_required(self):
+        # The structural rule needs whitespace after the hashes, so this heading
+        # never opens a section of its own: the red line stays inside the text of
+        # the section above it. The heading scan is what keeps that chunk, and
+        # with it the red line, out of the filter's reach.
+        chunks = by_heading(marked("海外绘本/小老鼠迈尔斯/worldview", self.BODY))
+        carrier = chunks["世界观总纲 / 核心价值主张"]
+        self.assertIn("##创作红线不变量", carrier.text)
+        self.assertTrue(carrier.required)
+        self.assertEqual(carrier.required_reason, "heading:创作红线不变量")
+        self.assertFalse(chunks["世界观总纲 / 场景清单"].required)
+
+    def test_a_space_less_heading_is_matched_at_any_hash_depth(self):
+        # A nested constraint section is written with more hashes than its
+        # ancestor, and the scan must not depend on how many of them there are.
+        body = ("# 世界观总纲\n\n## 设定\n\n###创作边界\n\n- 迈尔斯不能飞行。\n")
+        chunks = by_heading(marked("海外绘本/小老鼠迈尔斯/worldview", body))
+        self.assertTrue(chunks["世界观总纲 / 设定"].required)
+        self.assertEqual(chunks["世界观总纲 / 设定"].required_reason,
+                         "heading:创作边界")
+
+
 class SplitSectionTests(unittest.TestCase):
     def test_every_part_of_a_split_constraint_block_stays_required(self):
         # A machine-data payload longer than the chunk cap is split at paragraph

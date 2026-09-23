@@ -23,8 +23,12 @@ from test_relevance import KEY, answers_for, bundle, evidence, mark_bundle  # no
 # A 200 body only counts as responded-to when it answers every question the
 # batch asked, so the fake answers follow the same candidate chunks the CLI will
 # screen. This mirrors `RevisionVectorTests._screen_all` in `test_relevance.py`.
+def candidates_of(payload):
+    return [chunk for chunk in mark_bundle(payload) if not chunk.required]
+
+
 def candidates():
-    return [chunk for chunk in mark_bundle(bundle()) if not chunk.required]
+    return candidates_of(bundle())
 
 
 def success_body(answers):
@@ -32,8 +36,26 @@ def success_body(answers):
                        "usage": {"input_tokens": 120, "output_tokens": 8}})
 
 
-def screened_body():
-    return TransportResponse(200, success_body(answers_for(candidates())), {})
+def screened_body(payload=None):
+    payload = bundle() if payload is None else payload
+    return TransportResponse(200, success_body(answers_for(candidates_of(payload))), {})
+
+
+# A page with no hard-constraint section. With every candidate cleared it leaves
+# the reduced context entirely, which is what makes the lock bundle's job —
+# describing every page that was read — observable from the outside.
+SOFT_KEY = "海外绘本/小老鼠迈尔斯/references"
+
+SOFT_BODY = "# 参考资料\n\n## 参考书目\n\n- 《森林的故事》\n"
+
+
+def two_page_bundle():
+    return {
+        "items": (evidence(), evidence(key=SOFT_KEY, body=SOFT_BODY)),
+        "warnings": (),
+        "offline": False,
+        "fetched_at": "2026-09-23T10:30:00+08:00",
+    }
 
 
 class RelevanceCliTests(unittest.TestCase):
@@ -94,17 +116,31 @@ class RelevanceCliTests(unittest.TestCase):
         self.assertTrue(json.loads(filtered.read_text(encoding="utf-8"))["items"])
 
     def test_the_dependency_bundle_keeps_every_page_even_when_filtered_loses_some(self):
+        # The fixture's second page carries no required section, so the reduced
+        # context drops the whole page. The lock bundle must not: it describes
+        # the knowledge the artifact was built against, and a page that vanished
+        # from it would stop the artifact going stale when that page changes.
+        payload = two_page_bundle()
+        two_page_path = self.run_dir / "two-page-bundle.json"
+        two_page_path.write_text(json.dumps(payload, ensure_ascii=False),
+                                 encoding="utf-8")
         filtered = self.run_dir / "filtered.json"
         dependency = self.run_dir / "dependency.json"
-        self._run(
-            ["--bundle", str(self.bundle_path), "--run-dir", str(self.run_dir),
+        code, out, err, _ = self._run(
+            ["--bundle", str(two_page_path), "--run-dir", str(self.run_dir),
              "--artifact-type", "script", "--task", "t", "--brief", "b",
              "--filtered-out", str(filtered), "--dependency-out", str(dependency)],
-            responses=[screened_body()],
+            responses=[screened_body(payload)],
         )
+        self.assertEqual(code, 0, err)
+        reduced = json.loads(filtered.read_text(encoding="utf-8"))
+        self.assertEqual([item["key"] for item in reduced["items"]], [KEY])
         written = json.loads(dependency.read_text(encoding="utf-8"))
-        self.assertEqual([item["key"] for item in written["items"]], [KEY])
+        # Both bundles come out of this one run, so the two assertions together
+        # pin that the unreduced bundle is the one handed to the lock.
+        self.assertEqual([item["key"] for item in written["items"]], [KEY, SOFT_KEY])
         self.assertEqual(written["items"][0]["revision_id"], 17)
+        self.assertEqual(written["items"][1]["revision_id"], 17)
 
     def test_the_report_names_the_run_directory_as_the_run_id(self):
         code, out, _, _ = self._run(
