@@ -68,7 +68,9 @@ def _is_text_list(value: Any) -> bool:
     """True when `value` is a list-like of text, never a bare string.
 
     A bare string would be silently read one character at a time, which is how
-    `warnings: "abc"` turned into three warnings on the way to disk.
+    `warnings: "abc"` turned into three warnings on the way to disk, and a
+    present `null` defeats `payload.get("warnings", ())`, so neither counts as
+    an absent field.
     """
 
     if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
@@ -77,7 +79,11 @@ def _is_text_list(value: Any) -> bool:
 
 
 def _is_revision_vector(value: Any) -> bool:
-    """True when `value` maps node tokens to revision ids, all of them text."""
+    """True when `value` maps node tokens to revision ids, all of them text.
+
+    A list of pairs is not one: `dict()` would accept it, so nothing downstream
+    would notice, and a present `null` is not one either.
+    """
 
     if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Mapping):
         return False
@@ -98,8 +104,11 @@ def _require_bundle_shape(bundle: Any) -> None:
     object of text revisions, because a page's version vector is copied into the
     request context and into the written bundles; and `warnings`, when present,
     must be a list of text, because it is carried into the reduced context
-    bundle. Every other key, including ones this CLI never looks at, is passed
-    through untouched.
+    bundle. "Present" means the key is there: neither field has a `null`
+    exemption, because the readers default only a *missing* key
+    (`payload.get("warnings", ())`), so a `null` would still raise once the
+    screening call had been paid for. Every other key, including ones this CLI
+    never looks at, is passed through untouched.
 
     Reading such a file used to end in an `AttributeError`/`TypeError`
     traceback once an output flag was set, and in a successful-looking report of
@@ -116,8 +125,7 @@ def _require_bundle_shape(bundle: Any) -> None:
     items = bundle.get("items")
     if isinstance(items, (str, bytes, bytearray)) or not isinstance(items, Sequence):
         raise ContractError("bundle must carry an `items` list of evidence objects")
-    warnings = bundle.get("warnings")
-    if warnings is not None and not _is_text_list(warnings):
+    if "warnings" in bundle and not _is_text_list(bundle["warnings"]):
         raise ContractError("bundle `warnings` must be a list of text warnings")
     for position, item in enumerate(items):
         if not isinstance(item, Mapping):
@@ -130,8 +138,9 @@ def _require_bundle_shape(bundle: Any) -> None:
             raise ContractError(
                 f"bundle item {position} must carry a non-empty text `key`"
             )
-        revisions = item.get("source_revisions")
-        if revisions is not None and not _is_revision_vector(revisions):
+        if "source_revisions" in item and not _is_revision_vector(
+            item["source_revisions"]
+        ):
             raise ContractError(
                 f"bundle item {position} `source_revisions` must be an object of "
                 "text revisions"

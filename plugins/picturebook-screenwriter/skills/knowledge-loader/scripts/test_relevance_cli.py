@@ -180,13 +180,20 @@ class RelevanceCliTests(unittest.TestCase):
         # None of these shapes is an evidence bundle, and each one used to
         # escape the report: with an output flag set the dependency bundle
         # raised `'list' object has no attribute 'items'`, and without one the
-        # CLI exited 0 on a screen of nothing. The last six are the fields the
+        # CLI exited 0 on a screen of nothing. The last seven are the fields the
         # CLI reads besides `items[].key` / `items[].content`: `warnings` fed
         # straight into `list()` raised `TypeError` after the paid call, a
         # numeric `source_revisions` raised before dispatch, and a bare
-        # warning string was silently split into one warning per character.
+        # warning string was silently split into one warning per character. Two
+        # of the seven are shapes only this guard refuses — a present `null`
+        # warnings field defeats the readers' `get(key, default)` fallback and
+        # raised after the paid call, and a `source_revisions` list of pairs is
+        # accepted by `dict()` and by the request contract, so nothing
+        # downstream would have refused it; the rest it refuses as well, they
+        # just have a second net further in. Every sub-case writes to its own
+        # pair of paths, so one regression cannot cascade into the assertions
+        # of the shapes after it.
         complete = evidence()
-        written = self.run_dir / "filtered.json"
         shapes = {
             "a list at the top level": [complete],
             "an item that is not an object": {"items": [None]},
@@ -199,12 +206,16 @@ class RelevanceCliTests(unittest.TestCase):
                 {"items": [{**complete, "content": 5}]},
             "a warnings value that is not a list":
                 {"items": [complete], "warnings": 5},
+            "a warnings value that is null":
+                {"items": [complete], "warnings": None},
             "a warnings value that is a bare string":
                 {"items": [complete], "warnings": "索引尚未同步"},
             "a warnings list that is not all text":
                 {"items": [complete], "warnings": ["索引尚未同步", 5]},
             "a source_revisions value that is not an object":
                 {"items": [{**complete, "source_revisions": 5}]},
+            "a source_revisions value that is a list of pairs":
+                {"items": [{**complete, "source_revisions": [["node-a", "17"]]}]},
             "a source_revisions value that is a bare string":
                 {"items": [{**complete, "source_revisions": "node-a=17"}]},
             "source_revisions whose values are not text":
@@ -216,17 +227,21 @@ class RelevanceCliTests(unittest.TestCase):
                 path.write_text(
                     json.dumps(payload, ensure_ascii=False), encoding="utf-8"
                 )
+                filtered = self.run_dir / f"filtered-{position}.json"
+                dependency = self.run_dir / f"dependency-{position}.json"
                 code, out, err, transport = self._run(
                     ["--bundle", str(path), "--run-dir", str(self.run_dir),
                      "--artifact-type", "script", "--task", "t", "--brief", "b",
-                     "--filtered-out", str(written)],
+                     "--filtered-out", str(filtered),
+                     "--dependency-out", str(dependency)],
                     responses=[screened_body()],
                 )
                 self.assertEqual(code, 1)
                 self.assertEqual(out, "")
                 self.assertEqual(json.loads(err)["status"], "error")
                 self.assertEqual(transport.calls, [])
-                self.assertFalse(written.exists())
+                self.assertFalse(filtered.exists())
+                self.assertFalse(dependency.exists())
 
     def test_a_bundle_with_warnings_and_a_revision_vector_still_screens(self):
         # The guard is about shape, not about content: the loader's own
