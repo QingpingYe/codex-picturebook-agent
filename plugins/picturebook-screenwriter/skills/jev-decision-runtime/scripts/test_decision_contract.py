@@ -419,6 +419,39 @@ class PolicyContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_policy(policy)
 
+    def test_shipped_policy_declares_the_four_knowledge_questions(self):
+        policy = load_policy(default_policy_path())
+        templates = policy["operations"]["knowledge_relevance"]["question_templates"]
+        self.assertEqual(
+            sorted(templates),
+            ["contradicts_task_assumption", "instruction_like_content",
+             "relevant", "usable_evidence"],
+        )
+        for name, template in templates.items():
+            with self.subTest(question=name):
+                self.assertEqual(template["type"], "noul")
+                self.assertTrue(template["instructions"].strip())
+
+    def test_shipped_policy_routes_conflicts_and_instructions_to_the_llm(self):
+        routing = load_policy(default_policy_path())["operations"]["knowledge_relevance"]["routing"]
+        labels_by_severity = [
+            (rule.get("label"), rule["route"]) for rule in routing["rules"]
+        ]
+        self.assertIn(("conflict", "escalate_llm"), labels_by_severity)
+        self.assertIn(("instruction_like_content", "escalate_llm"), labels_by_severity)
+        self.assertEqual(labels_by_severity[-1], ("clearly_irrelevant", "exclude_soft"))
+
+    def test_shipped_policy_falls_back_to_keeping_the_chunk(self):
+        entry = load_policy(default_policy_path())["operations"]["knowledge_relevance"]
+        self.assertEqual(entry["fallback_route"], "include")
+        self.assertEqual(entry["fallback_label"], "uncertain")
+
+    def test_shipped_policy_batches_at_ten_items(self):
+        policy = load_policy(default_policy_path())
+        self.assertEqual(
+            policy["operations"]["knowledge_relevance"]["max_items_per_request"], 10
+        )
+
 
 def make_context(**overrides):
     context = build_decision_context(
