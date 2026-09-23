@@ -22,6 +22,11 @@ API_KEY_ENV = "TYPESAFE_API_KEY"
 DEFAULT_CONNECT_TIMEOUT = 5.0
 DEFAULT_TOTAL_TIMEOUT = 30.0
 
+MAX_ATTEMPTS = 3
+BACKOFF_INITIAL_SECONDS = 0.5
+BACKOFF_MAX_SECONDS = 5.0
+_RETRYABLE_STATUSES = (429, 529)
+
 
 class JevClientError(RuntimeError):
     """Base class for client-side failures."""
@@ -59,6 +64,31 @@ class CallOutcome:
     payload: Mapping[str, Any] | None
     error_class: str | None
     attempts: int
+
+
+def parse_retry_after(headers: Mapping[str, str]) -> float | None:
+    """Read retry-after-ms or retry-after as seconds; HTTP-date form is ignored."""
+
+    lowered = {str(key).lower(): value for key, value in (headers or {}).items()}
+    milliseconds = lowered.get("retry-after-ms")
+    if milliseconds is not None:
+        try:
+            return float(milliseconds) / 1000.0
+        except (TypeError, ValueError):
+            return None
+    seconds = lowered.get("retry-after")
+    if seconds is None:
+        return None
+    try:
+        return float(seconds)
+    except (TypeError, ValueError):
+        return None
+
+
+def backoff_seconds(attempt: int, retry_after: float | None) -> float:
+    if retry_after is not None and retry_after >= 0:
+        return min(retry_after, BACKOFF_MAX_SECONDS)
+    return min(BACKOFF_INITIAL_SECONDS * (2 ** (attempt - 1)), BACKOFF_MAX_SECONDS)
 
 
 def read_api_key(environ: Mapping[str, str] | None = None) -> str | None:
@@ -181,32 +211,53 @@ class JevClient:
         return self._attempt(request, headers, body)
 
     def _attempt(self, request, headers, body) -> CallOutcome:
-        try:
-            response = self._transport.send(
-                ENDPOINT, headers, body, self._total_timeout
-            )
-        except JevTransportOutcomeUnknown as error:
-            return CallOutcome("outcome_unknown", None, None, type(error).__name__, 1)
-        except JevTransportFailure as error:
-            return CallOutcome("failed", None, None, type(error).__name__, 1)
-        if 300 <= response.status_code < 400:
-            raise JevEndpointError(
-                f"redirect responses are not accepted: {response.status_code}"
-            )
-        return self._classify(response, request)
+        attempts = 0
+        while attempts < MAX_ATTEMPTS:
+            attempts += 1
+            try:
+                response = self._transport.send(
+                    ENDPOINT, headers, body, self._total_timeout
+                )
+            except JevTransportOutcomeUnknown as error:
+                # Ambiguous: retrying could duplicate a billed call.
+                return CallOutcome("outcome_unknown", None, None, type(error).__name__, attempts)
+            except JevTransportFailure as error:
+                if attempts >= MAX_ATTEMPTS:
+                    return CallOutcome("failed", None, None, type(error).__name__, attempts)
+                self._sleep(backoff_seconds(attempts, None))
+                continue
+            if 300 <= response.status_code < 400:
+                raise JevEndpointError(
+                    f"redirect responses are not accepted: {response.status_code}"
+                )
+            outcome = self._classify(response, attempts)
+            if outcome.status == "retry":
+                if attempts >= MAX_ATTEMPTS:
+                    return CallOutcome(
+                        "failed", response.status_code, None,
+                        f"http_{response.status_code}", attempts,
+                    )
+                self._sleep(backoff_seconds(attempts, outcome.payload))
+                continue
+            return outcome
+        return CallOutcome("failed", None, None, "attempts_exhausted", attempts)
 
-    def _classify(self, response: TransportResponse, request) -> CallOutcome:
+    def _classify(self, response: TransportResponse, attempts: int) -> CallOutcome:
         status = response.status_code
         if status == 200:
             try:
                 payload = json.loads(response.body)
             except ValueError:
-                return CallOutcome("failed", status, None, "invalid_json", 1)
-            return CallOutcome("succeeded", status, payload, None, 1)
+                return CallOutcome("failed", status, None, "invalid_json", attempts)
+            return CallOutcome("succeeded", status, payload, None, attempts)
         if status == 401:
-            return CallOutcome("waiting_for_jev_key", status, None, "unauthorized", 1)
+            return CallOutcome("waiting_for_jev_key", status, None, "unauthorized", attempts)
         if status == 403:
-            return CallOutcome("waiting_for_jev_access", status, None, "forbidden", 1)
+            return CallOutcome("waiting_for_jev_access", status, None, "forbidden", attempts)
         if status == 422:
-            return CallOutcome("failed", status, None, "unprocessable_entity", 1)
-        return CallOutcome("failed", status, None, f"http_{status}", 1)
+            return CallOutcome("failed", status, None, "unprocessable_entity", attempts)
+        if status in _RETRYABLE_STATUSES:
+            return CallOutcome(
+                "retry", status, parse_retry_after(response.headers), None, attempts
+            )
+        return CallOutcome("failed", status, None, f"http_{status}", attempts)

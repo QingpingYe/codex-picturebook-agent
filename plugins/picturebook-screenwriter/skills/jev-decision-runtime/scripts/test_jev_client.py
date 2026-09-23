@@ -15,6 +15,8 @@ from jev_client import (
     TransportResponse,
     UrllibTransport,
     assert_production_endpoint,
+    backoff_seconds,
+    parse_retry_after,
     read_api_key,
 )
 
@@ -169,6 +171,91 @@ class UrllibTransportTests(unittest.TestCase):
         # The production transport must be constructed with an explicit environ
         # by the runner; it must not read the environment by itself.
         self.assertFalse(hasattr(UrllibTransport(), "environ"))
+
+
+class RetryPolicyTests(unittest.TestCase):
+    def test_retry_after_is_read_in_seconds_and_milliseconds(self):
+        self.assertEqual(parse_retry_after({"Retry-After": "2"}), 2.0)
+        self.assertEqual(parse_retry_after({"retry-after-ms": "1500"}), 1.5)
+
+    def test_a_missing_or_unparsable_retry_after_is_none(self):
+        self.assertIsNone(parse_retry_after({}))
+        self.assertIsNone(parse_retry_after({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}))
+
+    def test_backoff_grows_and_is_capped(self):
+        self.assertEqual(backoff_seconds(1, None), 0.5)
+        self.assertEqual(backoff_seconds(2, None), 1.0)
+        self.assertEqual(backoff_seconds(9, None), 5.0)
+
+    def test_retry_after_wins_over_exponential_backoff(self):
+        self.assertEqual(backoff_seconds(1, 2.0), 2.0)
+        self.assertEqual(backoff_seconds(1, 600.0), 5.0)
+
+
+class RetryLoopTests(unittest.TestCase):
+    def test_overload_is_retried_then_succeeds(self):
+        transport = FakeTransport(responses=[
+            TransportResponse(529, "", {}),
+            TransportResponse(200, success_body(), {}),
+        ])
+        outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
+        self.assertEqual(outcome.status, "succeeded")
+        self.assertEqual(outcome.attempts, 2)
+        self.assertEqual(len(transport.calls), 2)
+
+    def test_rate_limiting_honours_retry_after(self):
+        sleeps = []
+        transport = FakeTransport(responses=[
+            TransportResponse(429, "", {"retry-after-ms": "2500"}),
+            TransportResponse(200, success_body(), {}),
+        ])
+        client = JevClient(transport, environ={API_KEY_ENV: "sk-abc"}, sleep=sleeps.append)
+        outcome = client.call(make_request())
+        self.assertEqual(outcome.status, "succeeded")
+        self.assertEqual(sleeps, [2.5])
+
+    def test_repeated_overload_gives_up_after_the_attempt_cap(self):
+        transport = FakeTransport(responses=[
+            TransportResponse(529, "", {}),
+            TransportResponse(529, "", {}),
+            TransportResponse(529, "", {}),
+        ])
+        outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.error_class, "http_529")
+        self.assertEqual(outcome.attempts, 3)
+
+    def test_a_contract_error_is_never_retried(self):
+        transport = FakeTransport(responses=[TransportResponse(422, "bad field", {})])
+        outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.error_class, "unprocessable_entity")
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_unauthorized_is_not_blindly_retried(self):
+        transport = FakeTransport(responses=[TransportResponse(401, "", {})])
+        outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
+        self.assertEqual(outcome.status, "waiting_for_jev_key")
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_forbidden_has_its_own_waiting_state(self):
+        transport = FakeTransport(responses=[TransportResponse(403, "", {})])
+        outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
+        self.assertEqual(outcome.status, "waiting_for_jev_access")
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_a_transport_failure_is_retried_up_to_the_cap(self):
+        transport = FakeTransport(error=JevTransportFailure("connection refused"))
+        outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.attempts, 3)
+        self.assertEqual(len(transport.calls), 3)
+
+    def test_an_ambiguous_outcome_is_not_retried(self):
+        transport = FakeTransport(error=JevTransportOutcomeUnknown("read timed out"))
+        outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
+        self.assertEqual(outcome.status, "outcome_unknown")
+        self.assertEqual(len(transport.calls), 1)
 
 
 if __name__ == "__main__":
