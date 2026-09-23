@@ -20,7 +20,8 @@
     "image-prompt-architect",
     "image-generate",
     "illustration-export",
-    "session-export"
+    "session-export",
+    "jev-decision-runtime"
   ],
   "intents": [
     "creation",
@@ -90,6 +91,24 @@
   "stage_workflow": {
     "run_schema": "pb-stage-run-v2",
     "runtime_source": "scripts/stage_dag.py"
+  },
+  "jev_runtime": {
+    "skill": "jev-decision-runtime",
+    "endpoint": "https://api.typesafe.ai/v1/systemone",
+    "credential_env": "TYPESAFE_API_KEY",
+    "credential_sources": [
+      "environment"
+    ],
+    "key_logging": "forbidden",
+    "pinned_model": "jev-1.13.0",
+    "moving_model_aliases": "forbidden",
+    "base_url_override": "forbidden",
+    "redirects": "disabled",
+    "operations": [
+      "knowledge_relevance",
+      "text_quality_prefilter"
+    ],
+    "routing_source": "operation_policy"
   },
   "illustration_route": {
     "sequence": [
