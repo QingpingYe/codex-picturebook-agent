@@ -47,8 +47,14 @@ RULE_VERSION = "knowledge-relevance-rules-v1"
 ITEM_PLACEHOLDER = "<item>"
 
 
-class ContextBudgetError(RuntimeError):
-    """A batch cannot fit the provider's state-plus-question budget."""
+class ContextBudgetError(ValueError):
+    """A batch cannot fit the provider's state-plus-question budget.
+
+    An over-budget batch is a caller-fixable gap, and every runner CLI in this
+    plugin reports `ValueError` as a JSON error, so this derives from
+    `ValueError`: the reported gap lands on that documented path instead of
+    escaping the handler as a traceback.
+    """
 
 
 @dataclass(frozen=True)
@@ -199,24 +205,54 @@ def _assert_state_budget(
         )
 
 
-def _probability(answer: Mapping[str, Any]) -> float:
+def _probability(answer: Any) -> float | None:
+    """The bandable probability of one answer, or None when it carries none.
+
+    Only noul answers hold a probability, and a choice or score answer to a
+    noul question is still a contract-valid response, so an exclusion record
+    written after the paid call reads what it can instead of raising.
+    """
+
+    if not isinstance(answer, Mapping) or answer.get("type") != "noul":
+        return None
     return float(answer["noul"])
 
 
 def _excluded_entry(
     chunk: Chunk, answers: Mapping[str, Any], route: Mapping[str, Any]
 ) -> dict:
+    probabilities = {}
+    for question_id in QUESTION_ORDER:
+        if question_id not in answers:
+            continue
+        value = _probability(answers[question_id])
+        if value is not None:
+            probabilities[question_id] = value
     return {
         "chunk_id": chunk.chunk_id,
         "key": chunk.key,
         "route": route["route"],
         "label": route.get("label"),
-        "probabilities": {
-            question_id: _probability(answers[question_id])
-            for question_id in QUESTION_ORDER
-            if question_id in answers
-        },
+        "probabilities": probabilities,
     }
+
+
+def _route_chunk(
+    chunk: Chunk, answers: Mapping[str, Any] | None, entry: Mapping[str, Any]
+) -> dict | None:
+    """Route one chunk, or return None when its answers cannot be read.
+
+    The batch has already been paid for by the time a chunk is routed, so a
+    missing or malformed answer set degrades that single item to kept and
+    uncertain instead of aborting the operation with no terminal result.
+    """
+
+    if not answers:
+        return None
+    try:
+        return route_item(chunk.chunk_id, answers, entry)
+    except (RoutingError, KeyError, TypeError, ValueError):
+        return None
 
 
 def _answers_by_item(result: Mapping[str, Any]) -> dict[str, dict]:
@@ -284,17 +320,10 @@ def screen_candidates(
 
         for chunk in batch:
             answers = answers_by_item.get(chunk.chunk_id)
-            if not answers:
-                # No verdict at all: the chunk is kept and flagged, never dropped.
-                kept.append(chunk)
-                uncertain.append(chunk)
-                continue
-            try:
-                route = route_item(chunk.chunk_id, answers, entry)
-            except RoutingError:
-                # An answer that cannot be read as a band is not a verdict, and
-                # the batch has already been paid for: the chunk stays kept and
-                # flagged instead of aborting the whole operation.
+            route = _route_chunk(chunk, answers, entry)
+            if route is None:
+                # No verdict at all, or one that cannot be read as a verdict:
+                # the chunk is kept and flagged, never dropped.
                 kept.append(chunk)
                 uncertain.append(chunk)
                 continue

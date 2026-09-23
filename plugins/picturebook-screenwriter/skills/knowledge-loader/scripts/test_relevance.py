@@ -208,6 +208,12 @@ class ContextBudgetTests(unittest.TestCase):
         with self.assertRaises(ContextBudgetError):
             self._build(batch)
 
+    def test_the_budget_error_is_reachable_from_the_documented_error_handler(self):
+        # Every runner CLI in this plugin reports a ValueError as a JSON error,
+        # so a reported budget gap has to be that kind of error rather than one
+        # that escapes the handler as a traceback.
+        self.assertTrue(issubclass(ContextBudgetError, ValueError))
+
 
 class ScreeningTests(unittest.TestCase):
     def setUp(self):
@@ -313,6 +319,69 @@ class ScreeningTests(unittest.TestCase):
         self.assertEqual(transport.calls, [])
         self.assertEqual(outcome.results, ())
         self.assertEqual(outcome.candidate_count, 0)
+
+    def test_an_over_budget_batch_is_never_dispatched(self):
+        # Hard constraints are never dropped to make room, so the gap has to be
+        # reported before the upload path is paid for: the whole screening stops
+        # with the budget error and the transport never sees a request.
+        policy = load_policy(default_policy_path())
+        policy["operations"][OPERATION]["max_items_per_request"] = 64
+        bloated = {
+            "items": (
+                dict(
+                    evidence(),
+                    content=WORLDVIEW_BODY
+                    + "\n## 场景清单\n\n"
+                    + "迈尔斯在森林里散步。" * 4000,
+                ),
+            ),
+            "warnings": (),
+            "offline": False,
+            "fetched_at": "2026-09-23T10:30:00+08:00",
+        }
+        transport = FakeTransport()
+        client = JevClient(transport, environ={API_KEY_ENV: "sk-abc"}, sleep=lambda _: None)
+        with self.assertRaises(ContextBudgetError):
+            screen_candidates(
+                run_id=RUN_ID, policy=policy, artifact_type="script",
+                task_description="起草第 5 页", brief="分享主题",
+                bundle=bloated,
+                config=RunnerConfig(run_dir=self.run_dir, policy=policy),
+                client=client,
+            )
+        self.assertEqual(transport.calls, [])
+
+    def test_an_exclusion_survives_an_answer_that_carries_no_probability(self):
+        # A hand-authored policy may exclude on a subset of the questions while
+        # the same response carries a contract-valid choice answer to another
+        # one. The batch is already paid for, so the exclusion is recorded with
+        # the probabilities it does have instead of raising after the call.
+        policy = load_policy(default_policy_path())
+        routing = policy["operations"][OPERATION]["routing"]
+        exclusion = next(
+            rule for rule in routing["rules"] if rule["route"] == "exclude_soft"
+        )
+        exclusion["all_of"] = [
+            condition for condition in exclusion["all_of"]
+            if condition["question_id"] != "contradicts_task_assumption"
+        ]
+        routing["rules"] = [exclusion]
+        candidates = [c for c in mark_bundle(bundle()) if not c.required]
+        answers = answers_for(candidates)
+        answers[f"{candidates[0].chunk_id}::contradicts_task_assumption"] = {
+            "type": "choice", "choice": "yes",
+            "probabilities": {"yes": 1.0}, "confidence": 1.0,
+        }
+        outcome = self._screen(answers, policy=policy)
+        recorded = {item["chunk_id"]: item for item in outcome.excluded_soft}
+        self.assertIn(candidates[0].chunk_id, recorded)
+        self.assertIn("relevant", recorded[candidates[0].chunk_id]["probabilities"])
+        self.assertNotIn(
+            "contradicts_task_assumption",
+            recorded[candidates[0].chunk_id]["probabilities"],
+        )
+        self.assertEqual({item["chunk_id"] for item in outcome.excluded_soft},
+                         {chunk.chunk_id for chunk in candidates})
 
     def test_a_failure_in_one_batch_does_not_change_another_batch_route(self):
         # Clearing is per item. A batch that failed leaves its own chunks
