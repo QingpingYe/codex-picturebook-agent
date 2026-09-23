@@ -692,7 +692,7 @@ CREDENTIAL_ARGUMENT_PREFIXES = (
 )
 
 
-def _reject_credential_arguments(arguments) -> str | None:
+def reject_credential_arguments(arguments) -> str | None:
     """Refuse credential flags before argparse can echo their values."""
 
     for argument in arguments:
@@ -737,7 +737,7 @@ def main(
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
 
-    refusal = _reject_credential_arguments(arguments)
+    refusal = reject_credential_arguments(arguments)
     if refusal is not None:
         print(refusal, file=err)
         return 2

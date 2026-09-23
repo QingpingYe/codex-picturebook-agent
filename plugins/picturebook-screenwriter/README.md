@@ -13,6 +13,7 @@
 - `image-generate`：仅在用户明确确认后调用图片 API
 - `illustration-export`：资产登记、本地 HTML 预览与显式图片内嵌
 - `session-export`：仅在用户明确要求时导出会话证据，且必须使用用户提供的绝对输出目录
+- `knowledge_relevance`：把权威知识切块并甄别相关性，硬约束块永不被过滤
 - `knowledge-loader`：只读检索多人协作飞书权威知识库
 - `feishu-knowledge-store`：人工优先合并、冲突队列与远端租约
 - `jev-decision-runtime`：共享 Jev 决策运行器；只在用户选择 Jev 辅助路径后调用，负责凭证门、请求契约、重试、恢复点、租约、原子终态与成本估算

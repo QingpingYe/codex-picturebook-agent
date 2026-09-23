@@ -288,5 +288,18 @@ class JevPhase1DocumentationTests(unittest.TestCase):
         self.assertIn("不得把密钥粘贴到对话中", text)
 
 
+class JevPhase2DocumentationTests(unittest.TestCase):
+    def test_plugin_readme_documents_relevance_screening(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertIn("knowledge_relevance", text)
+        self.assertIn("硬约束块永不被过滤", text)
+
+    def test_enforcement_matrix_documents_the_screening_gates(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for required in ("required_marking.py", "recall.py", "dependency_bundle"):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+
 if __name__ == "__main__":
     unittest.main()

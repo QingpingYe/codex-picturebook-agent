@@ -23,6 +23,28 @@ description: 只读检索飞书权威知识库，为编剧工作流提供带 rev
 10. `index_synced=false` 的证据可以读取，但必须报告“索引尚未同步”，不得描述为已完全对齐的权威快照，也不得用它覆盖最后确认的本地缓存。重读旧产物时，该状态必须按 `index_unsynced` 陈旧原因处理。
 11. 目标 Wiki 不可用时，只有调用方显式允许，才能使用最后确认的本地缓存。缓存不是权威版本，必须在警告中说明“离线”、“非权威”和“最后确认”。
 
+### 相关性甄别（仅在用户选择 Jev 辅助路径时）
+
+权威读取完成后，可先把页面正文切成块并标记硬约束，再让 Jev 只判断软候选块是否与当前产物相关：
+
+```bash
+python scripts/relevance_cli.py \
+    --bundle <authority bundle.json> \
+    --run-dir <run_dir> \
+    --artifact-type script \
+    --task "起草第 5 页" \
+    --brief "分享主题，3-6 岁" \
+    [--terms 逗号分隔召回词] \
+    [--declared-page-type <页型>]... [--declared-key <知识 key>]... \
+    [--filtered-out <精简上下文 bundle.json>] \
+    [--dependency-out <未改动的锁 bundle.json>]
+```
+
+- `--filtered-out` 写出的证据包只包含保留的块，用于普通 LLM 的上下文。
+- `--dependency-out` 写出的证据包**未被精简**，用于 `build_dependency_record()`；锁记录必须覆盖全部权威页面，否则排除一个块会让该页的陈旧检测失效。
+- 硬约束块、未被召回的软块、以及任何无法分类的内容一律保留；只有召回命中的软块才可能拿到 `exclude_soft`。
+- 甄别不修改权威知识，也不改写 `revision_id` / `source_revisions` / `doc_token`。
+
 ## 输出
 
 返回 `KnowledgeEvidenceBundle`：
