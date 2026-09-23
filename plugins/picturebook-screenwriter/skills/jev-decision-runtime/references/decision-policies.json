@@ -10,18 +10,74 @@
     "knowledge_relevance": {
       "policy_version": "knowledge-relevance-v1",
       "calibration_status": "experimental",
-      "fallback_route": "escalate_llm",
-      "routing": {}
+      "fallback_route": "include",
+      "fallback_label": "uncertain",
+      "question_templates": {
+        "relevant": {
+          "type": "noul",
+          "instructions": "该知识块是否直接影响当前产物的创作阶段？",
+          "criteria": {
+            "true": "直接影响当前产物或阶段",
+            "false": "不影响当前产物或阶段"
+          }
+        }
+      },
+      "routing": {
+        "bands": {
+          "clear_at_or_below": "0.25",
+          "risk_at_or_above": "0.70"
+        },
+        "rules": [
+          {
+            "route": "include",
+            "label": "relevant",
+            "any_of": [
+              {
+                "question_id": "relevant",
+                "bands": ["risk"]
+              }
+            ]
+          }
+        ]
+      }
     },
     "text_quality_prefilter": {
       "policy_version": "text-quality-prefilter-v1",
       "calibration_status": "experimental",
       "fallback_route": "escalate_llm",
-      "routing": {}
+      "fallback_label": "uncertain",
+      "question_templates": {
+        "direct_moralizing": {
+          "type": "noul",
+          "instructions": "这一页是否直接替读者说出道理、教训或训诫？",
+          "criteria": {
+            "true": "直接说出道理或训诫",
+            "false": "通过情节或动作呈现"
+          }
+        }
+      },
+      "routing": {
+        "bands": {
+          "clear_at_or_below": "0.25",
+          "risk_at_or_above": "0.70"
+        },
+        "rules": [
+          {
+            "route": "escalate_llm",
+            "label": "risk",
+            "any_of": [
+              {
+                "question_id": "direct_moralizing",
+                "bands": ["risk"]
+              }
+            ]
+          }
+        ]
+      }
     }
   },
   "notes": [
-    "question_templates 与 routing 表由 Phase 2/3 的 operation 策略填充。",
+    "question_templates 与 routing 表自 Phase 2 起为必填；当前各 operation 的模板与规则是最小可用基准，随该 operation 的中文校准补全。",
     "experimental 期间 screened_clear 不得缩减普通 LLM 复核范围。",
     "阈值必须由本项目的中文绘本样本校准后逐 operation 转为 calibrated。"
   ]

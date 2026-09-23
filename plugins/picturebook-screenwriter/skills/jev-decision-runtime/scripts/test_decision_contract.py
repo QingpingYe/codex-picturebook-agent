@@ -2,6 +2,7 @@ import unittest
 
 from decision_contract import (
     ATTEMPT_STATUSES,
+    BAND_VALUES,
     CONTEXT_SCHEMA,
     ContractError,
     OPERATIONS,
@@ -233,14 +234,34 @@ def make_policy(**overrides):
             "knowledge_relevance": {
                 "policy_version": "knowledge-relevance-v1",
                 "calibration_status": "experimental",
-                "fallback_route": "escalate_llm",
-                "routing": {},
+                "fallback_route": "include",
+                "fallback_label": "uncertain",
+                "question_templates": {
+                    "relevant": {"type": "noul", "instructions": "该块是否直接影响当前产物？"},
+                },
+                "routing": {
+                    "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+                    "rules": [
+                        {"route": "include", "label": "relevant",
+                         "any_of": [{"question_id": "relevant", "bands": ["risk"]}]},
+                    ],
+                },
             },
             "text_quality_prefilter": {
                 "policy_version": "text-quality-prefilter-v1",
                 "calibration_status": "experimental",
                 "fallback_route": "escalate_llm",
-                "routing": {},
+                "fallback_label": "uncertain",
+                "question_templates": {
+                    "direct_moralizing": {"type": "noul", "instructions": "是否存在直接训诫式说教？"},
+                },
+                "routing": {
+                    "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+                    "rules": [
+                        {"route": "escalate_llm", "label": "risk",
+                         "any_of": [{"question_id": "direct_moralizing", "bands": ["risk"]}]},
+                    ],
+                },
             },
         },
     }
@@ -286,9 +307,9 @@ class PolicyContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_policy(policy)
 
-    def test_routing_rules_are_refused_until_the_operation_defines_them(self):
-        # Phase 1 has no operation questions, so it cannot express a routing
-        # rule yet. Shipping an empty table is required, not optional.
+    def test_a_routing_table_without_bands_is_refused(self):
+        # The phase 1 empty-table guard is replaced by the real schema, so a
+        # table that cannot band anything is now the failure mode.
         policy = make_policy()
         policy["operations"]["knowledge_relevance"]["routing"] = {
             "relevant": {"clear_route": "exclude_soft"}
@@ -310,6 +331,64 @@ class PolicyContractTests(unittest.TestCase):
     def test_operation_policy_rejects_an_unknown_operation(self):
         with self.assertRaises(ContractError):
             operation_policy(make_policy(), "write_the_story")
+
+    def test_question_templates_are_required_once_routing_exists(self):
+        policy = make_policy()
+        del policy["operations"]["knowledge_relevance"]["question_templates"]
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_a_rule_may_only_reference_declared_question_templates(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "escalate_llm",
+                       "any_of": [{"question_id": "not_declared", "bands": ["risk"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_a_rule_needs_exactly_one_of_any_of_or_all_of(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "include",
+                       "any_of": [{"question_id": "relevant", "bands": ["risk"]}],
+                       "all_of": [{"question_id": "relevant", "bands": ["risk"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_clear_band_must_stay_below_the_risk_band(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.80", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "include",
+                       "any_of": [{"question_id": "relevant", "bands": ["risk"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_an_unknown_band_name_is_rejected(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "include",
+                       "any_of": [{"question_id": "relevant", "bands": ["maybe"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_band_vocabulary_is_published(self):
+        self.assertEqual(BAND_VALUES, ("clear", "grey", "risk"))
+
+    def test_max_items_per_request_is_optional_and_positive_when_present(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["max_items_per_request"] = 10
+        validate_policy(policy)
+        policy["operations"]["knowledge_relevance"]["max_items_per_request"] = 0
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
 
 
 def make_context(**overrides):
