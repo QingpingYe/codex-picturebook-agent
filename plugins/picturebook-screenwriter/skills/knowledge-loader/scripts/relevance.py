@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -292,6 +293,18 @@ def screen_candidates(
     always_kept, candidates = partition(
         marked, artifact_type=artifact_type, terms=tuple(terms)
     )
+    # `chunk_id` is `<page key>#<ordinal>`, so two pages that share a key share
+    # every question id. The request questions and the state chunks are keyed by
+    # that id, so one of the two texts would answer for both chunks and a page
+    # would be routed on another page's evidence. Only an id that names exactly
+    # one chunk can be screened; a collision is kept and reported instead.
+    repeated = Counter(chunk.chunk_id for chunk in candidates)
+    screenable = tuple(
+        chunk for chunk in candidates if repeated[chunk.chunk_id] == 1
+    )
+    unscreenable = tuple(
+        chunk for chunk in candidates if repeated[chunk.chunk_id] > 1
+    )
     entry = operation_policy(policy, OPERATION)
     case_id = benchmark_case_id(
         benchmark_input(bundle, artifact_type),
@@ -306,8 +319,12 @@ def screen_candidates(
     routes: list[dict] = []
     results: list[dict] = []
 
+    for chunk in unscreenable:
+        kept.append(chunk)
+        uncertain.append(chunk)
+
     for batch_index, batch in enumerate(
-        plan_batches(candidates, entry.get("max_items_per_request", 10)), start=1
+        plan_batches(screenable, entry.get("max_items_per_request", 10)), start=1
     ):
         request = build_request(
             run_id=run_id, policy=policy, bundle=bundle,

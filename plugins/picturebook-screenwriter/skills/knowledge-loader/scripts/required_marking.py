@@ -80,9 +80,10 @@ REQUIRED_MACHINE_DATA_BLOCKS = (
 _HEADING_LINE = re.compile(r"^#+\s*(.*?)\s*$")
 # The declared list above is the audit vocabulary, not the boundary of what
 # counts as a constraint block: any `<!-- machine-data: name -->` anchor marks
-# a block the machine reads, so an unlisted or differently spaced anchor is a
-# constraint too.
-_MACHINE_DATA_ANCHOR = re.compile(r"<!--\s*machine-data:\s*([^\s>|]*)")
+# a block the machine reads, so an unlisted, differently spaced, or differently
+# cased anchor is a constraint too. Only the reader is case-insensitive: the
+# page keeps whatever spelling it was written with.
+_MACHINE_DATA_ANCHOR = re.compile(r"<!--\s*machine-data:\s*([^\s>|]*)", re.IGNORECASE)
 
 
 def page_type_of(key: str) -> str:
@@ -128,8 +129,9 @@ def _machine_data_reason(text: str) -> str | None:
     never filtered.
     """
 
+    folded = text.lower()
     for block in REQUIRED_MACHINE_DATA_BLOCKS:
-        if f"machine-data: {block}" in text:
+        if f"machine-data: {block}" in folded:
             return f"machine_data:{block}"
     match = _MACHINE_DATA_ANCHOR.search(text)
     if match is None:
@@ -164,8 +166,8 @@ def mark_required(
     chunks,
     *,
     page_type: str,
-    status: str,
-    index_synced: bool,
+    status: str | None,
+    index_synced: bool | None,
     declared_required: bool = False,
 ):
     """Return the chunks with the required flag set.
@@ -176,7 +178,10 @@ def mark_required(
 
     A missing `status` or `index_synced` (passed as `None`) means the caller
     cannot prove where the page came from, which is exactly the unclassifiable
-    case, so it is required as well.
+    case, so it is required as well. `index_synced` is read as proof only when
+    it is literally `True`: a truthy value of another type (a hand-edited bundle
+    writing "yes", or a revision count) is provenance this stage cannot read,
+    and unreadable provenance takes the same conservative branch.
     """
 
     chunks = tuple(chunks)
@@ -188,8 +193,10 @@ def mark_required(
         return _all_required(chunks, "source_status_not_published")
     if index_synced is None:
         return _all_required(chunks, "index_sync_unknown")
-    if not index_synced:
-        return _all_required(chunks, "index_not_synced")
+    if index_synced is not True:
+        return _all_required(
+            chunks, "index_not_synced" if not index_synced else "index_sync_unknown"
+        )
     if page_type not in PAGE_TYPES:
         return _all_required(chunks, "unknown_page_type")
     if page_type in REQUIRED_ALL_PAGE_TYPES:

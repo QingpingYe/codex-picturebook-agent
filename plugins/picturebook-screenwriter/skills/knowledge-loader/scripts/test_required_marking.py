@@ -124,6 +124,25 @@ class MachineDataAnchorTests(unittest.TestCase):
         self.assertTrue(chunks[1].required)
         self.assertEqual(chunks[1].required_reason, "machine_data:unnamed")
 
+    def test_a_caps_varied_anchor_is_required(self):
+        # A page may retype the anchor with different capitalisation. Reading
+        # it as ordinary prose would leave a machine-read constraint block in
+        # the recalled soft candidates, where `exclude_soft` can remove it.
+        body = ("# 台账\n\n## 数据\n\n<!--Machine-Data: Style_Notes-->\n"
+                "```yaml\nstyle_notes: []\n```\n")
+        chunks = marked("海外绘本/小老鼠迈尔斯/prop-registry", body)
+        self.assertTrue(chunks[1].required)
+        self.assertEqual(chunks[1].required_reason, "machine_data:Style_Notes")
+
+    def test_a_caps_varied_anchor_still_names_a_declared_block(self):
+        # The declared-name loop folds case too, so the audit label names the
+        # block the vocabulary knows instead of the raw spelling.
+        body = ("# 台账\n\n## 数据\n\n<!-- Machine-Data: redline_terms -->\n"
+                "```yaml\nredline_terms: []\n```\n")
+        chunks = marked("海外绘本/小老鼠迈尔斯/corrections", body)
+        self.assertTrue(chunks[1].required)
+        self.assertEqual(chunks[1].required_reason, "machine_data:redline_terms")
+
 
 class ProhibitionVocabularyTests(unittest.TestCase):
     """Phase 3 reads prohibitions from the headings Phase 2 protects."""
@@ -312,6 +331,24 @@ class UnknownProvenanceTests(unittest.TestCase):
     def test_an_unknown_sync_flag_is_required_when_it_reaches_marking_directly(self):
         chunks = mark_required(chunk_evidence(evidence()), page_type="worldview",
                               status="published", index_synced=None)
+        self.assertTrue(all(chunk.required for chunk in chunks))
+        self.assertEqual(chunks[0].required_reason, "index_sync_unknown")
+
+    def test_a_sync_flag_that_is_not_a_boolean_is_required_in_full(self):
+        # Only an explicit `True` proves the index was synced. A hand-edited
+        # bundle that writes "yes" (or a count) is provenance this stage cannot
+        # read, and reading a truthy value as synced would leave the page's soft
+        # chunks filterable on evidence that was never established.
+        for value in ("yes", "false", 1, "已同步"):
+            with self.subTest(index_synced=value):
+                chunks = marked("海外绘本/小老鼠迈尔斯/worldview", WORLDVIEW_BODY,
+                                index_synced=value)
+                self.assertTrue(all(chunk.required for chunk in chunks))
+                self.assertEqual(chunks[0].required_reason, "index_sync_unknown")
+
+    def test_a_hand_edited_sync_flag_reaches_mark_bundle_as_unknown(self):
+        bundle = {"items": ({**evidence(), "index_synced": "yes"},)}
+        chunks = mark_bundle(bundle)
         self.assertTrue(all(chunk.required for chunk in chunks))
         self.assertEqual(chunks[0].required_reason, "index_sync_unknown")
 

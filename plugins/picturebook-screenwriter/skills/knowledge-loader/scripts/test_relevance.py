@@ -465,6 +465,40 @@ class ScreeningTests(unittest.TestCase):
             )
         self.assertEqual(excluded, {chunk.chunk_id for chunk in candidates})
 
+    def test_a_repeated_page_key_is_kept_instead_of_screened(self):
+        # `chunk_id` is `<page key>#<ordinal>`, so two pages that share a key
+        # share every question id: the request and its state would carry one of
+        # the two texts and both pages would be routed on it. Nothing about that
+        # is screenable, so the collision is kept and flagged rather than paid
+        # for and decided on another page's evidence.
+        first = evidence(body="# 世界观总纲\n\n## 核心价值主张\n\n勇气。\n")
+        second = dict(evidence(body="# 世界观总纲\n\n## 场景清单\n\n森林。\n"))
+        repeated = {
+            "items": (first, second),
+            "warnings": (),
+            "offline": False,
+            "fetched_at": "2026-09-23T10:30:00+08:00",
+        }
+        candidates = [c for c in mark_bundle(repeated) if not c.required]
+        self.assertTrue(candidates)
+        self.assertEqual(len({c.chunk_id for c in candidates}), 2)
+        transport = FakeTransport()
+        outcome = screen_candidates(
+            run_id=RUN_ID, policy=self.policy, artifact_type="script",
+            task_description="起草第 5 页", brief="分享主题",
+            bundle=repeated,
+            config=RunnerConfig(run_dir=self.run_dir, policy=self.policy),
+            client=JevClient(transport, environ={API_KEY_ENV: "sk-abc"},
+                             sleep=lambda _: None),
+        )
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(outcome.results, ())
+        self.assertEqual(outcome.excluded_soft, ())
+        self.assertEqual({chunk.chunk_id for chunk in outcome.uncertain},
+                         {chunk.chunk_id for chunk in candidates})
+        self.assertEqual({chunk.chunk_id for chunk in outcome.kept},
+                         {chunk.chunk_id for chunk in candidates})
+
 
 class RevisionVectorTests(unittest.TestCase):
     def setUp(self):
