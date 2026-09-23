@@ -355,6 +355,16 @@ def _validate_condition(
         raise ContractError(
             f"{label}.question_id must name a declared question template, got {question_id!r}"
         )
+    # Only noul answers carry a probability a band can be computed from, so a
+    # rule that tests a choice or a score would raise while routing and abort
+    # the whole operation. Refuse the policy up front rather than discovering
+    # it mid-flight.
+    primitive = templates[question_id].get("type")
+    if primitive != "noul":
+        raise ContractError(
+            f"{label}.question_id must name a noul question template: "
+            f"only noul answers can be banded, but {question_id!r} is {primitive!r}"
+        )
     bands = condition.get("bands")
     if not isinstance(bands, list) or not bands:
         raise ContractError(f"{label}.bands must be a non-empty array")

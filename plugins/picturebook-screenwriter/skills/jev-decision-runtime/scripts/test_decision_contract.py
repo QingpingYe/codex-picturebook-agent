@@ -348,6 +348,35 @@ class PolicyContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_policy(policy)
 
+    def test_a_rule_may_only_reference_a_noul_question_template(self):
+        # Only noul answers can be banded, so a rule testing a choice or a
+        # score raises while routing and would abort the whole operation. The
+        # policy is refused up front instead of failing mid-flight.
+        policy = make_policy()
+        entry = policy["operations"]["knowledge_relevance"]
+        entry["question_templates"]["stance"] = {
+            "type": "choice",
+            "instructions": "该块主张什么立场？",
+            "criteria": {"support": "支持", "oppose": "反对"},
+        }
+        entry["routing"]["rules"].append(
+            {"route": "escalate_llm", "label": "stance",
+             "any_of": [{"question_id": "stance", "bands": ["risk"]}]}
+        )
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_an_unreferenced_non_noul_template_is_still_accepted(self):
+        # The guard is about banding, not about the template itself: a choice
+        # or a score may be declared as long as no routing rule tests it.
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["question_templates"]["stance"] = {
+            "type": "choice",
+            "instructions": "该块主张什么立场？",
+            "criteria": {"support": "支持", "oppose": "反对"},
+        }
+        validate_policy(policy)
+
     def test_a_rule_needs_exactly_one_of_any_of_or_all_of(self):
         policy = make_policy()
         policy["operations"]["knowledge_relevance"]["routing"] = {
