@@ -1,6 +1,8 @@
 import unittest
 
+import required_marking
 from chunker import MAX_CHUNK_CHARS, chunk_evidence
+from load_knowledge import KnowledgeEvidence, KnowledgeEvidenceBundle
 from required_marking import (
     REQUIRED_ALL_PAGE_TYPES,
     REQUIRED_MACHINE_DATA_BLOCKS,
@@ -25,6 +27,10 @@ def marked(key, body, **overrides):
 
 def by_heading(chunks):
     return {" / ".join(chunk.heading_path): chunk for chunk in chunks}
+
+
+def without(item, name):
+    return {key: value for key, value in item.items() if key != name}
 
 
 class PageTypeTests(unittest.TestCase):
@@ -94,6 +100,68 @@ class RequiredMachineDataTests(unittest.TestCase):
         self.assertEqual(chunks[0].required_reason, "unclassified_preamble")
 
 
+class MachineDataAnchorTests(unittest.TestCase):
+    """The declared block names are a vocabulary, not the boundary."""
+
+    def test_an_unlisted_machine_data_block_is_required(self):
+        body = ("# 台账\n\n## 数据\n\n<!-- machine-data: style_notes -->\n"
+                "```yaml\nx: 1\n```\n")
+        chunks = marked("海外绘本/小老鼠迈尔斯/prop-registry", body)
+        self.assertTrue(chunks[1].required)
+        self.assertEqual(chunks[1].required_reason, "machine_data:style_notes")
+
+    def test_an_anchor_written_without_spaces_is_required(self):
+        # The templates show the spaced form, but a page may write the anchor
+        # tight against its delimiters, and that block is still a constraint.
+        body = "# 台账\n\n## 数据\n\n<!--machine-data:props-->\n```yaml\nprops: []\n```\n"
+        chunks = marked("海外绘本/小老鼠迈尔斯/prop-registry", body)
+        self.assertTrue(chunks[1].required)
+        self.assertEqual(chunks[1].required_reason, "machine_data:props")
+
+    def test_an_anchor_without_a_name_is_required(self):
+        body = "# 台账\n\n## 数据\n\n<!-- machine-data: -->\n```yaml\nx: 1\n```\n"
+        chunks = marked("海外绘本/小老鼠迈尔斯/prop-registry", body)
+        self.assertTrue(chunks[1].required)
+        self.assertEqual(chunks[1].required_reason, "machine_data:unnamed")
+
+
+class ProhibitionVocabularyTests(unittest.TestCase):
+    """Phase 3 reads prohibitions from the headings Phase 2 protects."""
+
+    # The marker vocabulary Phase 3's redline_catalog declares.
+    PHASE3_MARKERS = ("禁止", "红线", "禁用", "创作边界", "金句规则")
+
+    def test_the_prohibition_vocabulary_matches_phase3(self):
+        self.assertEqual(required_marking.PROHIBITION_HEADING_MARKERS,
+                         self.PHASE3_MARKERS)
+
+    def test_a_phase3_prohibition_heading_is_required(self):
+        for marker in self.PHASE3_MARKERS:
+            body = f"# 世界观总纲\n\n## {marker}清单\n\n- 一条约束。\n"
+            with self.subTest(marker=marker):
+                chunks = by_heading(marked("海外绘本/小老鼠迈尔斯/worldview", body))
+                self.assertTrue(chunks[f"世界观总纲 / {marker}清单"].required)
+
+    def test_the_corrections_sentence_and_frame_sections_are_required(self):
+        body = ("# 纠正台账\n\n## 金句纠正\n\n- 被否决的金句模式。\n\n"
+                "## 画面纠正\n\n- 被否决的画面处理方式。\n\n"
+                "## 迭代历史\n\n- 2026-09-01：新增一条。\n")
+        chunks = by_heading(marked("海外绘本/小老鼠迈尔斯/corrections", body))
+        self.assertTrue(chunks["纠正台账 / 金句纠正"].required)
+        self.assertEqual(chunks["纠正台账 / 金句纠正"].required_reason,
+                         "heading:金句纠正")
+        self.assertTrue(chunks["纠正台账 / 画面纠正"].required)
+        self.assertFalse(chunks["纠正台账 / 迭代历史"].required)
+
+    def test_the_core_emotional_mechanism_section_is_required(self):
+        body = "# 指纹规格\n\n## 核心情感机制\n\n- 操作化定义 + core_test。\n"
+        chunks = by_heading(
+            marked("海外绘本/小老鼠迈尔斯/story-fingerprint-spec", body))
+        self.assertTrue(chunks["指纹规格 / 核心情感机制"].required)
+        self.assertEqual(chunks["指纹规格 / 核心情感机制"].required_reason,
+                         "heading:核心情感机制")
+
+
 class ConservativeFallbackTests(unittest.TestCase):
     def test_an_unpublished_source_is_required_in_full(self):
         chunks = marked("海外绘本/小老鼠迈尔斯/worldview", WORLDVIEW_BODY,
@@ -153,6 +221,99 @@ class MarkBundleTests(unittest.TestCase):
         )}
         chunks = mark_bundle(bundle, declared_keys=("海外绘本/小老鼠迈尔斯/worldview",))
         self.assertTrue(all(chunk.required for chunk in chunks))
+
+
+class BundleShapeTests(unittest.TestCase):
+    """The loader hands back a frozen dataclass, not a mapping."""
+
+    def test_mark_bundle_accepts_the_loader_bundle_object(self):
+        bundle = KnowledgeEvidenceBundle(
+            items=(KnowledgeEvidence(
+                key="海外绘本/小老鼠迈尔斯/content-spec",
+                doc_token="doxcnExample",
+                revision_id=17,
+                title="海外绘本/小老鼠迈尔斯/content-spec",
+                content="# 规范\n\n正文。\n",
+                source_revisions={"node-a": "17"},
+            ),),
+            warnings=(),
+            offline=False,
+            fetched_at="2026-09-23T10:30:00+08:00",
+        )
+        chunks = mark_bundle(bundle)
+        self.assertTrue(chunks)
+        self.assertTrue(all(chunk.required for chunk in chunks))
+        self.assertEqual(chunks[0].required_reason, "page_type:content-spec")
+
+    def test_a_loader_bundle_item_keeps_its_own_page_type_rules(self):
+        bundle = KnowledgeEvidenceBundle(
+            items=(
+                KnowledgeEvidence(
+                    key="海外绘本/小老鼠迈尔斯/worldview",
+                    doc_token="doxcnExample",
+                    revision_id=17,
+                    title="海外绘本/小老鼠迈尔斯/worldview",
+                    content=WORLDVIEW_BODY,
+                    source_revisions={"node-a": "17"},
+                ),
+                KnowledgeEvidence(
+                    key="海外绘本/小老鼠迈尔斯/content-spec",
+                    doc_token="doxcnExample",
+                    revision_id=17,
+                    title="海外绘本/小老鼠迈尔斯/content-spec",
+                    content="# 规范\n\n正文。\n",
+                    source_revisions={"node-a": "17"},
+                ),
+            ),
+            warnings=(),
+            offline=False,
+            fetched_at="2026-09-23T10:30:00+08:00",
+        )
+        by_key = {}
+        for chunk in mark_bundle(bundle):
+            by_key.setdefault(chunk.key, []).append(chunk)
+        self.assertFalse(by_key["海外绘本/小老鼠迈尔斯/worldview"][0].required)
+        self.assertTrue(all(chunk.required
+                            for chunk in by_key["海外绘本/小老鼠迈尔斯/content-spec"]))
+
+
+class UnknownProvenanceTests(unittest.TestCase):
+    """A page whose provenance is absent is a page that cannot be classified."""
+
+    def test_a_missing_status_is_required_in_full(self):
+        bundle = {"items": (without(evidence(), "status"),)}
+        chunks = mark_bundle(bundle)
+        self.assertTrue(all(chunk.required for chunk in chunks))
+        self.assertEqual(chunks[0].required_reason, "source_status_unknown")
+
+    def test_a_missing_index_sync_flag_is_required_in_full(self):
+        bundle = {"items": (without(evidence(), "index_synced"),)}
+        chunks = mark_bundle(bundle)
+        self.assertTrue(all(chunk.required for chunk in chunks))
+        self.assertEqual(chunks[0].required_reason, "index_sync_unknown")
+
+    def test_an_item_without_provenance_attributes_is_required_in_full(self):
+        class Item:
+            key = "海外绘本/小老鼠迈尔斯/worldview"
+            doc_token = "doxcnExample"
+            revision_id = 17
+            content = WORLDVIEW_BODY
+
+        chunks = mark_bundle({"items": (Item(),)})
+        self.assertTrue(all(chunk.required for chunk in chunks))
+        self.assertEqual(chunks[0].required_reason, "source_status_unknown")
+
+    def test_an_unknown_status_is_required_when_it_reaches_marking_directly(self):
+        chunks = mark_required(chunk_evidence(evidence()), page_type="worldview",
+                              status=None, index_synced=True)
+        self.assertTrue(all(chunk.required for chunk in chunks))
+        self.assertEqual(chunks[0].required_reason, "source_status_unknown")
+
+    def test_an_unknown_sync_flag_is_required_when_it_reaches_marking_directly(self):
+        chunks = mark_required(chunk_evidence(evidence()), page_type="worldview",
+                              status="published", index_synced=None)
+        self.assertTrue(all(chunk.required for chunk in chunks))
+        self.assertEqual(chunks[0].required_reason, "index_sync_unknown")
 
 
 class FencedContentTests(unittest.TestCase):

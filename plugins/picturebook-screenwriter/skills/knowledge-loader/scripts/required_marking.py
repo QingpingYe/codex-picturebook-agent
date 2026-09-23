@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -29,11 +30,31 @@ REQUIRED_ALL_PAGE_TYPES = frozenset({"content-spec"})
 REQUIRED_HEADING_MARKERS: dict[str, tuple[str, ...]] = {
     "worldview": ("创作红线不变量",),
     "characters": ("创作边界",),
-    "corrections": ("强制性禁止条目", "身体语言禁止词汇", "红线机器可读块"),
+    "corrections": (
+        "强制性禁止条目",
+        "身体语言禁止词汇",
+        "红线机器可读块",
+        "金句纠正",
+        "画面纠正",
+    ),
     "creation-standards": ("创作红线",),
     "golden-sentence-registry": ("金句规则",),
-    "story-fingerprint-spec": ("禁用词", "禁止写法"),
+    "story-fingerprint-spec": ("禁用词", "禁止写法", "核心情感机制"),
 }
+
+# The vocabulary Phase 3's red-line catalog uses to pick prohibition sections
+# out of a page. A section that stage reads as a prohibition is a hard
+# constraint, so the same words protect the same pages here; otherwise the two
+# stages would disagree about what may be filtered away.
+PROHIBITION_PAGE_TYPES = (
+    "corrections",
+    "creation-standards",
+    "worldview",
+    "golden-sentence-registry",
+    "story-fingerprint-spec",
+)
+
+PROHIBITION_HEADING_MARKERS = ("禁止", "红线", "禁用", "创作边界", "金句规则")
 
 # Machine-readable constraint blocks. These are matched against every page type
 # because a block that exists to be machine-matched is a constraint by
@@ -52,6 +73,11 @@ REQUIRED_MACHINE_DATA_BLOCKS = (
 )
 
 _HEADING_LINE = re.compile(r"^#{1,6}\s+(.*?)\s*$")
+# The declared list above is the audit vocabulary, not the boundary of what
+# counts as a constraint block: any `<!-- machine-data: name -->` anchor marks
+# a block the machine reads, so an unlisted or differently spaced anchor is a
+# constraint too.
+_MACHINE_DATA_ANCHOR = re.compile(r"<!--\s*machine-data:\s*([^\s>|]*)")
 
 
 def page_type_of(key: str) -> str:
@@ -88,6 +114,27 @@ def _swallowed_heading_reason(text: str, markers: tuple[str, ...]) -> str | None
     return None
 
 
+def _machine_data_reason(text: str) -> str | None:
+    """Name the machine-readable constraint block a chunk carries, if any.
+
+    The declared list is checked first so the audit label names the block that
+    is known to be a constraint, and any other anchor is still a constraint
+    block: a name this list has never heard of is an unknown, and unknowns are
+    never filtered.
+    """
+
+    for block in REQUIRED_MACHINE_DATA_BLOCKS:
+        if f"machine-data: {block}" in text:
+            return f"machine_data:{block}"
+    match = _MACHINE_DATA_ANCHOR.search(text)
+    if match is None:
+        return None
+    # The delimiters may be written tight against the name, so the captured
+    # text can still carry the anchor's own dashes.
+    name = match.group(1).strip().rstrip("-").strip()
+    return f"machine_data:{name or 'unnamed'}"
+
+
 def _chunk_reason(chunk: Chunk, markers: tuple[str, ...]) -> str | None:
     if not chunk.heading_path:
         # An unheaded preamble cannot be classified, so it is never filtered.
@@ -96,9 +143,9 @@ def _chunk_reason(chunk: Chunk, markers: tuple[str, ...]) -> str | None:
     # a block that exists to be machine-matched is a constraint by construction,
     # and the audit trail should name the block rather than whichever heading
     # happens to sit above it.
-    for block in REQUIRED_MACHINE_DATA_BLOCKS:
-        if f"machine-data: {block}" in chunk.text:
-            return f"machine_data:{block}"
+    machine_data = _machine_data_reason(chunk.text)
+    if machine_data is not None:
+        return machine_data
     if markers:
         heading = " / ".join(chunk.heading_path)
         for marker in markers:
@@ -121,13 +168,21 @@ def mark_required(
     Every branch that cannot positively classify a chunk marks it required. The
     asymmetry is deliberate: a false required chunk costs context, a false soft
     chunk can drop a hard constraint.
+
+    A missing `status` or `index_synced` (passed as `None`) means the caller
+    cannot prove where the page came from, which is exactly the unclassifiable
+    case, so it is required as well.
     """
 
     chunks = tuple(chunks)
     if declared_required:
         return _all_required(chunks, "caller_declared")
+    if status is None:
+        return _all_required(chunks, "source_status_unknown")
     if status != "published":
         return _all_required(chunks, "source_status_not_published")
+    if index_synced is None:
+        return _all_required(chunks, "index_sync_unknown")
     if not index_synced:
         return _all_required(chunks, "index_not_synced")
     if page_type not in PAGE_TYPES:
@@ -135,6 +190,8 @@ def mark_required(
     if page_type in REQUIRED_ALL_PAGE_TYPES:
         return _all_required(chunks, f"page_type:{page_type}")
     markers = REQUIRED_HEADING_MARKERS.get(page_type, ())
+    if page_type in PROHIBITION_PAGE_TYPES:
+        markers = markers + PROHIBITION_HEADING_MARKERS
     reasons = [_chunk_reason(chunk, markers) for chunk in chunks]
     # Splitting an oversized section keeps the key and the heading path but not
     # the anchor that made it required: only the first part carries the
@@ -156,20 +213,33 @@ def mark_required(
 
 
 def mark_bundle(bundle, *, declared_page_types=(), declared_keys=()):
-    """Chunk and mark every item of an evidence bundle."""
+    """Chunk and mark every item of an evidence bundle.
+
+    The bundle is accepted in either of the shapes the loader produces: a
+    mapping or the frozen `KnowledgeEvidenceBundle` dataclass, mirroring
+    `chunker.chunk_bundle`.
+    """
 
     declared_types = frozenset(declared_page_types)
     declared = frozenset(declared_keys)
+    items = (
+        bundle.get("items", ())
+        if isinstance(bundle, Mapping)
+        else getattr(bundle, "items", ())
+    )
     marked: list[Chunk] = []
-    for item in bundle.get("items", ()):
+    for item in items:
         key = str(evidence_field(item, "key", ""))
         page_type = page_type_of(key)
         chunks = chunk_bundle({"items": (item,)})
         marked.extend(mark_required(
             chunks,
             page_type=page_type,
-            status=str(evidence_field(item, "status", "published")),
-            index_synced=bool(evidence_field(item, "index_synced", True)),
+            # Provenance a bundle does not carry is provenance that cannot be
+            # trusted, so it is passed through as unknown rather than assumed
+            # published and synced.
+            status=evidence_field(item, "status", None),
+            index_synced=evidence_field(item, "index_synced", None),
             declared_required=key in declared or page_type in declared_types,
         ))
     return tuple(marked)
