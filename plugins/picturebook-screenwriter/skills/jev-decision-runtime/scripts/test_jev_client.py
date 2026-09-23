@@ -152,6 +152,19 @@ class TransportFailureTests(unittest.TestCase):
         outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
         self.assertEqual(outcome.status, "outcome_unknown")
 
+    def test_connection_reset_is_not_retried_as_a_provable_failure(self):
+        transport = UrllibTransport()
+        with mock.patch.object(
+            transport, "_open",
+            side_effect=ConnectionResetError("connection reset by peer"),
+        ):
+            client = JevClient(
+                transport, environ={API_KEY_ENV: "sk-abc"}, sleep=lambda _: None
+            )
+            outcome = client.call(make_request())
+        self.assertEqual(outcome.status, "outcome_unknown")
+        self.assertEqual(outcome.attempts, 1)
+
     def test_a_malformed_success_body_is_a_failure(self):
         transport = FakeTransport(responses=[TransportResponse(200, "{not json", {})])
         outcome = make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())

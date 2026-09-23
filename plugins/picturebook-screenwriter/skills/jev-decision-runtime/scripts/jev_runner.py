@@ -369,10 +369,18 @@ def execute(request, config, client, clock=None) -> dict:
         config, credential_status="unchecked", pending_call=build_pending_call(request)
     )
 
+    def mark_in_flight() -> None:
+        pending = build_pending_call(request)
+        pending["attempt_status"] = "in_flight"
+        write_atomic(pending_path(config.run_dir, operation_id), pending)
+        sync_decision_context(
+            config, credential_status="available", pending_call=pending
+        )
+
     stopwatch = Stopwatch(clock if clock is not None else time.monotonic)
     started_at = now_iso()
     stopwatch.start()
-    outcome = client.call(request)
+    outcome = client.call(request, before_dispatch=mark_in_flight)
     stopwatch.stop()
     finished_at = now_iso()
     elapsed_ms = stopwatch.elapsed_ms
@@ -477,6 +485,9 @@ def _settle(
 
 
 def run_operation(request, config, client, clock=None, now=None) -> dict:
+    # Validate all caller-controlled path components before acquiring a lease
+    # or creating any operation directory.
+    validate_request(request)
     operation_id = operation_id_from_request(request)
     lease = acquire_lease(config, operation_id, now=now)
     try:
@@ -524,30 +535,33 @@ def resume_operation(
             "this run has more than one pending Jev call: " + ", ".join(operation_ids)
         )
     operation_id = operation_ids[0]
-    stored_result = read_json(result_path(config.run_dir, operation_id))
-    if stored_result is not None:
-        # A crash between writing the terminal result and clearing the pending
-        # call leaves both files behind. The operation is already done and its
-        # request already paid for, so finish the bookkeeping instead of
-        # dispatching a second, billable call.
-        pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
-        sync_decision_context(
-            config, credential_status="available", pending_call=None,
-            resume_cursor=operation_cursor(operation_id),
-        )
-        return stored_result
-    pending = read_json(pending_path(config.run_dir, operation_id))
-    if pending is None:
-        raise NoPendingCall(f"pending call for {operation_id} is unreadable")
     request = read_json(request_path(config.run_dir, operation_id))
     if request is None:
         raise NoPendingCall(f"stored request for {operation_id} is unreadable")
+    pending = read_json(pending_path(config.run_dir, operation_id))
+    if pending is None:
+        raise NoPendingCall(f"pending call for {operation_id} is unreadable")
 
     if not _refs_equal(current_input_refs, pending.get("input_refs")):
         return _superseded(request, config, operation_id, "input_revisions_changed")
     if request_fingerprint(request) != pending.get("request_fingerprint"):
         return _superseded(request, config, operation_id, "request_fingerprint_mismatch")
-    if pending.get("attempt_status") == "outcome_unknown":
+    stored_result = read_json(result_path(config.run_dir, operation_id))
+    if stored_result is not None:
+        # A crash between writing the terminal result and clearing the pending
+        # call leaves both files behind. Only return it after confirming that
+        # the caller still has the exact revisions and request fingerprint.
+        lease = acquire_lease(config, operation_id)
+        try:
+            pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
+            sync_decision_context(
+                config, credential_status="available", pending_call=None,
+                resume_cursor=operation_cursor(operation_id),
+            )
+            return stored_result
+        finally:
+            release_lease(config, operation_id, lease.holder)
+    if pending.get("attempt_status") in {"outcome_unknown", "in_flight"}:
         if not allow_new_attempt:
             # The attempt may have been billed, so nothing is re-sent. The
             # operation stays in its own `outcome_unknown` state (not

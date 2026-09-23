@@ -155,11 +155,19 @@ class UrllibTransport:
             # spurious "unknown", so timeouts always report the ambiguous case.
             raise JevTransportOutcomeUnknown(str(error)) from error
         except urllib.error.URLError as error:
-            if isinstance(error.reason, (socket.timeout, TimeoutError)):
-                raise JevTransportOutcomeUnknown(str(error.reason)) from error
+            reason = error.reason
+            if isinstance(reason, (socket.timeout, TimeoutError)):
+                raise JevTransportOutcomeUnknown(str(reason)) from error
+            if isinstance(reason, (ConnectionRefusedError, socket.gaierror)):
+                raise JevTransportFailure(str(reason)) from error
+            raise JevTransportOutcomeUnknown(str(reason)) from error
+        except (ConnectionRefusedError, socket.gaierror) as error:
             raise JevTransportFailure(str(error)) from error
-        except (ssl.SSLError, ConnectionError, OSError) as error:
-            raise JevTransportFailure(str(error)) from error
+        except (ssl.SSLError, ConnectionError, OSError, TimeoutError) as error:
+            # Once connect has started, a reset, broken pipe, TLS read error,
+            # or generic I/O failure may happen after the server accepted the
+            # POST. Retrying could duplicate a billable operation.
+            raise JevTransportOutcomeUnknown(str(error)) from error
 
 
 class FakeTransport:
@@ -198,7 +206,7 @@ class JevClient:
         self._sleep = sleep
         self._total_timeout = total_timeout
 
-    def call(self, request: Mapping[str, Any]) -> CallOutcome:
+    def call(self, request: Mapping[str, Any], *, before_dispatch=None) -> CallOutcome:
         key = read_api_key(self._environ)
         if key is None:
             return CallOutcome("waiting_for_jev_key", None, None, None, 0)
@@ -208,6 +216,8 @@ class JevClient:
             "Accept": "application/json",
         }
         body = json.dumps(request, ensure_ascii=False).encode("utf-8")
+        if before_dispatch is not None:
+            before_dispatch()
         return self._attempt(request, headers, body)
 
     def _attempt(self, request, headers, body) -> CallOutcome:

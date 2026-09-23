@@ -306,6 +306,16 @@ class RequestGateTests(RunnerCase):
             run_operation(make_request(), config, client)
         self.assertEqual(transport.calls, [])
 
+    def test_invalid_run_id_is_rejected_before_any_lease_path_is_created(self):
+        escaped_name = "escaped-" + self.run_dir.name
+        request = make_request(run_id=f"../../{escaped_name}")
+        escaped_operation_dir = self.run_dir.parent.parent / f"{escaped_name}-knowledge_relevance"
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        with self.assertRaises(ContractError):
+            run_operation(request, self.config, client)
+        self.assertFalse(escaped_operation_dir.exists())
+        self.assertEqual(transport.calls, [])
+
 
 class ResumeTests(RunnerCase):
     def _wait_for_key(self):
@@ -375,6 +385,26 @@ class ResumeTests(RunnerCase):
         context = read_decision_context(self.run_dir)
         self.assertIsNone(context["pending_call"])
         self.assertEqual(context["resume_cursor"], f"after_operation:{self.operation_id}")
+
+    def test_resume_checks_freshness_before_returning_a_stored_result(self):
+        # A terminal result belongs to the revisions in its stored request.
+        # Even in the crash window, a caller with newer revisions must not get
+        # the old successful result as if it described current knowledge.
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        run_operation(make_request(), self.config, client)
+        write_atomic(
+            pending_path(self.run_dir, self.operation_id),
+            build_pending_call(make_request()),
+        )
+        resume_client, transport = self.client(
+            [TransportResponse(200, success_body(), {})]
+        )
+        moved = [{"ref_id": "海外绘本/小老鼠迈尔斯/worldview", "kind": "knowledge_page",
+                  "revisions": {"node-a": "99"}}]
+        result = resume_operation(self.config, resume_client, moved)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_class"], "superseded")
+        self.assertEqual(transport.calls, [])
 
     def test_a_corrupt_stored_request_is_not_replayed(self):
         # A crash can leave a truncated request.json behind. Replaying it would
@@ -463,6 +493,34 @@ class ResumeTests(RunnerCase):
                 allow_new_attempt=True,
             )
         self.assertEqual(retry_transport.calls, [])
+
+    def test_a_crash_left_in_flight_call_is_not_automatically_replayed(self):
+        self._wait_for_key()
+        pending = read_json(pending_path(self.run_dir, self.operation_id))
+        pending["attempt_status"] = "in_flight"
+        write_atomic(pending_path(self.run_dir, self.operation_id), pending)
+        client, transport = self.client([TransportResponse(200, success_body(), {})])
+        result = resume_operation(self.config, client, make_request()["context_refs"])
+        self.assertEqual(result["status"], "outcome_unknown")
+        self.assertEqual(transport.calls, [])
+
+    def test_in_flight_is_persisted_before_transport_dispatch(self):
+        class InspectingTransport:
+            def __init__(inner_self):
+                inner_self.pending_status = None
+
+            def send(inner_self, url, headers, body, timeout):
+                pending = read_json(pending_path(self.run_dir, self.operation_id))
+                inner_self.pending_status = pending["attempt_status"]
+                return TransportResponse(200, success_body(), {})
+
+        transport = InspectingTransport()
+        client = JevClient(
+            transport, environ={API_KEY_ENV: "sk-abc"}, sleep=lambda _: None
+        )
+        result = run_operation(make_request(), self.config, client)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(transport.pending_status, "in_flight")
 
 
 class LeaseTests(RunnerCase):
