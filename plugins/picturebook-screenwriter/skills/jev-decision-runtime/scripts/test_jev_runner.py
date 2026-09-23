@@ -76,6 +76,20 @@ def success_body():
     })
 
 
+# 200 bodies that carry no readable answer envelope: a JSON value that is not
+# an object, or an object whose `answers` is not an object keyed by question id.
+INVALID_ENVELOPE_BODIES = (
+    "[]",
+    '"just text"',
+    "42",
+    "null",
+    "true",
+    '{"model": "jev-1.13.0", "answers": [[1, 2]]}',
+    '{"model": "jev-1.13.0", "answers": 5}',
+    '{"model": "jev-1.13.0", "answers": "nope"}',
+)
+
+
 class RunnerCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -268,6 +282,47 @@ class IncompleteResponseTests(RunnerCase):
         self.assertEqual(len(transport.calls), 1)
         self.assertFalse(result_path(self.run_dir, self.operation_id).exists())
         self.assertTrue(pending_path(self.run_dir, self.operation_id).is_file())
+
+    def test_a_malformed_envelope_settles_instead_of_raising(self):
+        # Every shape a provider can return inside a 200 body without a usable
+        # envelope: the body is a JSON value but not an object, or it is an
+        # object whose `answers` is not an object of question ids. The call is
+        # already paid for when the runner reads it, so each of these has to
+        # settle the operation with a terminal failure instead of raising out of
+        # the runner and leaving a pending call with no outcome.
+        for body in INVALID_ENVELOPE_BODIES:
+            with self.subTest(body=body):
+                client, transport = self.client([TransportResponse(200, body, {})])
+                result = run_operation(make_request(), self.config, client)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["error_class"], "incomplete_response")
+                self.assertEqual(len(transport.calls), 1)
+                self.assertEqual(
+                    read_json(
+                        pending_path(self.run_dir, self.operation_id)
+                    )["attempt_status"],
+                    "failed",
+                )
+
+    def test_result_construction_refuses_an_envelope_it_cannot_read(self):
+        # Routing runs inside the result construction, so the envelope has to be
+        # checked before any band is computed: an answer set that is not an
+        # object must be a contract failure, never an `AttributeError`/`TypeError`
+        # raised while routing tries to read a band out of it.
+        from decision_contract import operation_policy
+        from jev_runner import build_result
+
+        entry = operation_policy(
+            load_policy(default_policy_path()), "knowledge_relevance"
+        )
+        payloads = ([], 5, {"answers": [[1, 2]]}, {"answers": 5})
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ContractError):
+                    build_result(
+                        request=make_request(), status="succeeded",
+                        payload=payload, operation_policy_entry=entry,
+                    )
 
 
 class WaitingRunTests(RunnerCase):

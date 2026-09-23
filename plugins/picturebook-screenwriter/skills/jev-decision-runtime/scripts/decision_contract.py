@@ -313,10 +313,26 @@ def validate_result(payload: Any) -> None:
 
 
 def validate_answer_ids(request: Any, result: Any) -> None:
-    """Reject a response whose answer ids differ from the submitted questions."""
+    """Reject a response whose answer ids differ from the submitted questions.
 
+    The provider's 200 body is untrusted input: a body that is not an object,
+    or whose `answers` is not an object of string ids, carries no answer set to
+    compare. Reading one of those shapes with `.get` / `set` / `sorted` would
+    raise `AttributeError` or `TypeError` *after* the call has been paid for, so
+    an ill-shaped envelope is reported as the same `ContractError` an incomplete
+    response gets.
+    """
+
+    if not isinstance(result, Mapping):
+        raise ContractError("a provider response must be a JSON object")
+    answers = result.get("answers")
+    if not isinstance(answers, Mapping):
+        raise ContractError("a provider response must carry an object of answers")
+    for question_id in answers:
+        if not isinstance(question_id, str):
+            raise ContractError("answer ids must be strings")
     expected = set(request["questions"])
-    actual = set(result.get("answers") or {})
+    actual = set(answers)
     missing = sorted(expected - actual)
     unknown = sorted(actual - expected)
     if missing:

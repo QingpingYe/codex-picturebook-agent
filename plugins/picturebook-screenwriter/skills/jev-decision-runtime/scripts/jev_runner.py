@@ -288,7 +288,16 @@ def build_result(
     usage = {"input_tokens": None, "output_tokens": None}
     resolved_model = None
     if status == "succeeded" and payload is not None:
-        answers = dict(payload.get("answers") or {})
+        # Routing runs before `validate_result` inside this function, so the
+        # envelope is checked here too: an answer set the router cannot read has
+        # to be a `ContractError` the caller can settle, never a `TypeError` or
+        # `AttributeError` raised after the call has already been paid for.
+        if not isinstance(payload, Mapping):
+            raise ContractError("a provider response must be a JSON object")
+        raw_answers = payload.get("answers")
+        if not isinstance(raw_answers, Mapping):
+            raise ContractError("a provider response must carry an object of answers")
+        answers = dict(raw_answers)
         input_tokens, output_tokens, _ = estimate_usage(
             payload.get("usage"), price_usd_per_million_input_tokens
         )

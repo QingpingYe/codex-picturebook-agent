@@ -33,6 +33,20 @@ RUN_ID = "20260923-example-0001"
 KEY = "海外绘本/小老鼠迈尔斯/worldview"
 TWIN_KEY = "海外绘本/迈尔斯续集/worldview"
 
+# 200 bodies that carry no readable answer envelope. The screening loop calls
+# the runner once per batch without a guard of its own, so a body the runner
+# cannot settle on would surface as a traceback from the whole operation.
+MALFORMED_ENVELOPES = (
+    "[]",
+    '"just text"',
+    "42",
+    "null",
+    "true",
+    '{"model": "jev-1.13.0", "answers": [[1, 2]]}',
+    '{"model": "jev-1.13.0", "answers": 5}',
+    '{"model": "jev-1.13.0", "answers": "nope"}',
+)
+
 WORLDVIEW_BODY = """# 世界观总纲
 
 ## 核心价值主张
@@ -225,9 +239,11 @@ class ScreeningTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _screen(self, answers, responses=None, bundle_override=None, policy=None):
-        body = json.dumps({"model": "jev-1.13.0", "answers": answers,
-                           "usage": {"input_tokens": 120, "output_tokens": 8}})
+    def _screen(self, answers, responses=None, bundle_override=None, policy=None,
+                body=None):
+        if body is None:
+            body = json.dumps({"model": "jev-1.13.0", "answers": answers,
+                               "usage": {"input_tokens": 120, "output_tokens": 8}})
         transport = FakeTransport(responses=responses or [TransportResponse(200, body, {})])
         client = JevClient(transport, environ={API_KEY_ENV: "sk-abc"}, sleep=lambda _: None)
         policy = policy or self.policy
@@ -288,6 +304,26 @@ class ScreeningTests(unittest.TestCase):
                         <= {c.chunk_id for c in outcome.kept})
         self.assertTrue({c.chunk_id for c in candidates}
                         <= {c.chunk_id for c in outcome.uncertain})
+
+    def test_a_malformed_envelope_keeps_every_candidate_uncertain(self):
+        # One unguarded batch would abort the whole screening, because the loop
+        # calls the runner without a guard of its own. A 200 body the runner
+        # cannot read has to settle that batch as a terminal failure, leaving
+        # every candidate of the batch kept and flagged for review.
+        candidates = [c for c in mark_bundle(bundle()) if not c.required]
+        self.assertTrue(candidates)
+        for body in MALFORMED_ENVELOPES:
+            with self.subTest(body=body):
+                outcome = self._screen({}, body=body)
+                self.assertEqual([result["status"] for result in outcome.results],
+                                 ["failed"])
+                self.assertEqual([result["error_class"] for result in outcome.results],
+                                 ["incomplete_response"])
+                self.assertEqual(outcome.excluded_soft, ())
+                self.assertEqual({chunk.chunk_id for chunk in outcome.uncertain},
+                                 {chunk.chunk_id for chunk in candidates})
+                self.assertTrue({chunk.chunk_id for chunk in candidates}
+                                <= {chunk.chunk_id for chunk in outcome.kept})
 
     def test_an_unbandable_answer_keeps_its_own_item_uncertain(self):
         # A choice answer to a noul question is a well-formed answer payload, so

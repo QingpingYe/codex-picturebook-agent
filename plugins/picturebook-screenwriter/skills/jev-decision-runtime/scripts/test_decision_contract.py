@@ -220,6 +220,33 @@ class ResultContractTests(unittest.TestCase):
                 answers={"relevant": {"type": "noul", "noul": 0.5}, "surprise": {"type": "noul", "noul": 0.5}},
             ))
 
+    def test_a_response_that_is_not_an_object_is_refused(self):
+        # A provider 200 body is untrusted input. A body that is not an object
+        # has no answers to compare, and reading one with `.get` would raise
+        # `AttributeError` past every caller that reports `ContractError` as a
+        # settled failure.
+        for body in ([], "just text", 42, None, True):
+            with self.subTest(body=body):
+                with self.assertRaises(ContractError):
+                    validate_answer_ids(make_request(), body)
+
+    def test_a_response_whose_answers_is_not_an_object_is_refused(self):
+        # `answers` has to be an object keyed by question id: `set(...)` over an
+        # array of pairs, or over a number, raises `TypeError` instead.
+        for answers in ([["a", 1]], 5, "nope", None):
+            with self.subTest(answers=answers):
+                with self.assertRaises(ContractError):
+                    validate_answer_ids(make_request(), make_result(answers=answers))
+
+    def test_answer_ids_that_are_not_strings_are_refused(self):
+        # JSON object keys are always strings, so this shape can only arrive
+        # from a stub provider; sorting a mixed key set would raise `TypeError`.
+        with self.assertRaises(ContractError):
+            validate_answer_ids(
+                make_request(),
+                make_result(answers={1: {"type": "noul", "noul": 0.5}}),
+            )
+
 
 def make_policy(**overrides):
     policy = {
