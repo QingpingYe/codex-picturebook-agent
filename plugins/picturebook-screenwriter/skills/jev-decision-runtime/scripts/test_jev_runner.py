@@ -245,6 +245,30 @@ class IncompleteResponseTests(RunnerCase):
             "failed",
         )
 
+    def test_an_answer_value_that_cannot_be_read_settles_instead_of_raising(self):
+        # The answer carries the right question id, so it passes answer-id
+        # validation, and its value is unreadable rather than misplaced: the
+        # refusal comes from the result contract, which is only reached after
+        # routing has already tried to band that value. The call is paid for, so
+        # the operation has to settle with a terminal failure instead of raising
+        # out of the runner and leaving a pending call with no result.
+        item = "海外绘本/小老鼠迈尔斯/worldview#003"
+        request = make_request(questions={
+            f"{item}::relevant": {"type": "noul", "instructions": "x"},
+        })
+        body = json.dumps({
+            "model": "jev-1.13.0",
+            "answers": {f"{item}::relevant": {"type": "noul", "noul": "很相关"}},
+            "usage": {"input_tokens": 296, "output_tokens": 20},
+        })
+        client, transport = self.client([TransportResponse(200, body, {})])
+        result = run_operation(request, self.config, client)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_class"], "incomplete_response")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertFalse(result_path(self.run_dir, self.operation_id).exists())
+        self.assertTrue(pending_path(self.run_dir, self.operation_id).is_file())
+
 
 class WaitingRunTests(RunnerCase):
     def test_a_missing_key_waits_and_writes_no_result(self):
@@ -751,6 +775,31 @@ class RoutePopulationTests(RunnerCase):
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["routes"], [])
         self.assertTrue(result_path(self.run_dir, self.operation_id).is_file())
+
+    def test_an_unreadable_answer_value_costs_only_its_own_item_its_route(self):
+        # A noul answer whose value is missing, or is not a number, cannot be
+        # placed in a band. Reading it must not raise out of the result
+        # construction: the provider call is already paid for, so the answer
+        # costs its own item a route and leaves its neighbour's route alone.
+        from decision_contract import operation_policy
+        from jev_runner import _routes_for
+
+        missing_value = self.ITEM
+        non_numeric_value = self.ITEM.replace("#003", "#004")
+        readable = self.ITEM.replace("#003", "#005")
+        entry = operation_policy(
+            load_policy(default_policy_path()), "knowledge_relevance"
+        )
+        routes = _routes_for(
+            "succeeded",
+            {
+                f"{missing_value}::relevant": {"type": "noul"},
+                f"{non_numeric_value}::relevant": {"type": "noul", "noul": "很相关"},
+                f"{readable}::relevant": {"type": "noul", "noul": 0.05},
+            },
+            entry,
+        )
+        self.assertEqual([route["item_id"] for route in routes], [readable])
 
 
 if __name__ == "__main__":

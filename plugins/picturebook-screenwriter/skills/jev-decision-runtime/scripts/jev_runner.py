@@ -30,7 +30,7 @@ from jev_client import (
     JevClientError,
     UrllibTransport,
 )
-from routing import RoutingError, route_item
+from routing import UNREADABLE_ANSWER_ERRORS, route_item
 from telemetry import (
     DecisionTrace,
     Stopwatch,
@@ -267,7 +267,7 @@ def _routes_for(
             continue
         try:
             routes.append(route_item(item_id, item_answers, operation_policy_entry))
-        except RoutingError:
+        except UNREADABLE_ANSWER_ERRORS:
             continue
     return tuple(routes)
 
@@ -466,14 +466,26 @@ def execute(request, config, client, clock=None) -> dict:
             started_at=started_at,
             finished_at=finished_at,
         )
-        result = build_result(
-            request=request, status="succeeded", payload=outcome.payload,
-            operation_policy_entry=entry,
-            attempts=outcome.attempts, elapsed_ms=elapsed_ms, trace=trace,
-            price_usd_per_million_input_tokens=(
-                config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
-            ),
-        )
+        try:
+            result = build_result(
+                request=request, status="succeeded", payload=outcome.payload,
+                operation_policy_entry=entry,
+                attempts=outcome.attempts, elapsed_ms=elapsed_ms, trace=trace,
+                price_usd_per_million_input_tokens=(
+                    config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
+                ),
+            )
+        except ContractError:
+            # A payload can satisfy answer-id validation and still break the
+            # result contract (an answer whose value cannot be read as a band,
+            # for instance). The call is already paid for, so that has to settle
+            # as a terminal failure the user can resume from rather than raise
+            # out of the runner and leave a pending call with no result.
+            return _settle(
+                request, config, operation_id, "failed",
+                error_class="incomplete_response", attempts=outcome.attempts,
+                elapsed_ms=elapsed_ms, started_at=started_at, finished_at=finished_at,
+            )
         # Terminal state must land before the pending call disappears, so a
         # crash in between leaves a resumable pending call rather than a
         # missing result.

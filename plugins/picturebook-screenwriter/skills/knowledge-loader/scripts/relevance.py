@@ -22,7 +22,7 @@ from decision_contract import operation_policy  # noqa: E402
 from jev_runner import RunnerConfig, execute  # noqa: E402
 from recall import partition  # noqa: E402
 from required_marking import mark_bundle  # noqa: E402
-from routing import RoutingError, route_item  # noqa: E402
+from routing import UNREADABLE_ANSWER_ERRORS, route_item  # noqa: E402
 from telemetry import benchmark_case_id  # noqa: E402
 
 OPERATION = "knowledge_relevance"
@@ -244,14 +244,17 @@ def _route_chunk(
 
     The batch has already been paid for by the time a chunk is routed, so a
     missing or malformed answer set degrades that single item to kept and
-    uncertain instead of aborting the operation with no terminal result.
+    uncertain instead of aborting the operation with no terminal result. The
+    tolerated errors are the shared `UNREADABLE_ANSWER_ERRORS`: the same list
+    the result construction uses, so both layers agree on what "cannot be read"
+    means.
     """
 
     if not answers:
         return None
     try:
         return route_item(chunk.chunk_id, answers, entry)
-    except (RoutingError, KeyError, TypeError, ValueError):
+    except UNREADABLE_ANSWER_ERRORS:
         return None
 
 

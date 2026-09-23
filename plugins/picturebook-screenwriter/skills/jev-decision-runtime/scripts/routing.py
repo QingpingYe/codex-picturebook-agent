@@ -10,7 +10,7 @@ first matching rule.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import Any
 
 from decision_contract import ContractError
@@ -25,6 +25,22 @@ CONTENT_REMOVING_ROUTES = ("exclude_soft",)
 
 class RoutingError(ContractError):
     """A routing table, an answer set, or an item broke the routing contract."""
+
+
+# Answer sets that cannot be read as a verdict: a routing refusal, an answer that
+# is not an object, a missing primitive value, or a value that is not a number
+# (`Decimal` reports the last one as an `ArithmeticError`). A malformed answer
+# may cost its own item its route, but the provider call behind it has already
+# been paid for, so reading one must never raise past the caller that records the
+# result. `RoutingError` is spelled out even though `ContractError` is already a
+# `ValueError`.
+UNREADABLE_ANSWER_ERRORS = (
+    RoutingError,
+    KeyError,
+    TypeError,
+    ValueError,
+    DecimalException,
+)
 
 
 def probability_band(probability: Any, bands: Mapping[str, Any]) -> str:
