@@ -14,8 +14,20 @@ if str(RUNTIME_SCRIPTS) not in sys.path:
 
 from decision_contract import load_policy, default_policy_path  # noqa: E402
 from chunker import Chunk  # noqa: E402
-from jev_client import API_KEY_ENV, FakeTransport, JevClient, TransportResponse  # noqa: E402
-from jev_runner import RunnerConfig  # noqa: E402
+from jev_client import (  # noqa: E402
+    API_KEY_ENV,
+    FakeTransport,
+    JevClient,
+    JevTransportOutcomeUnknown,
+    TransportResponse,
+)
+from jev_runner import (  # noqa: E402
+    RunnerConfig,
+    pending_operation_ids,
+    read_json,
+    request_path,
+    resume_operation,
+)
 from relevance import (  # noqa: E402
     MAX_STATE_CHARS,
     OPERATION,
@@ -81,6 +93,35 @@ def evidence(key=KEY, body=WORLDVIEW_BODY):
 def bundle():
     return {
         "items": (evidence(),),
+        "warnings": (),
+        "offline": False,
+        "fetched_at": "2026-09-23T10:30:00+08:00",
+    }
+
+
+# A page with four soft chunks and no hard-constraint section, so a cap of two
+# items per request turns it into two batches: the multi-batch shape a real
+# authority bundle produces.
+MULTI_KEY = "海外绘本/小老鼠迈尔斯/characters"
+MULTI_BODY = """# 角色总表
+
+## 主角小传
+
+迈尔斯是只小老鼠。
+
+## 配角清单
+
+- 森林松鼠
+
+## 关系图
+
+迈尔斯与松鼠是邻居。
+"""
+
+
+def multi_bundle():
+    return {
+        "items": (evidence(key=MULTI_KEY, body=MULTI_BODY),),
         "warnings": (),
         "offline": False,
         "fetched_at": "2026-09-23T10:30:00+08:00",
@@ -498,6 +539,221 @@ class ScreeningTests(unittest.TestCase):
                          {chunk.chunk_id for chunk in candidates})
         self.assertEqual({chunk.chunk_id for chunk in outcome.kept},
                          {chunk.chunk_id for chunk in candidates})
+
+
+class MultiBatchResumeTests(unittest.TestCase):
+    """A bundle that needs more than one request must still be resumable.
+
+    `resume_operation` refuses a run that holds more than one pending call, so
+    a screen that opened every batch at once could never be continued: the
+    caller configures the key and the documented flow stops dead. One call is
+    therefore open at a time, and whatever already settled is reused.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.run_dir = Path(self._tmp.name)
+        self.policy = load_policy(default_policy_path())
+        # Two chunks per request, so this bundle needs two batches.
+        self.policy["operations"][OPERATION]["max_items_per_request"] = 2
+        self.bundle = multi_bundle()
+        self.candidates = [
+            chunk for chunk in mark_bundle(self.bundle) if not chunk.required
+        ]
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _operation_id(self, batch_index):
+        return f"{RUN_ID}-{OPERATION}-batch-{batch_index:03d}"
+
+    def _batch_body(self, batch, values=(0.02, 0.02, 0.02, 0.02)):
+        return TransportResponse(200, json.dumps({
+            "model": "jev-1.13.0",
+            "answers": answers_for(batch, values),
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        }), {})
+
+    def _client(self, transport, key="sk-abc"):
+        return JevClient(
+            transport,
+            environ={API_KEY_ENV: key} if key else {},
+            sleep=lambda _: None,
+        )
+
+    def _config(self, policy=None):
+        return RunnerConfig(self.run_dir, policy or self.policy)
+
+    def _screen(self, client, policy=None, task="起草第 5 页", brief="分享主题"):
+        return screen_candidates(
+            run_id=RUN_ID, policy=policy or self.policy, artifact_type="script",
+            task_description=task, brief=brief, bundle=self.bundle,
+            config=self._config(policy), client=client,
+        )
+
+    def _batches(self):
+        return plan_batches(self.candidates, 2)
+
+    def test_a_keyless_multi_batch_run_leaves_exactly_one_pending_call(self):
+        transport = FakeTransport()
+        outcome = self._screen(self._client(transport, key=None))
+
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(pending_operation_ids(self.run_dir), [self._operation_id(1)])
+        self.assertEqual([result["status"] for result in outcome.results],
+                         ["waiting_for_jev_key"])
+        # No batch was drawn on beyond the one that is waiting, so the whole
+        # bundle stays kept and uncertain and nothing is excluded.
+        self.assertEqual(outcome.excluded_soft, ())
+        self.assertEqual(
+            {chunk.chunk_id for chunk in outcome.uncertain},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+        self.assertTrue(
+            {chunk.chunk_id for chunk in self.candidates}
+            <= {chunk.chunk_id for chunk in outcome.kept}
+        )
+        self.assertFalse(list((self.run_dir / "jev").rglob("result.json")))
+
+    def test_continuing_after_the_key_is_configured_screens_each_batch_once(self):
+        self._screen(self._client(FakeTransport(), key=None))
+        pending_id = pending_operation_ids(self.run_dir)[0]
+        stored_request = read_json(request_path(self.run_dir, pending_id))
+
+        resume_transport = FakeTransport(
+            responses=[self._batch_body(self._batches()[0])]
+        )
+        resumed = resume_operation(
+            self._config(), self._client(resume_transport),
+            stored_request["context_refs"],
+        )
+        self.assertEqual(resumed["status"], "succeeded")
+        self.assertEqual(len(resume_transport.calls), 1)
+
+        transport = FakeTransport(responses=[self._batch_body(self._batches()[1])])
+        outcome = self._screen(self._client(transport))
+
+        # Only the batch that was never dispatched is paid for now; the settled
+        # one is routed from its stored result instead.
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual([result["status"] for result in outcome.results],
+                         ["succeeded", "succeeded"])
+        self.assertEqual(
+            {item["chunk_id"] for item in outcome.excluded_soft},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+        for batch_index in (1, 2):
+            self.assertTrue(
+                (self.run_dir / "jev" / self._operation_id(batch_index)
+                 / "result.json").is_file()
+            )
+
+    def test_a_settled_batch_is_never_paid_for_twice(self):
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        first = self._screen(self._client(transport))
+        self.assertEqual(len(transport.calls), 2)
+
+        # Nothing is left to dispatch, so a scripted transport with no response
+        # left would raise if the screen opened another call.
+        second_transport = FakeTransport()
+        second = self._screen(self._client(second_transport))
+        self.assertEqual(second_transport.calls, [])
+        self.assertEqual([result["status"] for result in second.results],
+                         ["succeeded", "succeeded"])
+        self.assertEqual(
+            {item["chunk_id"] for item in second.excluded_soft},
+            {item["chunk_id"] for item in first.excluded_soft},
+        )
+
+    def test_an_attempt_that_may_have_been_billed_is_never_sent_again(self):
+        transport = FakeTransport(error=JevTransportOutcomeUnknown("timeout"))
+        outcome = self._screen(self._client(transport))
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual([result["status"] for result in outcome.results],
+                         ["outcome_unknown"])
+        self.assertEqual(pending_operation_ids(self.run_dir), [self._operation_id(1)])
+
+        # A call that may already have been billed is not re-sent without the
+        # user's explicit consent, so this run stops where the open call is and
+        # the batch it never reached stays kept and uncertain.
+        second_transport = FakeTransport()
+        second = self._screen(self._client(second_transport))
+        self.assertEqual(second_transport.calls, [])
+        self.assertEqual(second.excluded_soft, ())
+        self.assertEqual(
+            {chunk.chunk_id for chunk in second.uncertain},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+
+    def test_an_unreadable_pending_record_is_not_sent_again(self):
+        self._screen(self._client(FakeTransport(), key=None))
+        pending = self.run_dir / "jev" / self._operation_id(1) / "pending.json"
+        pending.write_text("not json", encoding="utf-8")
+
+        # A record that cannot be read cannot rule out a billed attempt either.
+        transport = FakeTransport()
+        outcome = self._screen(self._client(transport))
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(outcome.excluded_soft, ())
+        self.assertEqual(
+            {chunk.chunk_id for chunk in outcome.uncertain},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+
+    def test_a_failed_batch_does_not_stop_the_loop_and_is_retried(self):
+        transport = FakeTransport(responses=[
+            TransportResponse(500, "boom", {}) for _ in self._batches()
+        ])
+        first = self._screen(self._client(transport))
+        self.assertEqual([result["status"] for result in first.results],
+                         ["failed", "failed"])
+        self.assertEqual(first.excluded_soft, ())
+        self.assertEqual(
+            {chunk.chunk_id for chunk in first.uncertain},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+
+        retry = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        second = self._screen(self._client(retry))
+        self.assertEqual(len(retry.calls), 2)
+        self.assertEqual(
+            {item["chunk_id"] for item in second.excluded_soft},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+
+    def test_a_changed_bundle_is_screened_again_instead_of_reused(self):
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        self._screen(self._client(transport))
+        self.assertEqual(len(transport.calls), 2)
+
+        # Same run directory, new brief: the stored results were decided on
+        # other inputs, so every batch is screened again for the new ones.
+        changed = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        self._screen(self._client(changed), brief="换一个主题")
+        self.assertEqual(len(changed.calls), 2)
+
+    def test_a_single_batch_bundle_keeps_its_behaviour(self):
+        policy = load_policy(default_policy_path())
+        transport = FakeTransport(responses=[self._batch_body(self.candidates)])
+        outcome = self._screen(self._client(transport), policy=policy)
+
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual([result["status"] for result in outcome.results],
+                         ["succeeded"])
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+        self.assertEqual(
+            {item["chunk_id"] for item in outcome.excluded_soft},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
 
 
 class RevisionVectorTests(unittest.TestCase):

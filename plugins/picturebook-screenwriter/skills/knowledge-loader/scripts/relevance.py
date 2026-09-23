@@ -20,11 +20,19 @@ if str(RUNTIME_SCRIPTS) not in sys.path:
 
 from chunker import Chunk, evidence_field  # noqa: E402
 from decision_contract import operation_policy  # noqa: E402
-from jev_runner import RunnerConfig, execute  # noqa: E402
+from jev_runner import (  # noqa: E402
+    RunnerConfig,
+    execute,
+    operation_id_from_request,
+    pending_path,
+    read_json,
+    request_path,
+    result_path,
+)
 from recall import partition  # noqa: E402
 from required_marking import mark_bundle  # noqa: E402
 from routing import UNREADABLE_ANSWER_ERRORS, route_item  # noqa: E402
-from telemetry import benchmark_case_id  # noqa: E402
+from telemetry import benchmark_case_id, request_fingerprint  # noqa: E402
 
 OPERATION = "knowledge_relevance"
 QUESTION_ORDER = (
@@ -46,6 +54,24 @@ RULE_VERSION = "knowledge-relevance-rules-v1"
 
 # The request templates name the item they ask about with this placeholder.
 ITEM_PLACEHOLDER = "<item>"
+
+# The outcomes that leave an open call on disk instead of a decision: the caller
+# still has to configure a credential, or the attempt's fate is unknown.
+OPEN_ATTEMPT_STATUSES = ("outcome_unknown", "in_flight")
+
+# A batch whose call is still open (waiting for a credential) or that may
+# already have been billed stops the screen where it is: the remaining batches
+# are left unscreened rather than opened behind the caller's back.
+BATCH_STOP_OUTCOMES = (
+    "waiting_for_jev_key",
+    "waiting_for_jev_access",
+    "outcome_unknown",
+)
+
+# The stored results this screen can route from. `outcome_unknown` is included
+# so a terminal record of an ambiguous attempt is never re-sent: it settles its
+# batch as kept and uncertain instead.
+REUSABLE_RESULT_STATUSES = ("succeeded", "outcome_unknown")
 
 
 class ContextBudgetError(ValueError):
@@ -270,6 +296,61 @@ def _answers_by_item(result: Mapping[str, Any]) -> dict[str, dict]:
     return grouped
 
 
+@dataclass(frozen=True)
+class _StoredBatch:
+    """What the run directory already knows about one batch's operation.
+
+    `result` is the terminal result of this exact request when the run has
+    already paid for it, and `open_attempt` says that a call for this exact
+    request may have reached the service.
+    """
+
+    result: dict | None = None
+    open_attempt: bool = False
+
+
+def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBatch:
+    """Read what an earlier run of this same batch left behind.
+
+    Every batch is screened once and then reused: a bundle that needs more than
+    one request would otherwise open a call per batch, and the shared runner's
+    `resume_operation` refuses a run that holds more than one pending call — so
+    the documented "configure the key, then continue" step could never be
+    taken. Reuse is bound to the request fingerprint, the same identity the
+    shared runner's own resume path uses, so a caller who re-runs the screen
+    with new knowledge is screened again instead of being routed on the old
+    evidence.
+    """
+
+    operation_id = operation_id_from_request(request)
+    stored_request = read_json(request_path(config.run_dir, operation_id))
+    if (
+        stored_request is None
+        or request_fingerprint(stored_request) != request_fingerprint(request)
+    ):
+        # Nothing was screened for these exact inputs, so whatever the run
+        # directory holds belongs to other knowledge: it is neither a result to
+        # reuse nor an obstacle to dispatch.
+        return _StoredBatch()
+    stored_result = read_json(result_path(config.run_dir, operation_id))
+    if (
+        stored_result is not None
+        and stored_result.get("status") in REUSABLE_RESULT_STATUSES
+    ):
+        return _StoredBatch(result=stored_result)
+    pending = read_json(pending_path(config.run_dir, operation_id))
+    if pending is not None:
+        return _StoredBatch(
+            open_attempt=pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES
+        )
+    # A pending record that exists but cannot be read cannot rule out a billed
+    # attempt either; a missing one means no attempt was recorded for these
+    # inputs, so the batch is safe to dispatch.
+    return _StoredBatch(
+        open_attempt=pending_path(config.run_dir, operation_id).exists()
+    )
+
+
 def screen_candidates(
     *,
     run_id: str,
@@ -285,7 +366,16 @@ def screen_candidates(
     terms: Sequence[str] = (),
     clock: Any = None,
 ) -> RelevanceOutcome:
-    """Screen every recalled soft chunk, keeping everything the model cannot clear."""
+    """Screen every recalled soft chunk, keeping everything the model cannot clear.
+
+    A bundle that needs more than one request is screened one batch at a time.
+    A batch whose call is still open (waiting for a credential, or an attempt
+    whose fate is unknown) stops the screen there: the batches it never reached
+    stay kept and are reported uncertain, so nothing is ever excluded on
+    evidence that was not collected. Re-running the screen once the credential
+    is configured picks up from that point, reusing each batch that already
+    settled instead of paying for it twice.
+    """
 
     marked = mark_bundle(
         bundle, declared_page_types=declared_page_types, declared_keys=declared_keys
@@ -323,16 +413,37 @@ def screen_candidates(
         kept.append(chunk)
         uncertain.append(chunk)
 
+    stopped = False
     for batch_index, batch in enumerate(
         plan_batches(screenable, entry.get("max_items_per_request", 10)), start=1
     ):
+        if stopped:
+            # An earlier batch holds an open call, so this one was never
+            # dispatched: like every chunk without a verdict it stays kept and
+            # is reported uncertain, and nothing is excluded.
+            kept.extend(batch)
+            uncertain.extend(batch)
+            continue
         request = build_request(
             run_id=run_id, policy=policy, bundle=bundle,
             artifact_type=artifact_type, task_description=task_description,
             brief=brief, batch=batch, batch_index=batch_index,
             benchmark_case_id=case_id,
         )
-        result = execute(request, config, client, clock=clock)
+        stored = _stored_batch(config, request)
+        if stored.result is not None:
+            # Paid for in an earlier run: reuse it rather than dispatch again.
+            result = stored.result
+        elif stored.open_attempt:
+            # The attempt may already have been billed, so nothing is re-sent
+            # without the user's explicit consent. The batch stays kept and
+            # uncertain, and the rest of the bundle stays unscreened.
+            kept.extend(batch)
+            uncertain.extend(batch)
+            stopped = True
+            continue
+        else:
+            result = execute(request, config, client, clock=clock)
         results.append(result)
         answers_by_item = (
             _answers_by_item(result) if result["status"] == "succeeded" else {}
@@ -357,6 +468,12 @@ def screen_candidates(
                 continue
             if route.get("label") == "uncertain" or route["route"] == "needs_user_choice":
                 uncertain.append(chunk)
+
+        if result["status"] in BATCH_STOP_OUTCOMES:
+            # This batch's call is still open, so no further batch is opened in
+            # this run: the caller configures the credential and continues,
+            # and every batch is dispatched exactly once along the way.
+            stopped = True
 
     return RelevanceOutcome(
         kept=tuple(kept),

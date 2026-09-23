@@ -12,13 +12,15 @@ sys.path.insert(0, str(ROOT / "skills" / "knowledge-loader" / "scripts"))
 
 from decision_contract import default_policy_path, load_policy  # noqa: E402
 from jev_client import API_KEY_ENV, FakeTransport, JevClient, TransportResponse  # noqa: E402
-from jev_runner import RunnerConfig  # noqa: E402
+from jev_runner import RunnerConfig, pending_operation_ids  # noqa: E402
 from load_knowledge import bundle_from_dict  # noqa: E402
 from dependencies import build_dependency_record  # noqa: E402
 from collision import check_collisions  # noqa: E402
 from relevance import (  # noqa: E402
+    OPERATION,
     dependency_bundle,
     filtered_bundle,
+    plan_batches,
     screen_candidates,
 )
 from required_marking import mark_bundle  # noqa: E402
@@ -281,6 +283,63 @@ class Phase2IntegrationTests(unittest.TestCase):
         self.assertEqual(outcome.excluded_soft, ())
         self.assertEqual(outcome.results[0]["status"], "waiting_for_jev_key")
         self.assertFalse(list((self.run_dir / "jev").rglob("result.json")))
+
+    def test_a_multi_batch_screen_continues_once_the_key_is_configured(self):
+        # `resume_operation` refuses a run that holds more than one pending
+        # call, so a screen that opened every batch at once could never be
+        # continued: the caller configures the key and the flow stops dead.
+        # Batches are opened one at a time and the settled ones are reused, so
+        # the whole bundle finishes with one paid call per batch.
+        policy = load_policy(default_policy_path())
+        policy["operations"][OPERATION]["max_items_per_request"] = 2
+        candidates = self.candidates()
+        batches = plan_batches(candidates, 2)
+        self.assertGreater(len(batches), 1)
+
+        keyless = screen_candidates(
+            run_id=RUN_ID, policy=policy, artifact_type="script",
+            task_description="起草第 5 页", brief="分享主题，3-6 岁",
+            bundle=bundle(), config=RunnerConfig(self.run_dir, policy),
+            client=JevClient(FakeTransport(), environ={}, sleep=lambda _: None),
+        )
+        self.assertEqual([result["status"] for result in keyless.results],
+                         ["waiting_for_jev_key"])
+        self.assertEqual(pending_operation_ids(self.run_dir),
+                         [f"{RUN_ID}-{OPERATION}-batch-001"])
+
+        responses = []
+        for batch in batches:
+            answers = {}
+            for chunk in batch:
+                for question_id, value in zip(
+                    ("relevant", "usable_evidence", "contradicts_task_assumption",
+                     "instruction_like_content"),
+                    IRRELEVANT,
+                ):
+                    answers[f"{chunk.chunk_id}::{question_id}"] = noul(value)
+            responses.append(TransportResponse(200, json.dumps({
+                "model": "jev-1.13.0", "answers": answers,
+                "usage": {"input_tokens": 200, "output_tokens": 20},
+            }), {}))
+        transport = FakeTransport(responses=responses)
+        outcome = screen_candidates(
+            run_id=RUN_ID, policy=policy, artifact_type="script",
+            task_description="起草第 5 页", brief="分享主题，3-6 岁",
+            bundle=bundle(), config=RunnerConfig(self.run_dir, policy),
+            client=JevClient(transport, environ={API_KEY_ENV: "sk-abc"},
+                             sleep=lambda _: None),
+        )
+
+        self.assertEqual(len(transport.calls), len(batches))
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+        self.assertEqual(
+            {item["chunk_id"] for item in outcome.excluded_soft},
+            {chunk.chunk_id for chunk in candidates},
+        )
+        # The resumed run still carries the hard constraint, end to end.
+        filtered = filtered_bundle(bundle(), outcome)
+        worldview = next(i for i in filtered["items"] if i["key"] == WORLDVIEW_KEY)
+        self.assertIn("不能飞行", worldview["content"])
 
 
 if __name__ == "__main__":
