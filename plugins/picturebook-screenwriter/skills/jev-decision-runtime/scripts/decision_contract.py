@@ -310,3 +310,93 @@ def validate_answer_ids(request: Any, result: Any) -> None:
         raise ContractError(f"result is missing answers for: {missing}")
     if unknown:
         raise ContractError(f"result carries answers for unknown questions: {unknown}")
+
+
+POLICY_STATUSES = ("experimental", "calibrated")
+_DECIMAL_STRING = re.compile(r"^\d+(\.\d+)?$")
+
+
+def _require_decimal_string(payload: Mapping[str, Any], key: str, label: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not _DECIMAL_STRING.fullmatch(value):
+        raise ContractError(f"{label}.{key} must be a plain decimal string")
+    return value
+
+
+def _validate_routing_table(routing: Any, label: str) -> None:
+    """Phase 1 ships no routing rules.
+
+    The per-operation routing schema (question bands, match rules, labels) is
+    designed together with each operation's questions in Phase 2 and Phase 3,
+    because a routing rule cannot be expressed without knowing which questions
+    exist and which direction of each probability means risk. Phase 1 therefore
+    requires only that the table is a table.
+    """
+
+    if not isinstance(routing, Mapping):
+        raise ContractError(f"{label}.routing must be an object")
+    if routing:
+        raise ContractError(
+            f"{label}.routing must be empty until the operation's routing schema "
+            "is defined"
+        )
+
+
+def validate_policy(payload: Any) -> None:
+    payload = _require_object(payload, "policy")
+    if payload.get("schema_version") != POLICY_SCHEMA:
+        raise ContractError(f"policy.schema_version must be {POLICY_SCHEMA!r}")
+    model = _require_nonempty_str(payload, "pinned_model", "policy")
+    if model in MOVING_MODEL_ALIASES:
+        raise ContractError("policy.pinned_model must be a pinned version id, not a moving alias")
+    if payload.get("output_tokens_free") is not True:
+        raise ContractError("policy.output_tokens_free must be true")
+    snapshot = _require_object(payload.get("price_snapshot"), "policy.price_snapshot")
+    _require_decimal_string(
+        snapshot, "price_usd_per_million_input_tokens", "policy.price_snapshot"
+    )
+    _require_nonempty_str(snapshot, "snapshot_date", "policy.price_snapshot")
+
+    operations = payload.get("operations")
+    if not isinstance(operations, Mapping):
+        raise ContractError("policy.operations must be an object")
+    for operation in OPERATIONS:
+        if operation not in operations:
+            raise ContractError(f"policy.operations is missing the {operation!r} entry")
+    for operation, entry in operations.items():
+        label = f"policy.operations[{operation!r}]"
+        if operation not in OPERATIONS:
+            raise ContractError(f"{label} is not a supported operation")
+        entry = _require_object(entry, label)
+        _require_nonempty_str(entry, "policy_version", label)
+        status = _require_nonempty_str(entry, "calibration_status", label)
+        if status not in POLICY_STATUSES:
+            raise ContractError(f"{label}.calibration_status must be one of {POLICY_STATUSES}")
+        fallback = _require_nonempty_str(entry, "fallback_route", label)
+        if fallback not in ROUTE_VALUES:
+            raise ContractError(f"{label}.fallback_route must be one of {ROUTE_VALUES}")
+        _validate_routing_table(entry.get("routing"), label)
+
+
+def default_policy_path() -> Path:
+    """Return the policy file that ships with this skill."""
+
+    return Path(__file__).resolve().parents[1] / "references" / "decision-policies.json"
+
+
+def load_policy(path: Any) -> dict:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ContractError(f"unable to read policy file: {error}") from error
+    validate_policy(payload)
+    return payload
+
+
+def operation_policy(policy: Mapping[str, Any], operation: str) -> dict:
+    if operation not in OPERATIONS:
+        raise ContractError(f"operation is not supported yet: {operation}")
+    entry = (policy.get("operations") or {}).get(operation)
+    if not isinstance(entry, Mapping):
+        raise ContractError(f"policy has no entry for operation {operation!r}")
+    return dict(entry)

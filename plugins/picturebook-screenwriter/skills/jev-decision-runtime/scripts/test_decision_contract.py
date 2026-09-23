@@ -3,10 +3,15 @@ import unittest
 from decision_contract import (
     ContractError,
     OPERATIONS,
+    POLICY_SCHEMA,
     REQUEST_SCHEMA,
     RESULT_SCHEMA,
     assert_no_credential_fields,
+    default_policy_path,
+    load_policy,
+    operation_policy,
     validate_answer_ids,
+    validate_policy,
     validate_request,
     validate_result,
 )
@@ -199,6 +204,98 @@ class ResultContractTests(unittest.TestCase):
             validate_answer_ids(make_request(), make_result(
                 answers={"relevant": {"type": "noul", "noul": 0.5}, "surprise": {"type": "noul", "noul": 0.5}},
             ))
+
+
+def make_policy(**overrides):
+    policy = {
+        "schema_version": POLICY_SCHEMA,
+        "pinned_model": "jev-1.13.0",
+        "output_tokens_free": True,
+        "price_snapshot": {
+            "price_usd_per_million_input_tokens": "0.042",
+            "snapshot_date": "2026-09-23",
+        },
+        "operations": {
+            "knowledge_relevance": {
+                "policy_version": "knowledge-relevance-v1",
+                "calibration_status": "experimental",
+                "fallback_route": "escalate_llm",
+                "routing": {},
+            },
+            "text_quality_prefilter": {
+                "policy_version": "text-quality-prefilter-v1",
+                "calibration_status": "experimental",
+                "fallback_route": "escalate_llm",
+                "routing": {},
+            },
+        },
+    }
+    policy.update(overrides)
+    return policy
+
+
+class PolicyContractTests(unittest.TestCase):
+    def test_valid_policy_is_accepted(self):
+        validate_policy(make_policy())
+
+    def test_moving_model_alias_is_rejected(self):
+        with self.assertRaises(ContractError):
+            validate_policy(make_policy(pinned_model="jev-latest"))
+
+    def test_unknown_calibration_status_is_rejected(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["calibration_status"] = "probably_fine"
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_every_supported_operation_needs_a_policy_entry(self):
+        policy = make_policy()
+        del policy["operations"]["text_quality_prefilter"]
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_price_snapshot_must_be_decimal_string_and_date(self):
+        with self.assertRaises(ContractError):
+            validate_policy(make_policy(price_snapshot={
+                "price_usd_per_million_input_tokens": 0.042,
+                "snapshot_date": "2026-09-23",
+            }))
+        with self.assertRaises(ContractError):
+            validate_policy(make_policy(price_snapshot={
+                "price_usd_per_million_input_tokens": "0.042",
+                "snapshot_date": "",
+            }))
+
+    def test_unknown_route_value_is_rejected(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["fallback_route"] = "hope_for_the_best"
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_routing_rules_are_refused_until_the_operation_defines_them(self):
+        # Phase 1 has no operation questions, so it cannot express a routing
+        # rule yet. Shipping an empty table is required, not optional.
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "relevant": {"clear_route": "exclude_soft"}
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_shipped_policy_file_is_valid_and_pins_a_version(self):
+        policy = load_policy(default_policy_path())
+        self.assertEqual(policy["pinned_model"], "jev-1.13.0")
+        self.assertEqual(policy["operations"]["knowledge_relevance"]["calibration_status"],
+                         "experimental")
+
+    def test_operation_policy_reads_the_matching_branch(self):
+        policy = load_policy(default_policy_path())
+        entry = operation_policy(policy, "text_quality_prefilter")
+        self.assertEqual(entry["policy_version"], "text-quality-prefilter-v1")
+
+    def test_operation_policy_rejects_an_unknown_operation(self):
+        with self.assertRaises(ContractError):
+            operation_policy(make_policy(), "write_the_story")
 
 
 if __name__ == "__main__":
