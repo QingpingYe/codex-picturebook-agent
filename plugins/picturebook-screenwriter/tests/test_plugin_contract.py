@@ -263,5 +263,30 @@ class JevExecutionChoiceContractTests(unittest.TestCase):
         )
 
 
+class JevPhase1DocumentationTests(unittest.TestCase):
+    def test_enforcement_matrix_documents_the_jev_gates(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for required in (
+            "jev_runner.py",
+            "jev_client.py",
+            "waiting_for_jev_key",
+            "outcome_unknown",
+            "model_version_mismatch",
+            "request.json",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+    def test_enforcement_matrix_does_not_overclaim_the_lease(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        self.assertIn("不提供跨主机互斥", text)
+
+    def test_plugin_readme_documents_the_jev_credential_environment(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertIn("TYPESAFE_API_KEY", text)
+        self.assertIn("jev-decision-runtime", text)
+        self.assertIn("不得把密钥粘贴到对话中", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,3 +32,4 @@
 3. Confirm no key appears in command history, logs, metadata, or exports.
 4. Install from the published Git ref in a clean Codex profile.
 5. Record acceptance results and blockers before publishing to the marketplace.
+6. Run any Jev live smoke test only when `TYPESAFE_API_KEY` is explicitly provided; it is not part of the default offline set, and the key must not reach command history, logs, or exports.

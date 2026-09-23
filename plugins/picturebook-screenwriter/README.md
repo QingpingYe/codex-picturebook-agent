@@ -15,6 +15,7 @@
 - `session-export`：仅在用户明确要求时导出会话证据，且必须使用用户提供的绝对输出目录
 - `knowledge-loader`：只读检索多人协作飞书权威知识库
 - `feishu-knowledge-store`：人工优先合并、冲突队列与远端租约
+- `jev-decision-runtime`：共享 Jev 决策运行器；只在用户选择 Jev 辅助路径后调用，负责凭证门、请求契约、重试、恢复点、租约、原子终态与成本估算
 - `lexile-check`：仅使用用户提供的实测结果
 
 ## 暂不支持
@@ -22,6 +23,7 @@
 - WorkBuddy TeamCreate / SendMessage / 持久多 Agent 团队运行时
 - 原生 hooks 与平台级硬约束
 - 未确认的默认图片 API 调用
+- Jev 不参与生成、润色、修改建议或插画提示词；知识相关性筛选与文本质量预筛的 operation 策略在后续阶段落地
 
 运行时强制、脚本校验与提示词约束的边界见 `docs/ENFORCEMENT.md`。
 
@@ -94,3 +96,17 @@ python .\scripts\run_plugin_tests.py
 ```
 
 Windows 上如果 `python` 指向 Microsoft Store 存根，请先使用可用的 Python 3.10+ 解释器。
+
+## Jev 辅助路径
+
+入口工作流的第一件事是询问是否启用 Jev 辅助。选择启用后，相关故事文本和知识片段会发送给 TypeSafe Jev 做知识筛选与文本质检预筛；创作、解释性终审和修改建议仍由普通 LLM 完成。
+
+凭证只从环境变量 `TYPESAFE_API_KEY` 读取。若本机尚未配置，工作流会暂停并提示在本机环境中安全设置该变量，然后回复“已配置”从原任务继续：
+
+```powershell
+$env:TYPESAFE_API_KEY = "<your-key>"
+```
+
+**不得把密钥粘贴到对话中**，也不要把它写进配置、仓库或插件目录。endpoint 固定为 `https://api.typesafe.ai/v1/systemone`，不接受 base URL 覆盖，禁用 redirect。模型固定为 `jev-1.13.0`，不使用会漂移的 `latest` 别名。
+
+未校准期间所有 operation 均为 `experimental`：`screened_clear` 只是 Jev 的候选结论，不缩减普通 LLM 的复核范围。

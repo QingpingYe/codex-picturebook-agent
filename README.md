@@ -45,6 +45,7 @@ The plugin supports:
 - Spatial planning for page-by-page storyboards
 - Structured illustration prompts, explicit image-generation confirmation, and asset tracking
 - Self-contained HTML preview
+- Explicit per-run choice between the plain LLM path and a Jev-assisted path (TypeSafe Jev) for knowledge filtering and text-quality pre-screening
 - Feishu authoritative knowledge retrieval and synchronized ingestion
 
 ## Feishu knowledge setup
@@ -70,6 +71,16 @@ Runtime, script, and prompt-only gate boundaries are documented in
 `docs/ENFORCEMENT.md`.
 
 See `docs/RELEASE.md` before publishing.
+
+## Jev-assisted path
+
+The entry workflow asks once per root run whether to use the Jev-assisted path. If you enable it, set the credential in your local environment — never in the chat, a config file, or the repository:
+
+```bash
+export TYPESAFE_API_KEY="<your-key>"
+```
+
+The plugin pins `jev-1.13.0` and the endpoint `https://api.typesafe.ai/v1/systemone`.
 
 ## Feishu preflight
 
