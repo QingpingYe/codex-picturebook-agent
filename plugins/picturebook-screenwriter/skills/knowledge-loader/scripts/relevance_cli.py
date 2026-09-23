@@ -64,15 +64,48 @@ def _split_terms(raw: str) -> tuple[str, ...]:
     return tuple(term.strip() for term in raw.split(",") if term.strip())
 
 
+def _is_text_list(value: Any) -> bool:
+    """True when `value` is a list-like of text, never a bare string.
+
+    A bare string would be silently read one character at a time, which is how
+    `warnings: "abc"` turned into three warnings on the way to disk.
+    """
+
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        return False
+    return all(isinstance(entry, str) for entry in value)
+
+
+def _is_revision_vector(value: Any) -> bool:
+    """True when `value` maps node tokens to revision ids, all of them text."""
+
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Mapping):
+        return False
+    return all(
+        isinstance(node, str) and isinstance(revision, str)
+        for node, revision in value.items()
+    )
+
+
 def _require_bundle_shape(bundle: Any) -> None:
     """Refuse a file that cannot be screened as an authority evidence bundle.
 
-    The chunker reads a page `key` and its `content` from every item, so an item
-    missing either one cannot be screened at all. Reading such a file used to
-    end in an `AttributeError` traceback once an output flag was set, and in a
-    successful-looking report of an empty screen (`required_count = 0`,
-    `candidate_count = 0`) when none was: the caller could not tell a screen of
-    nothing from a bundle that was never read.
+    Only the fields this CLI reads are checked, and nothing else in the file is
+    rewritten: the top level must be a JSON object, `items` must be a list of
+    evidence objects, and every item must carry a non-empty text `key` and its
+    page body as a text `content`. Two further fields are read from the same
+    file and so are checked too: `source_revisions`, when present, must be an
+    object of text revisions, because a page's version vector is copied into the
+    request context and into the written bundles; and `warnings`, when present,
+    must be a list of text, because it is carried into the reduced context
+    bundle. Every other key, including ones this CLI never looks at, is passed
+    through untouched.
+
+    Reading such a file used to end in an `AttributeError`/`TypeError`
+    traceback once an output flag was set, and in a successful-looking report of
+    an empty screen (`required_count = 0`, `candidate_count = 0`) when none was:
+    the caller could not tell a screen of nothing from a bundle that was never
+    read.
     """
 
     if not isinstance(bundle, Mapping):
@@ -83,6 +116,9 @@ def _require_bundle_shape(bundle: Any) -> None:
     items = bundle.get("items")
     if isinstance(items, (str, bytes, bytearray)) or not isinstance(items, Sequence):
         raise ContractError("bundle must carry an `items` list of evidence objects")
+    warnings = bundle.get("warnings")
+    if warnings is not None and not _is_text_list(warnings):
+        raise ContractError("bundle `warnings` must be a list of text warnings")
     for position, item in enumerate(items):
         if not isinstance(item, Mapping):
             raise ContractError(f"bundle item {position} must be an evidence object")
@@ -93,6 +129,12 @@ def _require_bundle_shape(bundle: Any) -> None:
         if not isinstance(item.get("key"), str) or not item["key"]:
             raise ContractError(
                 f"bundle item {position} must carry a non-empty text `key`"
+            )
+        revisions = item.get("source_revisions")
+        if revisions is not None and not _is_revision_vector(revisions):
+            raise ContractError(
+                f"bundle item {position} `source_revisions` must be an object of "
+                "text revisions"
             )
 
 

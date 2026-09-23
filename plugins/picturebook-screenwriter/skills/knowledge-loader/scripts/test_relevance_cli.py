@@ -180,7 +180,11 @@ class RelevanceCliTests(unittest.TestCase):
         # None of these shapes is an evidence bundle, and each one used to
         # escape the report: with an output flag set the dependency bundle
         # raised `'list' object has no attribute 'items'`, and without one the
-        # CLI exited 0 on a screen of nothing.
+        # CLI exited 0 on a screen of nothing. The last six are the fields the
+        # CLI reads besides `items[].key` / `items[].content`: `warnings` fed
+        # straight into `list()` raised `TypeError` after the paid call, a
+        # numeric `source_revisions` raised before dispatch, and a bare
+        # warning string was silently split into one warning per character.
         complete = evidence()
         written = self.run_dir / "filtered.json"
         shapes = {
@@ -193,6 +197,18 @@ class RelevanceCliTests(unittest.TestCase):
                 {"items": [{k: v for k, v in complete.items() if k != "content"}]},
             "an item whose content is not text":
                 {"items": [{**complete, "content": 5}]},
+            "a warnings value that is not a list":
+                {"items": [complete], "warnings": 5},
+            "a warnings value that is a bare string":
+                {"items": [complete], "warnings": "索引尚未同步"},
+            "a warnings list that is not all text":
+                {"items": [complete], "warnings": ["索引尚未同步", 5]},
+            "a source_revisions value that is not an object":
+                {"items": [{**complete, "source_revisions": 5}]},
+            "a source_revisions value that is a bare string":
+                {"items": [{**complete, "source_revisions": "node-a=17"}]},
+            "source_revisions whose values are not text":
+                {"items": [{**complete, "source_revisions": {"node-a": 17}}]},
         }
         for position, (name, payload) in enumerate(shapes.items()):
             with self.subTest(shape=name):
@@ -211,6 +227,29 @@ class RelevanceCliTests(unittest.TestCase):
                 self.assertEqual(json.loads(err)["status"], "error")
                 self.assertEqual(transport.calls, [])
                 self.assertFalse(written.exists())
+
+    def test_a_bundle_with_warnings_and_a_revision_vector_still_screens(self):
+        # The guard is about shape, not about content: the loader's own
+        # warnings and version vector must survive, and the warning the CLI
+        # appends joins them instead of replacing them.
+        path = self.run_dir / "warned-bundle.json"
+        payload = {**bundle(), "warnings": ["索引尚未同步"]}
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        written = self.run_dir / "filtered.json"
+        code, out, err, transport = self._run(
+            ["--bundle", str(path), "--run-dir", str(self.run_dir),
+             "--artifact-type", "script", "--task", "t", "--brief", "b",
+             "--filtered-out", str(written)],
+            responses=[screened_body()],
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(json.loads(out)["results"][0]["status"], "succeeded")
+        filtered = json.loads(written.read_text(encoding="utf-8"))
+        self.assertIn("索引尚未同步", filtered["warnings"])
+        self.assertEqual(
+            filtered["items"][0]["source_revisions"], {"node-a": "17"}
+        )
 
     def test_a_bundle_with_no_pages_is_screened_as_nothing(self):
         # The refusal is about a file that cannot be read as a bundle, not about
