@@ -26,12 +26,17 @@ from jev_runner import (  # noqa: E402
     LeaseHeld,
     RunnerConfig,
     acquire_lease,
+    build_pending_call,
+    operation_id_from_request,
+    pending_path,
     pending_operation_ids,
     read_json,
     request_path,
     result_path,
     resume_operation,
+    write_atomic,
 )
+import relevance  # noqa: E402
 from relevance import (  # noqa: E402
     MAX_STATE_CHARS,
     OPERATION,
@@ -705,6 +710,9 @@ class MultiBatchResumeTests(unittest.TestCase):
             {chunk.chunk_id for chunk in second.uncertain},
             {chunk.chunk_id for chunk in self.candidates},
         )
+        self.assertEqual(
+            [entry["reason"] for entry in second.blocked_records], ["open_attempt"]
+        )
 
     def test_an_unreadable_pending_record_is_not_sent_again(self):
         self._screen(self._client(FakeTransport(), key=None))
@@ -719,6 +727,10 @@ class MultiBatchResumeTests(unittest.TestCase):
         self.assertEqual(
             {chunk.chunk_id for chunk in outcome.uncertain},
             {chunk.chunk_id for chunk in self.candidates},
+        )
+        self.assertEqual(
+            [entry["reason"] for entry in outcome.blocked_records],
+            ["unreadable_pending"],
         )
 
     def test_a_failed_batch_does_not_stop_the_loop_and_is_retried(self):
@@ -811,6 +823,10 @@ class MultiBatchResumeTests(unittest.TestCase):
             {chunk.chunk_id for chunk in outcome.uncertain},
             {chunk.chunk_id for chunk in self.candidates},
         )
+        self.assertEqual(
+            [entry["reason"] for entry in outcome.blocked_records],
+            ["unreadable_request"],
+        )
 
     def test_a_stored_result_that_cannot_be_read_is_not_routed_from(self):
         transport = FakeTransport(
@@ -833,6 +849,13 @@ class MultiBatchResumeTests(unittest.TestCase):
             {chunk.chunk_id for chunk in outcome.uncertain},
             {chunk.chunk_id for chunk in self.candidates},
         )
+        self.assertEqual(
+            [entry["reason"] for entry in outcome.blocked_records],
+            ["unreadable_result"],
+        )
+        self.assertEqual(
+            [entry["path"] for entry in outcome.blocked_records], [str(path)]
+        )
 
     def test_a_stored_result_with_unreadable_answer_ids_is_not_routed_from(self):
         transport = FakeTransport(
@@ -848,6 +871,108 @@ class MultiBatchResumeTests(unittest.TestCase):
         outcome = self._screen(self._client(second_transport))
         self.assertEqual(second_transport.calls, [])
         self.assertEqual(outcome.excluded_soft, ())
+
+    def test_a_result_written_for_another_request_is_not_routed_from(self):
+        # `result.json` is only rewritten by a dispatch that succeeds while
+        # `request.json` is rewritten by every dispatch, so an edit to a page
+        # plus one failed dispatch leaves the edited request beside the earlier
+        # answer. Routing the edit on those verdicts would drop (or escalate)
+        # its chunks on evidence that is not the evidence in hand, and the
+        # report would still say `succeeded`.
+        first_transport = FakeTransport(responses=[
+            self._batch_body(batch, values=(0.02, 0.02, 0.02, 0.02))
+            for batch in self._batches()
+        ])
+        self._screen(self._client(first_transport))
+        self.assertEqual(len(first_transport.calls), 2)
+
+        failed = FakeTransport(responses=[
+            TransportResponse(500, "boom", {}) for _ in self._batches()
+        ])
+        second = self._screen(self._client(failed), brief="换一个主题")
+        self.assertEqual(len(failed.calls), 2)
+        self.assertEqual([result["status"] for result in second.results],
+                         ["failed", "failed"])
+
+        # The screen runs again for the edited page: the stored result answers
+        # the previous request, so nothing is paid for, nothing is excluded,
+        # and the record that stopped the batch is named.
+        third_transport = FakeTransport()
+        third = self._screen(self._client(third_transport), brief="换一个主题")
+
+        self.assertEqual(third_transport.calls, [])
+        self.assertEqual(third.results, ())
+        self.assertEqual(third.excluded_soft, ())
+        self.assertEqual(
+            {chunk.chunk_id for chunk in third.uncertain},
+            {chunk.chunk_id for chunk in self.candidates},
+        )
+        self.assertEqual(
+            [entry["reason"] for entry in third.blocked_records], ["stale_result"]
+        )
+        self.assertEqual(
+            [entry["operation_id"] for entry in third.blocked_records],
+            [self._operation_id(1)],
+        )
+
+    def test_a_stored_result_without_its_request_identity_is_not_routed_from(self):
+        transport = FakeTransport(
+            responses=[self._batch_body(batch) for batch in self._batches()]
+        )
+        self._screen(self._client(transport))
+        path = result_path(self.run_dir, self._operation_id(1))
+        stored = read_json(path)
+        del stored["trace"]
+        path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+
+        second_transport = FakeTransport()
+        outcome = self._screen(self._client(second_transport))
+
+        # A record that does not say which request it answered is not evidence
+        # about this one: it is neither routed from nor paid for again.
+        self.assertEqual(second_transport.calls, [])
+        self.assertEqual(outcome.excluded_soft, ())
+        self.assertEqual(
+            [entry["reason"] for entry in outcome.blocked_records],
+            ["stale_result"],
+        )
+
+    def test_a_second_screens_in_flight_record_survives_the_cleanup(self):
+        # The failure cleanup used to run after the lease was released, so a
+        # second screen that opened its own attempt for the same batch in that
+        # window had its in-flight record deleted under it — losing the only
+        # record of a call that may already have been billed. This emulates
+        # that interleaving by writing the second screen's record immediately
+        # before the cleanup runs.
+        original = relevance.discard_failed_pending_call
+
+        def racing_cleanup(request, config):
+            foreign = build_pending_call(request)
+            foreign["attempt_status"] = "in_flight"
+            write_atomic(
+                pending_path(self.run_dir, operation_id_from_request(request)),
+                foreign,
+            )
+            return original(request, config)
+
+        relevance.discard_failed_pending_call = racing_cleanup
+        try:
+            transport = FakeTransport(responses=[
+                TransportResponse(500, "boom", {}) for _ in self._batches()
+            ])
+            self._screen(self._client(transport))
+        finally:
+            relevance.discard_failed_pending_call = original
+
+        self.assertEqual(
+            pending_operation_ids(self.run_dir),
+            [self._operation_id(1), self._operation_id(2)],
+        )
+        for batch_index in (1, 2):
+            record = read_json(
+                pending_path(self.run_dir, self._operation_id(batch_index))
+            )
+            self.assertEqual(record["attempt_status"], "in_flight")
 
     def test_a_changed_bundle_is_screened_again_instead_of_reused(self):
         transport = FakeTransport(

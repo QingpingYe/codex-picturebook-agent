@@ -57,6 +57,12 @@ _ATTEMPT_STATUS_FOR_OUTCOME = {
     "waiting_for_jev_access": "pending",
 }
 
+# The outcomes that leave an open call on disk instead of a decision: the
+# caller still has to configure a credential, or the attempt's fate is unknown.
+# Nothing is re-sent while one of these is recorded, because the call behind it
+# may already have been billed.
+OPEN_ATTEMPT_STATUSES = ("outcome_unknown", "in_flight")
+
 
 @dataclass(frozen=True)
 class RunnerConfig:
@@ -324,6 +330,32 @@ def build_result(
     return result
 
 
+def result_answers_request(
+    result: Mapping[str, Any], request: Mapping[str, Any]
+) -> bool:
+    """True when a stored result records that it answered this exact request.
+
+    A terminal result is written only by a dispatch that succeeded, while
+    `request.json` is rewritten by every dispatch, so a run directory can hold
+    a result for other knowledge beside the request in hand. The identity that
+    tells them apart is `trace.input_sha256`: `trace_for` writes it from the
+    request the call answered, i.e. the same `sha256(canonical_json(request))`
+    computed here. A record without it — hand-written, or written by an older
+    version — proves nothing about the request in hand and is refused rather
+    than routed from, which is the fail-closed direction. The request hash
+    covers `policy_version` and `model` too, so a verdict the current policy
+    never calibrated is refused with it.
+    """
+
+    trace = result.get("trace")
+    if not isinstance(trace, Mapping):
+        return False
+    recorded = trace.get("input_sha256")
+    if not isinstance(recorded, str) or not recorded:
+        return False
+    return recorded == sha256_hex(canonical_json(request))
+
+
 def read_decision_context(run_dir: Any) -> dict | None:
     return read_json(context_path(run_dir))
 
@@ -570,6 +602,43 @@ def run_operation(request, config, client, clock=None, now=None) -> dict:
         release_lease(config, operation_id, lease.holder)
 
 
+def discard_failed_pending_call(request, config, *, now=None) -> bool:
+    """Drop the pending record of a settled failure, under the operation lease.
+
+    A screen keeps one call per batch, so a batch that settled as a failure has
+    to give its pending record back: `resume_operation` refuses a run that
+    holds more than one. Deleting that record is a write to the run directory
+    like any other, so it happens under the same lease every dispatch takes,
+    and only while the record still describes this request and no attempt is
+    open behind it. Everything else — a lease another runner holds, a record
+    for other knowledge, an attempt that may have been billed, or a record that
+    cannot be read — is left exactly as it is, because the one mistake the run
+    directory can no longer rule out is a second call for a batch that may
+    already have been paid for. Those records stay visible as pending calls.
+    """
+
+    operation_id = operation_id_from_request(request)
+    try:
+        lease = acquire_lease(config, operation_id, now=now)
+    except LeaseHeld:
+        return False
+    try:
+        pending = read_json(pending_path(config.run_dir, operation_id))
+        if pending is None:
+            return False
+        if pending.get("request_fingerprint") != request_fingerprint(request):
+            return False
+        if pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES:
+            return False
+        pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
+        sync_decision_context(
+            config, credential_status="available", pending_call=None
+        )
+        return True
+    finally:
+        release_lease(config, operation_id, lease.holder)
+
+
 class NoPendingCall(RuntimeError):
     """There is no recoverable pending call for this run."""
 
@@ -621,10 +690,15 @@ def resume_operation(
     if request_fingerprint(request) != pending.get("request_fingerprint"):
         return _superseded(request, config, operation_id, "request_fingerprint_mismatch")
     stored_result = read_json(result_path(config.run_dir, operation_id))
-    if stored_result is not None:
+    if stored_result is not None and result_answers_request(stored_result, request):
         # A crash between writing the terminal result and clearing the pending
         # call leaves both files behind. Only return it after confirming that
-        # the caller still has the exact revisions and request fingerprint.
+        # the caller still has the exact revisions and request fingerprint, and
+        # that the record answers *this* request: `result.json` is only
+        # rewritten by a dispatch that succeeds, so a failed or ambiguous
+        # attempt for other knowledge can leave an older request's verdict on
+        # disk. That verdict is no answer to the call in hand, so it is left
+        # where it is and the pending record keeps deciding what happens next.
         lease = acquire_lease(config, operation_id)
         try:
             pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
@@ -635,7 +709,7 @@ def resume_operation(
             return stored_result
         finally:
             release_lease(config, operation_id, lease.holder)
-    if pending.get("attempt_status") in {"outcome_unknown", "in_flight"}:
+    if pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES:
         if not allow_new_attempt:
             # The attempt may have been billed, so nothing is re-sent. The
             # operation stays in its own `outcome_unknown` state (not

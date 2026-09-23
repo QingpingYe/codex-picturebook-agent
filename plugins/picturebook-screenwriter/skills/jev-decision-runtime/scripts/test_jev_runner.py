@@ -27,6 +27,7 @@ from jev_runner import (
     acquire_lease,
     build_pending_call,
     context_path,
+    discard_failed_pending_call,
     execute,
     lease_path,
     main,
@@ -485,6 +486,31 @@ class ResumeTests(RunnerCase):
         self.assertEqual(result["error_class"], "superseded")
         self.assertEqual(transport.calls, [])
 
+    def test_a_stored_result_that_answers_another_request_is_not_returned(self):
+        # `result.json` is only rewritten by a dispatch that succeeds while
+        # `request.json` is rewritten by every dispatch, so a request whose own
+        # attempt is still open can sit beside an older request's verdict. That
+        # verdict answers a different question, so resuming has to fall back to
+        # what the pending record says instead of handing it back — and it must
+        # not delete that record, which is the only thing that says a call may
+        # already have been billed.
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        run_operation(make_request(), self.config, client)
+
+        other = make_request(state="被改写过的 state")
+        write_atomic(request_path(self.run_dir, self.operation_id), other)
+        pending = build_pending_call(other)
+        pending["attempt_status"] = "outcome_unknown"
+        write_atomic(pending_path(self.run_dir, self.operation_id), pending)
+
+        resume_client, transport = self.client(
+            [TransportResponse(200, success_body(), {})]
+        )
+        result = resume_operation(self.config, resume_client, other["context_refs"])
+        self.assertEqual(result["status"], "outcome_unknown")
+        self.assertEqual(transport.calls, [])
+        self.assertTrue(pending_path(self.run_dir, self.operation_id).is_file())
+
     def test_a_corrupt_stored_request_is_not_replayed(self):
         # A crash can leave a truncated request.json behind. Replaying it would
         # re-send a request nobody can read, so an unreadable file counts as
@@ -665,6 +691,55 @@ class OutcomeUnknownTests(RunnerCase):
         client, _ = self.client(error=JevTransportOutcomeUnknown("read timed out"))
         run_operation(make_request(), self.config, client)
         self.assertFalse(lease_path(self.run_dir, self.operation_id).exists())
+
+
+class DiscardFailedPendingCallTests(RunnerCase):
+    """The screening loop's failure cleanup, under the operation's lease.
+
+    One call per batch means a settled failure has to give its pending record
+    back, but the deletion itself is a write another runner's call must not
+    lose: only the record of this request's own settled failure goes.
+    """
+
+    def _failed_pending(self):
+        client, _ = self.client([TransportResponse(500, "boom", {})])
+        result = run_operation(make_request(), self.config, client)
+        self.assertEqual(result["status"], "failed")
+        path = pending_path(self.run_dir, self.operation_id)
+        self.assertTrue(path.is_file())
+        return path
+
+    def _rewrite_pending(self, path, **fields):
+        record = read_json(path)
+        record.update(fields)
+        write_atomic(path, record)
+
+    def test_a_settled_failure_gives_its_pending_record_back(self):
+        path = self._failed_pending()
+        self.assertTrue(discard_failed_pending_call(make_request(), self.config))
+        self.assertFalse(path.is_file())
+        self.assertEqual(pending_operation_ids(self.run_dir), [])
+
+    def test_an_attempt_that_may_have_been_billed_is_left_alone(self):
+        path = self._failed_pending()
+        self._rewrite_pending(path, attempt_status="in_flight")
+        self.assertFalse(discard_failed_pending_call(make_request(), self.config))
+        self.assertTrue(path.is_file())
+
+    def test_a_record_for_other_knowledge_is_left_alone(self):
+        path = self._failed_pending()
+        self._rewrite_pending(path, request_fingerprint="sha256:" + "f" * 64)
+        self.assertFalse(discard_failed_pending_call(make_request(), self.config))
+        self.assertTrue(path.is_file())
+
+    def test_a_record_behind_a_held_lease_is_left_alone(self):
+        path = self._failed_pending()
+        other = RunnerConfig(
+            run_dir=self.run_dir, policy=self.config.policy, holder="another-runner"
+        )
+        acquire_lease(other, self.operation_id)
+        self.assertFalse(discard_failed_pending_call(make_request(), self.config))
+        self.assertTrue(path.is_file())
 
 
 class CliTests(RunnerCase):

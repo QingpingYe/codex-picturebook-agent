@@ -329,6 +329,63 @@ class RelevanceCliTests(unittest.TestCase):
         code, _, _, _ = self._run([])
         self.assertEqual(code, 2)
 
+    def test_a_stale_record_is_reported_by_name_and_costs_nothing(self):
+        # `result.json` is only rewritten by a dispatch that succeeds, so an
+        # edit to the page plus one failed dispatch leaves the edited request
+        # beside the earlier answer. The report has to name the record that
+        # stopped the batch, or the caller sees an empty, successful-looking
+        # screen on every re-run and has nothing to act on.
+        argv = ["--bundle", str(self.bundle_path), "--run-dir", str(self.run_dir),
+                "--artifact-type", "script", "--task", "t", "--brief", "b"]
+        code, _, _, first = self._run(argv, responses=[screened_body()])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(first.calls), 1)
+
+        edited = bundle()
+        edited["items"][0]["content"] += "\n## 新增段落\n\n编辑后新增的一句话。\n"
+        self.bundle_path.write_text(
+            json.dumps(edited, ensure_ascii=False), encoding="utf-8"
+        )
+        code, out, _, failed = self._run(
+            argv, responses=[TransportResponse(500, "boom", {})]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["results"][0]["status"], "failed")
+        self.assertEqual(len(failed.calls), 1)
+
+        filtered = self.run_dir / "filtered.json"
+        code, out, err, third = self._run(argv + ["--filtered-out", str(filtered)])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(third.calls, [])
+
+        payload = json.loads(out)
+        self.assertEqual(payload["results"], [])
+        self.assertEqual(payload["excluded_soft"], [])
+        self.assertEqual(len(payload["blocked_records"]), 1)
+        blocked = payload["blocked_records"][0]
+        self.assertEqual(blocked["reason"], "stale_result")
+        self.assertTrue(
+            blocked["operation_id"].endswith(f"-{payload['operation']}-batch-001")
+        )
+        self.assertTrue(blocked["path"].endswith("result.json"))
+        # Every chunk stays in the model context: nothing was excluded on
+        # evidence this run could not vouch for.
+        self.assertTrue(payload["uncertain_chunk_ids"])
+        self.assertTrue(
+            set(payload["uncertain_chunk_ids"]) <= set(payload["kept_chunk_ids"])
+        )
+        self.assertTrue(
+            json.loads(filtered.read_text(encoding="utf-8"))["items"]
+        )
+        self.assertTrue(
+            any(
+                "blocked_records" in warning
+                for warning in json.loads(
+                    filtered.read_text(encoding="utf-8")
+                )["warnings"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

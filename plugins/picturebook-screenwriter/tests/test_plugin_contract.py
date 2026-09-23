@@ -303,6 +303,8 @@ class JevPhase2DocumentationTests(unittest.TestCase):
             "run_operation",
             "more than one call to continue",
             "re-sends a record it cannot read",
+            "reused only for the request it answered",
+            "blocked_records",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, text)

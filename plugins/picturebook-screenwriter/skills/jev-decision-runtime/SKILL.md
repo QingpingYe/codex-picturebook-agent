@@ -53,6 +53,7 @@ python scripts/jev_runner.py resume \
 - 凭证只从环境变量 `TYPESAFE_API_KEY` 读取。任何 `--api-key` / `--token` / `--secret` 形式的参数都会被**在解析前**拒绝，且错误信息只回显参数名、不回显参数值。
 - `--policy` 省略时使用 `references/decision-policies.json`。
 - `resume` 需要调用方提供**当前** revision 向量；与 pending call 中记录的不同即判定 `superseded`，不会改用新输入重跑。
+- 只有当磁盘上的 `result.json` 记录了它回答的正是本次请求（`trace.input_sha256` 等于本次请求的哈希）时，`resume` 才会直接返回它：`request.json` 每次派发都会被覆盖，而 `result.json` 只由成功的派发写入，所以目录里可能留着更早一次请求的结论。记录缺少该字段、或属于另一次请求时，`resume` 按 pending 记录继续（等待 key 的批次可以重发，去向不明的批次仍只回报 `outcome_unknown`），并且**不会**删掉那条 pending 记录，因为它可能是“这次调用已经计费”的唯一凭据。
 
 ## 强制力分级
 

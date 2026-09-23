@@ -26,14 +26,16 @@ from decision_contract import (  # noqa: E402
     validate_result,
 )
 from jev_runner import (  # noqa: E402
+    OPEN_ATTEMPT_STATUSES,
     RunnerConfig,
+    discard_failed_pending_call,
     operation_id_from_request,
     pending_path,
     read_json,
     request_path,
+    result_answers_request,
     result_path,
     run_operation,
-    sync_decision_context,
 )
 from recall import partition  # noqa: E402
 from required_marking import mark_bundle  # noqa: E402
@@ -60,10 +62,6 @@ RULE_VERSION = "knowledge-relevance-rules-v1"
 
 # The request templates name the item they ask about with this placeholder.
 ITEM_PLACEHOLDER = "<item>"
-
-# The outcomes that leave an open call on disk instead of a decision: the caller
-# still has to configure a credential, or the attempt's fate is unknown.
-OPEN_ATTEMPT_STATUSES = ("outcome_unknown", "in_flight")
 
 # A batch whose call is still open (waiting for a credential) or that may
 # already have been billed stops the screen where it is: the remaining batches
@@ -101,6 +99,10 @@ class RelevanceOutcome:
     results: tuple[dict, ...]
     required_count: int
     candidate_count: int
+    # The records on disk that kept a batch out of the screen, each with its
+    # path and the reason: a run that stops on one of them has to be able to
+    # name what stopped it, or the same re-run stops in the same place forever.
+    blocked_records: tuple[dict, ...] = ()
 
 
 def _items(bundle: Any) -> tuple:
@@ -302,17 +304,44 @@ def _answers_by_item(result: Mapping[str, Any]) -> dict[str, dict]:
     return grouped
 
 
+def _unique_records(entries: Sequence[dict]) -> tuple[dict, ...]:
+    """The blocked records in the order they were found, each named once."""
+
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for entry in entries:
+        key = (entry["path"], entry["reason"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(entry)
+    return tuple(unique)
+
+
 @dataclass(frozen=True)
 class _StoredBatch:
     """What the run directory already knows about one batch's operation.
 
     `result` is the terminal result of this exact request when the run has
     already paid for it, and `open_attempt` says that a call for this exact
-    request may have reached the service.
+    request may have reached the service. `blocked_record` and `blocked_reason`
+    name the file that made that call, so the report can say which record
+    stopped the screen instead of leaving every re-run to stop in the same
+    place with nothing to act on.
     """
 
     result: dict | None = None
     open_attempt: bool = False
+    blocked_record: str | None = None
+    blocked_reason: str | None = None
+
+
+def _blocking_record(path: Any, reason: str) -> _StoredBatch:
+    """A record that keeps its batch out of the screen, and names itself."""
+
+    return _StoredBatch(
+        open_attempt=True, blocked_record=str(path), blocked_reason=reason
+    )
 
 
 def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBatch:
@@ -330,9 +359,12 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
     Anything on disk this screen cannot route from counts as an attempt that
     may already have been billed, not as an absent record: a request record
     that does not parse cannot be shown to describe the request in hand, and a
-    terminal record the contract rejects is no verdict this batch may be
-    routed from. Both keep their batch out of the screen, because sending it
-    again is the one mistake the run directory can no longer rule out.
+    terminal record the contract rejects, whose status is not reusable, or
+    which was written for other knowledge is no verdict this batch may be
+    routed from. All of them keep their batch out of the screen, because
+    sending it again is the one mistake the run directory can no longer rule
+    out, and each is named in the outcome so the caller can act on the file
+    that stopped the run.
     """
 
     operation_id = operation_id_from_request(request)
@@ -343,7 +375,7 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
         return _StoredBatch()
     stored_request = read_json(stored_request_file)
     if stored_request is None:
-        return _StoredBatch(open_attempt=True)
+        return _blocking_record(stored_request_file, "unreadable_request")
     if request_fingerprint(stored_request) != request_fingerprint(request):
         # The record describes other knowledge: it is neither a result to
         # reuse nor an obstacle to dispatch for these inputs.
@@ -355,21 +387,31 @@ def _stored_batch(config: RunnerConfig, request: Mapping[str, Any]) -> _StoredBa
             and _is_readable_result(stored_result, request)
         ):
             return _StoredBatch(result=stored_result)
-        # A terminal record this screen may not route from — one the contract
-        # rejects, or one no status makes reusable — still says a call was
-        # settled here, so its batch is kept instead of sent again.
-        return _StoredBatch(open_attempt=True)
-    pending = read_json(pending_path(config.run_dir, operation_id))
-    if pending is not None:
-        return _StoredBatch(
-            open_attempt=pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES
+        # A terminal record this screen may not route from still sits in this
+        # batch's operation directory, so the batch is kept instead of sent
+        # again. `result.json` is only rewritten by a dispatch that succeeds
+        # while `request.json` is rewritten by every dispatch, so the two ways
+        # this happens are told apart by the record's own identity: a result
+        # that answers another request is stale, and one that answers this
+        # request but fails the contract is unreadable.
+        reason = (
+            "stale_result"
+            if not result_answers_request(stored_result, request)
+            else "unreadable_result"
         )
+        return _blocking_record(result_path(config.run_dir, operation_id), reason)
+    pending_file = pending_path(config.run_dir, operation_id)
+    pending = read_json(pending_file)
+    if pending is not None:
+        if pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES:
+            return _blocking_record(pending_file, "open_attempt")
+        return _StoredBatch()
     # A pending record that exists but cannot be read cannot rule out a billed
     # attempt either; a missing one means no attempt was recorded for these
     # inputs, so the batch is safe to dispatch.
-    return _StoredBatch(
-        open_attempt=pending_path(config.run_dir, operation_id).exists()
-    )
+    if pending_file.exists():
+        return _blocking_record(pending_file, "unreadable_pending")
+    return _StoredBatch()
 
 
 def _is_readable_result(stored: Any, request: Mapping[str, Any]) -> bool:
@@ -378,14 +420,18 @@ def _is_readable_result(stored: Any, request: Mapping[str, Any]) -> bool:
     The reuse path is the only path where a terminal record was not built by
     this process. `execute` validates what it just built; a record read back
     from an earlier run, hand-edited, or written by an older version has to
-    satisfy the same two things before anything is routed from it: the result
-    contract, and — for a succeeded record — an answer for every question this
-    batch asked, and none for anything else. A record whose answer ids name no
-    question of this request cannot be read as a verdict on it, so its batch is
+    satisfy the same three things before anything is routed from it: it must
+    record that it answered this request (`result_answers_request`, without
+    which an edited page would be routed on the version before the edit), the
+    result contract, and — for a succeeded record — an answer for every
+    question this batch asked, and none for anything else. A record that misses
+    any of them cannot be read as a verdict on this request, so its batch is
     kept rather than routed from it.
     """
 
     try:
+        if not result_answers_request(stored, request):
+            return False
         validate_result(stored)
         if stored.get("status") == "succeeded":
             validate_answer_ids(request, stored)
@@ -422,7 +468,11 @@ def screen_candidates(
     Every dispatch takes the shared runner's per-operation execution lease, so
     a batch another runner holds is not sent either. A batch that settles as a
     failure is retried by re-running the screen rather than through `resume`,
-    which leaves at most one call for the caller to continue with.
+    which leaves at most one call for the caller to continue with. Nothing is
+    routed from a record this run cannot vouch for — one that does not answer
+    this request, does not parse, or does not satisfy the result contract — and
+    every record that keeps a batch out of the screen is named in
+    `RelevanceOutcome.blocked_records` so a stopped run is actionable.
     """
 
     marked = mark_bundle(
@@ -456,6 +506,7 @@ def screen_candidates(
     excluded: list[dict] = []
     routes: list[dict] = []
     results: list[dict] = []
+    blocked: list[dict] = []
 
     for chunk in unscreenable:
         kept.append(chunk)
@@ -485,9 +536,18 @@ def screen_candidates(
         elif stored.open_attempt:
             # The attempt may already have been billed, so nothing is re-sent
             # without the user's explicit consent. The batch stays kept and
-            # uncertain, and the rest of the bundle stays unscreened.
+            # uncertain, and the rest of the bundle stays unscreened. The
+            # record that stopped it is reported by name, so the caller has
+            # the file to repair instead of watching the same re-run stop in
+            # the same place with nothing to act on.
             kept.extend(batch)
             uncertain.extend(batch)
+            if stored.blocked_record is not None:
+                blocked.append({
+                    "operation_id": operation_id_from_request(request),
+                    "path": stored.blocked_record,
+                    "reason": stored.blocked_reason,
+                })
             stopped = True
             continue
         else:
@@ -502,13 +562,11 @@ def screen_candidates(
                 # refuses a run that holds more than one: leaving this record
                 # behind would make a batch that only waits for the credential
                 # later on unresumable. Re-running the screen retries a failed
-                # batch instead, and its result and trace stay on disk.
-                pending_path(
-                    config.run_dir, operation_id_from_request(request)
-                ).unlink(missing_ok=True)
-                sync_decision_context(
-                    config, credential_status="available", pending_call=None
-                )
+                # batch instead, and its trace stays on disk. The deletion
+                # takes the operation's lease and re-reads the record before it
+                # acts, so a second screen's in-flight call for this batch is
+                # never deleted under it.
+                discard_failed_pending_call(request, config)
         results.append(result)
         answers_by_item = (
             _answers_by_item(result) if result["status"] == "succeeded" else {}
@@ -550,6 +608,7 @@ def screen_candidates(
         results=tuple(results),
         required_count=sum(1 for chunk in marked if chunk.required),
         candidate_count=len(candidates),
+        blocked_records=_unique_records(blocked),
     )
 
 
@@ -599,6 +658,13 @@ def filtered_bundle(bundle: Any, outcome: RelevanceOutcome) -> dict:
     if outcome.uncertain:
         warnings.append(
             f"本次有 {len(outcome.uncertain)} 个软知识块无法判定相关性，已保守保留。"
+        )
+    if outcome.blocked_records:
+        warnings.append(
+            f"本次甄别停在 {len(outcome.blocked_records)} 条既有记录处："
+            "这些记录既没有被复用也没有被覆盖，本次没有为它们付费；"
+            "报告里的 blocked_records 给出每条记录的路径与原因，"
+            "需要人工处理后重跑。"
         )
     filtered["warnings"] = warnings
     return filtered

@@ -240,6 +240,9 @@ def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=No
         "excluded_soft": list(outcome.excluded_soft),
         "routes": list(outcome.routes),
         "results": list(outcome.results),
+        # The records this screen refused to route from, by path and reason: a
+        # stopped run has to be actionable, not just reported as untouched.
+        "blocked_records": list(outcome.blocked_records),
     }, ensure_ascii=False, sort_keys=True), file=out)
     return 0
 
