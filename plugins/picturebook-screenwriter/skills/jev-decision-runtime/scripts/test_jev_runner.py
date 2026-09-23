@@ -1,3 +1,4 @@
+import io
 import json
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from jev_client import (
 )
 from jev_runner import (
     AmbiguousAttempt,
+    CREDENTIAL_ARGUMENT_PREFIXES,
     LeaseHeld,
     NoPendingCall,
     RunnerConfig,
@@ -26,6 +28,7 @@ from jev_runner import (
     context_path,
     execute,
     lease_path,
+    main,
     operation_dir,
     operation_id_for,
     pending_path,
@@ -500,6 +503,68 @@ class OutcomeUnknownTests(RunnerCase):
         client, _ = self.client(error=JevTransportOutcomeUnknown("read timed out"))
         run_operation(make_request(), self.config, client)
         self.assertFalse(lease_path(self.run_dir, self.operation_id).exists())
+
+
+class CliTests(RunnerCase):
+    def _write(self, name, payload):
+        path = self.run_dir / name
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def _main(self, argv, client=None, transport=None, **kwargs):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        if client is None:
+            client, transport = self.client([TransportResponse(200, success_body(), {})])
+        code = main(
+            argv, environ={API_KEY_ENV: "sk-abc"}, transport_factory=lambda: transport,
+            stdout=stdout, stderr=stderr, **kwargs,
+        )
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_run_prints_the_result_json(self):
+        path = self._write("request.json", make_request())
+        code, out, _ = self._main(["run", "--request", str(path), "--run-dir", str(self.run_dir)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["status"], "succeeded")
+
+    def test_resume_prints_the_result_json(self):
+        client, _ = self.client(environ={})
+        run_operation(make_request(), self.config, client)
+        refs = self._write("refs.json", make_request()["context_refs"])
+        code, out, _ = self._main(
+            ["resume", "--run-dir", str(self.run_dir), "--input-refs", str(refs)]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["status"], "succeeded")
+
+    def test_credential_arguments_are_refused_without_echoing_the_value(self):
+        for prefix in CREDENTIAL_ARGUMENT_PREFIXES:
+            with self.subTest(prefix=prefix):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                code = main(
+                    ["run", f"{prefix}=SUPER-SECRET-VALUE", "--run-dir", str(self.run_dir)],
+                    environ={}, stdout=stdout, stderr=stderr,
+                )
+                self.assertEqual(code, 2)
+                self.assertNotIn("SUPER-SECRET-VALUE", stderr.getvalue())
+                self.assertNotIn("SUPER-SECRET-VALUE", stdout.getvalue())
+
+    def test_a_missing_policy_file_is_reported_as_a_contract_failure(self):
+        path = self._write("request.json", make_request())
+        code, _, err = self._main(
+            ["run", "--request", str(path), "--run-dir", str(self.run_dir),
+             "--policy", str(self.run_dir / "nope.json")]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("error", err.lower())
+
+    def test_usage_errors_exit_two(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        code = main([], environ={}, stdout=stdout, stderr=stderr)
+        self.assertEqual(code, 2)
 
 
 if __name__ == "__main__":

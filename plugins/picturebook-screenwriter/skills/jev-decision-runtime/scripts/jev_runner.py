@@ -15,12 +15,20 @@ from typing import Any
 from decision_contract import (
     ContractError,
     build_decision_context,
+    default_policy_path,
+    load_policy,
     operation_cursor,
     operation_policy,
     validate_answer_ids,
     validate_decision_context,
     validate_request,
     validate_result,
+)
+from jev_client import (
+    API_KEY_ENV,
+    JevClient,
+    JevClientError,
+    UrllibTransport,
 )
 from telemetry import (
     DecisionTrace,
@@ -567,3 +575,99 @@ def _superseded(request, config, operation_id, reason) -> dict:
         config, credential_status="available", pending_call=pending,
     )
     return result
+
+
+CREDENTIAL_ARGUMENT_PREFIXES = (
+    "--api-key",
+    "--apikey",
+    "--api_key",
+    "--token",
+    "--secret",
+    "--authorization",
+    "--bearer",
+)
+
+
+def _reject_credential_arguments(arguments) -> str | None:
+    """Refuse credential flags before argparse can echo their values."""
+
+    for argument in arguments:
+        lowered = str(argument).lower()
+        for prefix in CREDENTIAL_ARGUMENT_PREFIXES:
+            if lowered.startswith(prefix):
+                return (
+                    f"credentials are not accepted on the command line: {prefix}. "
+                    f"Set {API_KEY_ENV} in the environment instead."
+                )
+    return None
+
+
+def _build_parser():
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="jev_runner.py")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run = subparsers.add_parser("run", help="execute one decision operation")
+    run.add_argument("--request", required=True)
+    run.add_argument("--run-dir", required=True)
+    run.add_argument("--policy")
+
+    resume = subparsers.add_parser("resume", help="resume a pending decision operation")
+    resume.add_argument("--run-dir", required=True)
+    resume.add_argument("--input-refs", required=True)
+    resume.add_argument("--policy")
+    return parser
+
+
+def main(
+    argv=None,
+    environ=None,
+    transport_factory=None,
+    stdout=None,
+    stderr=None,
+) -> int:
+    import sys
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    out = sys.stdout if stdout is None else stdout
+    err = sys.stderr if stderr is None else stderr
+
+    refusal = _reject_credential_arguments(arguments)
+    if refusal is not None:
+        print(refusal, file=err)
+        return 2
+
+    parser = _build_parser()
+    if not arguments:
+        parser.print_usage(err)
+        return 2
+    try:
+        args = parser.parse_args(arguments)
+    except SystemExit as exit_error:
+        return 2 if exit_error.code else 0
+
+    factory = transport_factory or UrllibTransport
+    try:
+        policy = load_policy(args.policy or default_policy_path())
+        config = RunnerConfig(run_dir=Path(args.run_dir), policy=policy)
+        client = JevClient(factory(), environ=environ)
+        if args.command == "run":
+            request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+            result = run_operation(request, config, client)
+        else:
+            refs = json.loads(Path(args.input_refs).read_text(encoding="utf-8"))
+            result = resume_operation(config, client, refs)
+    except (ContractError, JevClientError, NoPendingCall, LeaseHeld, AmbiguousAttempt) as error:
+        print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False), file=err)
+        return 1
+    except (OSError, ValueError) as error:
+        print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False), file=err)
+        return 1
+
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True), file=out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
