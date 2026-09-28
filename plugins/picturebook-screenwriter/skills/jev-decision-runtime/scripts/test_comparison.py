@@ -949,5 +949,187 @@ class BuildCaseReportTests(unittest.TestCase):
         self.assertIn("trace 数：1（属于其它 case：1）", text)
 
 
+# The escalated items the pre-screen handed back to the plain LLM are a second
+# batch of calls with their own time and bill. spec §10.3 asks for them in their
+# own rows, because reading the pre-screen's own cost as the Jev-assisted path's
+# total would understate the path by exactly the work it caused.
+UPGRADED_LLM_USAGE = {
+    "elapsed_ms": 42000,
+    "request_count": 3,
+    "input_tokens": 12000,
+    "output_tokens": 900,
+    "cache_tokens": 0,
+    "estimated_cost_usd": "0.210000000000",
+}
+
+
+class UpgradedLlmSlotTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.run_dir = self.root / "run"
+        write_atomic(
+            self.run_dir / "jev" / "text_quality_prefilter" / "trace" / "0001.json",
+            trace("text_quality_prefilter"),
+        )
+        self.usage_path = self.root / "llm-usage.json"
+        self.write_entry()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write_entry(self, **overrides):
+        payload = dict(LLM_USAGE, upgraded_llm_usage=dict(UPGRADED_LLM_USAGE))
+        payload.update(overrides)
+        self.usage_path.write_text(json.dumps(payload, ensure_ascii=False),
+                                   encoding="utf-8")
+        return payload
+
+    def report(self, **overrides):
+        self.write_entry(**overrides)
+        return build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+
+    def test_the_jev_column_carries_the_escalated_plain_llm_usage(self):
+        jev = self.report()["jev_assisted"]
+        self.assertEqual(jev["llm_request_count"], 3)
+        self.assertEqual(jev["llm_input_tokens"], 12000)
+        self.assertEqual(jev["llm_output_tokens"], 900)
+        self.assertEqual(jev["llm_cache_tokens"], 0)
+        self.assertEqual(jev["llm_elapsed_ms"], 42000)
+        self.assertEqual(jev["llm_estimated_cost_usd"], "0.210000000000")
+
+    def test_the_escalated_batch_does_not_replace_the_pre_screen_numbers(self):
+        # The pre-screen's own trace and the plain LLM's second batch are two
+        # devices, so the rows above keep reading the trace.
+        jev = self.report()["jev_assisted"]
+        self.assertEqual(jev["request_count"], 1)
+        self.assertEqual(jev["input_tokens"], 2000)
+        self.assertEqual(jev["estimated_cost_usd"], "0.000084000000")
+
+    def test_the_path_total_is_the_pre_screen_plus_the_escalated_batch(self):
+        jev = self.report()["jev_assisted"]
+        self.assertEqual(jev["total_estimated_cost_usd"], "0.210084000000")
+        self.assertEqual(jev["total_elapsed_ms"], 412 + 42000)
+
+    def test_the_plain_llm_column_is_its_own_plain_llm_half_and_total(self):
+        llm = self.report()["llm"]
+        self.assertEqual(llm["llm_request_count"], 12)
+        self.assertEqual(llm["llm_input_tokens"], 54000)
+        self.assertEqual(llm["llm_cache_tokens"], 12000)
+        self.assertEqual(llm["total_estimated_cost_usd"], "1.234500000000")
+        self.assertEqual(llm["total_elapsed_ms"], 180000)
+
+    def test_the_escalated_block_never_overwrites_the_plain_llm_column(self):
+        report = self.report()
+        self.assertEqual(report["llm"]["request_count"], 12)
+        self.assertEqual(report["llm"]["estimated_cost_usd"], "1.234500000000")
+
+    def test_a_missing_escalated_block_leaves_the_jev_total_unknown(self):
+        # A total nobody measured is not a zero and not the pre-screen's own
+        # bill: it is the number the reader must not be handed.
+        payload = self.write_entry()
+        del payload["upgraded_llm_usage"]
+        self.usage_path.write_text(json.dumps(payload, ensure_ascii=False),
+                                   encoding="utf-8")
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        jev = report["jev_assisted"]
+        self.assertIsNone(jev["llm_request_count"])
+        self.assertIsNone(jev["total_estimated_cost_usd"])
+        self.assertIsNone(jev["total_elapsed_ms"])
+        self.assertTrue(any("upgraded_llm_usage" in note for note in jev["notes"]))
+
+    def test_the_total_stays_unknown_when_one_half_of_the_cost_is_missing(self):
+        block = dict(UPGRADED_LLM_USAGE)
+        del block["estimated_cost_usd"]
+        jev = self.report(upgraded_llm_usage=block)["jev_assisted"]
+        self.assertEqual(jev["llm_request_count"], 3)
+        self.assertIsNone(jev["llm_estimated_cost_usd"])
+        self.assertIsNone(jev["total_estimated_cost_usd"])
+        self.assertTrue(any("总成本" in note for note in jev["notes"]))
+
+    def test_a_numeric_cost_in_the_escalated_block_is_refused(self):
+        jev_block = dict(UPGRADED_LLM_USAGE, estimated_cost_usd=0.21)
+        with self.assertRaises(ValueError) as raised:
+            self.report(upgraded_llm_usage=jev_block)
+        self.assertIn("decimal string", str(raised.exception))
+
+    def test_the_elapsed_total_is_unknown_when_the_batch_has_no_time(self):
+        # The same rule as the cost: a batch whose duration nobody copied out
+        # leaves the path's end-to-end time unmeasured rather than equal to the
+        # pre-screen's own.
+        block = dict(UPGRADED_LLM_USAGE)
+        del block["elapsed_ms"]
+        jev = self.report(upgraded_llm_usage=block)["jev_assisted"]
+        self.assertEqual(jev["total_estimated_cost_usd"], "0.210084000000")
+        self.assertIsNone(jev["total_elapsed_ms"])
+        self.assertTrue(any("总耗时" in note for note in jev["notes"]))
+
+    def test_a_misspelled_field_in_the_escalated_block_is_refused(self):
+        # Reading a typo as "not measured" would let the report stay silent
+        # about a number the user did write down.
+        jev_block = dict(UPGRADED_LLM_USAGE)
+        jev_block["estimatd_cost_usd"] = "0.210000000000"
+        with self.assertRaises(ValueError) as raised:
+            self.report(upgraded_llm_usage=jev_block)
+        self.assertIn("estimatd_cost_usd", str(raised.exception))
+        self.assertIn("upgraded_llm_usage", str(raised.exception))
+
+    def test_an_escalated_block_that_is_not_an_object_is_refused(self):
+        with self.assertRaises(ValueError) as raised:
+            self.report(upgraded_llm_usage=[42000])
+        self.assertIn("upgraded_llm_usage", str(raised.exception))
+
+    def test_the_manual_entry_gate_still_wins_over_the_escalated_block(self):
+        # The source check is what keeps this plugin out of CC Switch's own
+        # store, so it must be reported before the block's own contents.
+        jev_block = dict(UPGRADED_LLM_USAGE, estimated_cost_usd=0.21)
+        with self.assertRaises(ValueError) as raised:
+            self.report(source="cc-switch-sqlite:/home/u/.cc-switch.db",
+                        upgraded_llm_usage=jev_block)
+        self.assertIn("manual", str(raised.exception))
+
+    def test_the_markdown_shows_the_escalated_batch_and_the_path_total(self):
+        text = report_to_markdown(self.report())
+        self.assertIn("### 普通 LLM 用量与本路径总账", text)
+        total = next(
+            line for line in text.splitlines()
+            if line.startswith("| total_estimated_cost_usd")
+        )
+        self.assertIn("1.234500000000", total)
+        self.assertIn("0.210084000000", total)
+        self.assertIn("升级项回流给普通 LLM", text)
+
+    def test_the_markdown_names_an_unmeasured_total_instead_of_zeroing_it(self):
+        payload = self.write_entry()
+        del payload["upgraded_llm_usage"]
+        self.usage_path.write_text(json.dumps(payload, ensure_ascii=False),
+                                   encoding="utf-8")
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        row = next(
+            line for line in report_to_markdown(report).splitlines()
+            if line.startswith("| total_estimated_cost_usd")
+        )
+        self.assertIn("未测得（Jev 辅助）", row)
+        self.assertNotIn("0.000000000000", row)
+
+    def test_the_addon_rows_are_not_the_rows_the_main_table_already_shows(self):
+        # The escalated batch is a second device, so its rows must be separate
+        # from the per-device rows a reader already compares.
+        report = self.report()
+        for name in ("llm_request_count", "total_estimated_cost_usd"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, METRIC_NAMES)
+                self.assertIn(name, report["jev_assisted"])
+
+
 if __name__ == "__main__":
     unittest.main()

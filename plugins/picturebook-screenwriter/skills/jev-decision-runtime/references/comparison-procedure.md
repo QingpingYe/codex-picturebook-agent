@@ -45,14 +45,30 @@
   "knowledge_items_entered": 180,
   "quality_items_entered": 160,
   "issues_found": 7,
-  "misses_or_disagreements": 1
+  "misses_or_disagreements": 1,
+  "upgraded_llm_usage": {
+    "elapsed_ms": 42000,
+    "request_count": 3,
+    "input_tokens": 12000,
+    "output_tokens": 900,
+    "cache_tokens": 0,
+    "estimated_cost_usd": "0.210000000000"
+  }
 }
 ```
+
+上面这份汇总描述的是**普通 LLM 那一列**（整轮跑完的普通 LLM 路径）。
+
+`upgraded_llm_usage` 是**可选的第二个块**，也是 spec §10.3 留给 Jev 辅助列的那一格：预筛把升级项交回普通 LLM 再跑一遍，那批调用有自己的请求数、token、耗时和账单。按同一套筛法，用**升级项复核那一段**（在预筛 trace 的 `finished_at` 之后）的窗口把它的汇总填进来。
+
+不填这个块，报告不会拿预筛自己的成本冒充该路径的总账：Jev 列的 `llm_*` 与 `total_*` 一律读作「未测得」，并在 `notes` 里写明。块里少写一半（例如没给 `estimated_cost_usd`）同样让总账保持未知——只测到一半的账单加起来不是这条路径的账单。
+
+块里的键名必须拼对：出现不认识的键（例如 `estimatd_cost_usd`）会被**拒绝**，而不是当成「没测过」——否则你亲手写下的那个数字会静默地不进报告。
 
 `source` 必须是 `cc-switch-manual-entry` 或 `manual`；写下任何像数据库路径的值都会被拒绝，那意味着这个插件开始读它承诺不碰的私有存储。
 
 `estimated_cost_usd` 必须写成带引号的字符串。写成 JSON 数字（`1.2345`）会被拒绝：JSON
-数字按二进制浮点解析，账单口径不能靠浮点凑。
+数字按二进制浮点解析，账单口径不能靠浮点凑。这条规则对 `upgraded_llm_usage.estimated_cost_usd` 同样生效。
 
 ## 3. 生成报告
 
@@ -78,9 +94,11 @@ python scripts/compare_cli.py \
 | `estimated_cost_usd` | 上一步手工汇总 | trace 的 `estimated_cost_usd` 求和 |
 | `knowledge_items_entered` | 上一步手工汇总：本次全量进入的知识块 | **只**取 `knowledge_relevance` 自己的 `escalated_count` 之和，即该 operation 交给普通 LLM 继续处理的块数 |
 | `quality_items_entered` | 上一步手工汇总：本次全量复核的页面维度 | **只**取 `text_quality_prefilter` 自己的 `escalated_count` 之和，即升级项 |
-| `issues_found` | 上一步手工汇总 | 升级项 + 整批失败数，即需要普通 LLM 再看一遍的项 |
+| `issues_found` | 上一步手工汇总 | 升级项 + 整批失败数，即需要普通 LLM 再看一遍的项；**不含**代理冲突项（见下） |
 | `misses_or_disagreements` | 上一步手工汇总 | 预筛本身给不出，恒为 `null` |
-| **升级项回流给普通 LLM 的请求数 / token / 成本** | 上一步手工汇总 | **没有槽位。** Jev 辅助列只含 Jev 自己发起的调用，不含被升级项由普通 LLM 再跑一遍的那部分；要得到该路径的**总**成本，必须把它并进普通 LLM 的上一步汇总里，别把 Jev 列的 `estimated_cost_usd` 当成总账 |
+| **升级项回流普通 LLM 的请求数 / token / 成本** | 上一步手工汇总（本列本身即全量普通 LLM） | 上一步的 `upgraded_llm_usage` 块（`llm_request_count`、`llm_input_tokens`、`llm_output_tokens`、`llm_cache_tokens`、`llm_elapsed_ms`、`llm_estimated_cost_usd`）；没提供就读作「未测得」 |
+| **本路径估算总成本**（`total_estimated_cost_usd`） | 上一步手工汇总的 `estimated_cost_usd` | 预筛 estimate + `upgraded_llm_usage.estimated_cost_usd`；任一半未测得即为「未测得」，既不是 `0`，也不会退化成预筛那一半 |
+| **本路径估算总耗时**（`total_elapsed_ms`） | 上一步手工汇总的 `elapsed_ms` | 预筛耗时 + `upgraded_llm_usage.elapsed_ms`，口径同上 |
 
 两行的口径不同，所以它们各自取自己 operation 的数字：知识块和页面维度不是同一种
 单位，一个 operation 没跑就留空，不会拿另一个的数字顶上。
@@ -89,8 +107,12 @@ python scripts/compare_cli.py \
 
 - `screened_clear` 与 `escalated` 来自 Jev 侧 trace；`runtime_failure` 是未能完成的项数。
 - trace 里的 `screened_clear_count` / `escalated_count` 由该 operation 在派发时通过共享
-  runner 的 `verdicts=` 钩子写入：两个数相加等于本次真正判定过的项数，`escalated` 等于
-  升级包的大小（升级项与无法判定的项都算，因为两者都要普通 LLM 再看一遍）。
+  runner 的 `verdicts=` 钩子写入：两个数相加等于本次真正判定过的项数。
+- **升级包的大小不等于 `escalated_count`**：升级包 = 判定派生的升级项 + 整批失败项 +
+  代理冲突项，即 `escalated + runtime_failure + summary.escalated_by_proxy_conflict`
+  （后两项见同一次运行的 `--report-out`）。字面命中却被模型判 clear 的冲突项本来就是
+  `screened_clear`，所以它在 trace 的两个计数里都不出现。因此报告里的 `issues_found`
+  行只算了「升级项 + 整批失败数」，**不含**代理冲突项；要拿准确口径请读那份 `summary`。
 - 报告会逐 operation 列出 `jev_operations`（`item_count`、`screened_clear_count`、
   `escalated_count`、`runtime_failure`、`traces_without_verdicts`、耗时与成本）。这里的
   `item_count` 是请求引用到的权威页数，**不是**进入 LLM 的项数，别拿它当上面那两行。

@@ -126,6 +126,8 @@
     "export_gate": "explicit_user_request",
     "output_dir": "user_supplied_absolute",
     "comparability": "all_identity_fields_must_match",
+    "escalated_llm_slots": "manual_entry_upgraded_llm_usage",
+    "path_total_cost": "pre_screen_estimate_plus_escalated_llm_estimate",
     "calibration_change": "human_only"
   },
   "illustration_route": {

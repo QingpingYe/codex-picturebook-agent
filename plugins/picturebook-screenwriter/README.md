@@ -115,3 +115,5 @@ $env:TYPESAFE_API_KEY = "<your-key>"
 未校准期间所有 operation 均为 `experimental`：`screened_clear` 只是 Jev 的候选结论，不缩减普通 LLM 的复核范围。
 
 两条 operation 都有可直接运行的入口：知识相关性甄别用 `python skills/knowledge-loader/scripts/relevance_cli.py …`，文本质量预筛用 `python skills/pre_output-baseline/scripts/screening_cli.py …`。两者都只在用户选择 Jev 辅助路径后由技能指令调用；预筛的 `screened_clear` 与升级包都在报告的 JSON 里，退出码为 0 不代表通过。
+
+路径对比报告由 `python skills/jev-decision-runtime/scripts/compare_cli.py --run-dir … --llm-usage …` 生成，默认只打印不写文件。Jev 辅助列里"升级项回流普通 LLM"的那一半用量由手工条目的可选 `upgraded_llm_usage` 块提供，`total_estimated_cost_usd` / `total_elapsed_ms` 给出该路径的总账；缺这个块或只给了一半时总账读作「未测得」，不会退化成预筛自己的成本。

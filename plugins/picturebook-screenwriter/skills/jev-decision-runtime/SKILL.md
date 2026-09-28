@@ -37,7 +37,8 @@ description: 共享 Jev 决策运行器。仅当用户已选择 Jev 辅助路径
 - **默认不写文件**，只在对话里展示。只有用户明确要求导出并给出绝对输出目录时，才通过 `session-export` 的能力写出报告；目录必须在插件目录之外，且导出时必须提供 `--plugin-root`。
 - **校准状态不由本技能改变。** 报告只给建议；`experimental` → `calibrated` 是需要人工复核的决定，且 `outcomes.json` 目前仍需人工产出。
 - `fallback_used: true` 的样本与凭证等待期间的耗时不计入性能比较。
-- 报告两列的数字来源不同（Jev 列来自 trace，普通 LLM 列来自手工录入），逐行来源见 `references/comparison-procedure.md`。
+- **Jev 辅助列的成本是两段之和。** 预筛自己的 trace 只给出 Jev 那一半；升级项回流普通 LLM 再跑一遍的请求数、token 与成本由手工条目的可选 `upgraded_llm_usage` 块提供，报告用 `total_estimated_cost_usd` / `total_elapsed_ms` 两行给出该路径总账。缺这个块时总账保持「未测得」，**不会**退化成预筛那一半的账单。
+- 报告两列的数字来源不同（Jev 列来自 trace，普通 LLM 列来自手工录入），逐行来源见 `references/comparison-procedure.md`；表中每一行是该列自己的测量装置，升级项回流那部分单独成表。
 
 ## 安全约束
 
