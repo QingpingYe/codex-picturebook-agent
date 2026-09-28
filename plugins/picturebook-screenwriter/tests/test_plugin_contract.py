@@ -362,5 +362,34 @@ class JevPhase3DocumentationTests(unittest.TestCase):
         self.assertIn("item_count = 0", text)
 
 
+class JevPhase4DocumentationTests(unittest.TestCase):
+    def test_contract_declares_the_comparison_boundary(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        comparison = contract["jev_comparison"]
+        self.assertEqual(comparison["cc_switch_access"], "forbidden")
+        self.assertEqual(comparison["llm_usage_source"], "manual_entry")
+        self.assertEqual(comparison["export_gate"], "explicit_user_request")
+        self.assertEqual(comparison["output_dir"], "user_supplied_absolute")
+        self.assertEqual(comparison["calibration_change"], "human_only")
+
+    def test_runtime_skill_documents_the_comparison(self):
+        text = (ROOT / "skills" / "jev-decision-runtime" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("## 对比验收", text)
+        self.assertIn("不读 CC Switch", text)
+
+    def test_enforcement_matrix_documents_the_comparison_gates(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for required in ("comparison.py", "compare_cli.py", "cc-switch", "comparable"):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+    def test_the_procedure_reference_exists(self):
+        path = ROOT / "skills" / "jev-decision-runtime" / "references" / "comparison-procedure.md"
+        self.assertTrue(path.is_file())
+        self.assertIn("CC Switch", path.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

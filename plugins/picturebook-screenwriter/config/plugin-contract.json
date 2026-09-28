@@ -120,6 +120,14 @@
     ],
     "routing_source": "operation_policy"
   },
+  "jev_comparison": {
+    "cc_switch_access": "forbidden",
+    "llm_usage_source": "manual_entry",
+    "export_gate": "explicit_user_request",
+    "output_dir": "user_supplied_absolute",
+    "comparability": "all_identity_fields_must_match",
+    "calibration_change": "human_only"
+  },
   "illustration_route": {
     "sequence": [
       "staging-planner",

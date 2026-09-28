@@ -13,6 +13,8 @@ description: 导出当前会话的审计摘要与已收集内容；输出目录�
 - 不读取、推断或记录 API key、令牌、密码或授权头。
 - 只写入调用方已经提供的 JSON 安全数据。
 
+路径对比报告也通过本技能写出：`jev-decision-runtime/scripts/compare_cli.py` 复用同一个绝对路径与插件外两个守卫。除报告本身外，它不写任何其它内容。
+
 ## Workflow
 
 1. 请用户提供绝对输出目录。

@@ -28,6 +28,17 @@ description: 共享 Jev 决策运行器。仅当用户已选择 Jev 辅助路径
 - 缺少某个答案的条件一律不成立，item 落入 `fallback_route`。
 - 没有路由的结果只可能来自失败或中断，绝不代表“已通过”。
 
+## 对比验收
+
+`scripts/compare_cli.py` 把 Jev 侧 trace 与用户手工提供的普通 LLM 用量合并成一份并排报告。
+
+- **不读 CC Switch 数据库。** 它的 schema 不是稳定公共契约，读它会把这个插件绑到别人的私有存储与个人环境路径上。LLM 侧的 token 与成本由用户按 `references/comparison-procedure.md` 手工读出并填入。
+- **两次运行只有在六个 case identity 字段全一致时才比较**，否则报告标 `comparable: false` 并逐条列出差异。运行目录只能核验 `benchmark_case_id` 与 `policy_version` 两项，其余四项标记为仅凭人工声明。
+- **默认不写文件**，只在对话里展示。只有用户明确要求导出并给出绝对输出目录时，才通过 `session-export` 的能力写出报告；目录必须在插件目录之外，且导出时必须提供 `--plugin-root`。
+- **校准状态不由本技能改变。** 报告只给建议；`experimental` → `calibrated` 是需要人工复核的决定，且 `outcomes.json` 目前仍需人工产出。
+- `fallback_used: true` 的样本与凭证等待期间的耗时不计入性能比较。
+- 报告两列的数字来源不同（Jev 列来自 trace，普通 LLM 列来自手工录入），逐行来源见 `references/comparison-procedure.md`。
+
 ## 安全约束
 
 - 凭证只从环境变量 `TYPESAFE_API_KEY` 读取，缺失或全空白即视为缺失。
