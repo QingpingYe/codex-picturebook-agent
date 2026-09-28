@@ -15,7 +15,7 @@
 - `knowledge_relevance`: authority pages are chunked, hard-constraint chunks are marked unfilterable, soft candidates are recalled, and Jev screens those candidates; the reduced evidence bundle feeds the ordinary model context while the unfiltered revision vector stays available to the dependency lock.
 - `text_quality_prefilter`: every active red line and the five per-page text-quality dimensions are pre-screened by Jev, with Chinese calibration samples and a threshold calibration tool.
 - `text_quality_prefilter` now has its operator entry point: `skills/pre_output-baseline/scripts/screening_cli.py` screens a draft's page table against the authority red-line catalog, writes the escalation package for the plain LLM, and reports the ratios, `catalog_gap`, `blocked_records` and warnings instead of leaving the orchestration reachable only from tests.
-- 两条执行路径的并排对比报告：按 case identity 校验可比性、合并 Jev trace 与手工录入的普通 LLM 用量、给出校准建议，且仅在显式要求时导出。
+- Side-by-side comparison report for the two execution paths: case-identity comparability gate, Jev traces merged with manually entered plain-LLM usage, per-operation calibration advice, and an export that only happens on an explicit request.
 
 ### Changed
 

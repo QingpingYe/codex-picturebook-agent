@@ -74,12 +74,13 @@ python scripts/compare_cli.py \
 | --- | --- | --- |
 | `elapsed_ms`、`request_count` | 上一步手工汇总 | 运行目录里的 trace |
 | `input_tokens`、`output_tokens` | 上一步手工汇总 | trace 的 `usage` |
-| `cache_tokens` | 上一步手工汇总 | 当前恒为 `0`（trace 尚未记录缓存 token），不是"Jev 省了缓存" |
+| `cache_tokens` | 上一步手工汇总 | 当前恒为 `0`（trace 尚未记录缓存 token），不是"Jev 省了缓存"；本次没有任何可测 trace 时是 `null`，不是 `0` |
 | `estimated_cost_usd` | 上一步手工汇总 | trace 的 `estimated_cost_usd` 求和 |
 | `knowledge_items_entered` | 上一步手工汇总：本次全量进入的知识块 | **只**取 `knowledge_relevance` 自己的 `escalated_count` 之和，即该 operation 交给普通 LLM 继续处理的块数 |
 | `quality_items_entered` | 上一步手工汇总：本次全量复核的页面维度 | **只**取 `text_quality_prefilter` 自己的 `escalated_count` 之和，即升级项 |
 | `issues_found` | 上一步手工汇总 | 升级项 + 整批失败数，即需要普通 LLM 再看一遍的项 |
 | `misses_or_disagreements` | 上一步手工汇总 | 预筛本身给不出，恒为 `null` |
+| **升级项回流给普通 LLM 的请求数 / token / 成本** | 上一步手工汇总 | **没有槽位。** Jev 辅助列只含 Jev 自己发起的调用，不含被升级项由普通 LLM 再跑一遍的那部分；要得到该路径的**总**成本，必须把它并进普通 LLM 的上一步汇总里，别把 Jev 列的 `estimated_cost_usd` 当成总账 |
 
 两行的口径不同，所以它们各自取自己 operation 的数字：知识块和页面维度不是同一种
 单位，一个 operation 没跑就留空，不会拿另一个的数字顶上。
