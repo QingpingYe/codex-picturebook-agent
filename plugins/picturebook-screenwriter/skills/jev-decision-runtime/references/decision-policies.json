@@ -143,6 +143,11 @@
           "type": "noul",
           "instructions": "针对 `pages.<page>.text`：是否主要直接命名情绪，而缺少可观察的动作或感官线索？",
           "criteria": { "true": "只命名情绪，无可观察线索", "false": "用动作或感官呈现情绪" }
+        },
+        "redline:*": {
+          "type": "noul",
+          "instructions": "针对 `pages.<page>.text`：该页是否触犯 `redlines.<item>` 声明的项目红线？",
+          "criteria": { "true": "触犯该条红线", "false": "未触犯该条红线" }
         }
       },
       "routing": {
@@ -159,7 +164,8 @@
               { "question_id": "age_comprehension_risk", "bands": ["risk"] },
               { "question_id": "read_aloud_friction", "bands": ["risk"] },
               { "question_id": "weak_page_turn_motivation", "bands": ["risk"] },
-              { "question_id": "emotion_told_not_shown", "bands": ["risk"] }
+              { "question_id": "emotion_told_not_shown", "bands": ["risk"] },
+              { "question_id": "redline:*", "bands": ["risk"] }
             ]
           },
           {
@@ -170,7 +176,8 @@
               { "question_id": "age_comprehension_risk", "bands": ["grey"] },
               { "question_id": "read_aloud_friction", "bands": ["grey"] },
               { "question_id": "weak_page_turn_motivation", "bands": ["grey"] },
-              { "question_id": "emotion_told_not_shown", "bands": ["grey"] }
+              { "question_id": "emotion_told_not_shown", "bands": ["grey"] },
+              { "question_id": "redline:*", "bands": ["grey"] }
             ]
           },
           {
@@ -181,7 +188,8 @@
               { "question_id": "age_comprehension_risk", "bands": ["clear"] },
               { "question_id": "read_aloud_friction", "bands": ["clear"] },
               { "question_id": "weak_page_turn_motivation", "bands": ["clear"] },
-              { "question_id": "emotion_told_not_shown", "bands": ["clear"] }
+              { "question_id": "emotion_told_not_shown", "bands": ["clear"] },
+              { "question_id": "redline:*", "bands": ["clear"] }
             ]
           }
         ]
@@ -190,6 +198,7 @@
   },
   "notes": [
     "question_templates 与 routing 表自 Phase 2 起为必填；当前各 operation 的模板与规则是最小可用基准，随该 operation 的中文校准补全。",
+    "text_quality_prefilter 的 question_templates 声明 `redline:*` 通配项：红线维度的问题 id 是运行期生成的 `redline:<rule_id>`，其指令在构建请求时按该条红线的具体字面词内联，因此通配项只用于契约校验与路由匹配。",
     "experimental 期间 screened_clear 不得缩减普通 LLM 复核范围。",
     "阈值必须由本项目的中文绘本样本校准后逐 operation 转为 calibrated。"
   ]

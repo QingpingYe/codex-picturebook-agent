@@ -24,6 +24,17 @@ PRIMITIVES = ("noul", "choice", "score")
 # routing tables that produce these routes arrive with each operation's policy.
 ROUTE_VALUES = ("include", "exclude_soft", "screened_clear", "escalate_llm", "needs_user_choice")
 
+# Routes that withhold content from what the plain-LLM path gets to see. The
+# vocabulary lives on the contract rather than in `routing` so the policy
+# validator and the router read the same tuple; `routing` re-exports it for the
+# callers that already import it from there.
+CONTENT_REMOVING_ROUTES = ("exclude_soft",)
+
+# A fallback is the answer to "the rules did not decide", so it can neither be a
+# clearance nor a content removal: both would turn a missing or unreadable
+# answer into a decision that suppresses evidence.
+FORBIDDEN_FALLBACK_ROUTES = ("screened_clear",) + CONTENT_REMOVING_ROUTES
+
 # The band vocabulary a routing table may place probabilities into.
 BAND_VALUES = ("clear", "grey", "risk")
 
@@ -486,10 +497,11 @@ def validate_policy(payload: Any) -> None:
         fallback = _require_nonempty_str(entry, "fallback_route", label)
         if fallback not in ROUTE_VALUES:
             raise ContractError(f"{label}.fallback_route must be one of {ROUTE_VALUES}")
-        if fallback == "screened_clear":
+        if fallback in FORBIDDEN_FALLBACK_ROUTES:
             raise ContractError(
-                f"{label}.fallback_route must not be 'screened_clear': a fallback "
-                "means the rules did not decide, which can never be a clearance"
+                f"{label}.fallback_route must not be {fallback!r}: a fallback means "
+                "the rules did not decide, so it can neither clear the item nor "
+                "withhold it"
             )
         _validate_routing_table(entry, label)
         if "fallback_label" in entry:

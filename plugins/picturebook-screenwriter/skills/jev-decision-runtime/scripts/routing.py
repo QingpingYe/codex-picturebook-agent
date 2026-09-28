@@ -13,14 +13,17 @@ from collections.abc import Mapping
 from decimal import Decimal, DecimalException
 from typing import Any
 
-from decision_contract import ContractError
+from decision_contract import CONTENT_REMOVING_ROUTES, ContractError
 
-# Routes that remove content from what the plain LLM gets to see. An exclusion
-# must never rest on a question that was never answered, so an all_of rule with
-# one of these routes has to have evaluated every condition it declares; a
-# partially answered exclusion rule is undecided, and an undecided item falls
-# through to the operation's conservative fallback.
-CONTENT_REMOVING_ROUTES = ("exclude_soft",)
+# `CONTENT_REMOVING_ROUTES` is re-exported above: an exclusion must never rest
+# on a question that was never answered, so an all_of rule with one of those
+# routes has to have evaluated every condition it declares; a partially answered
+# exclusion rule is undecided, and an undecided item falls through to the
+# operation's conservative fallback.
+
+# A question id that ends with this suffix names every answer that carries the
+# text before it as a prefix.
+PATTERN_SUFFIX = "*"
 
 
 class RoutingError(ContractError):
@@ -41,6 +44,26 @@ UNREADABLE_ANSWER_ERRORS = (
     ValueError,
     DecimalException,
 )
+
+
+def _matching_question_ids(question_id: str, answers: Mapping[str, Any]) -> tuple[str, ...]:
+    """The answers one condition names, in the order they were returned.
+
+    One question per active red line arrives under a dynamic id
+    (`redline:<rule_id>`), so the policy addresses that family with a trailing
+    `*` instead of a list it would have to regenerate whenever a red line is
+    added or retired. Every other id names exactly one answer, so an exact id
+    behaves exactly as it did before patterns existed.
+    """
+
+    if not question_id.endswith(PATTERN_SUFFIX):
+        return (question_id,) if question_id in answers else ()
+    prefix = question_id[: -len(PATTERN_SUFFIX)]
+    if not prefix:
+        # A bare `*` would band every answer on the item, naming evidence the
+        # rule's author never wrote down.
+        raise RoutingError("a question id pattern needs a prefix before '*'")
+    return tuple(key for key in answers if isinstance(key, str) and key.startswith(prefix))
 
 
 def probability_band(probability: Any, bands: Mapping[str, Any]) -> str:
@@ -77,16 +100,37 @@ def answer_band(answer: Any, bands: Mapping[str, Any]) -> str:
 def condition_matches(
     condition: Mapping[str, Any], answers: Mapping[str, Any], bands: Mapping[str, Any]
 ) -> bool:
-    """Return whether one condition holds.
+    """Return whether one condition holds for at least one answer it names.
 
     A missing answer never satisfies a condition: absence must not be readable
-    as evidence, in either direction.
+    as evidence, in either direction. A pattern that matched no answer holds
+    nothing, so it satisfies nothing either.
     """
 
-    answer = answers.get(condition["question_id"])
-    if answer is None:
+    return any(
+        answer_band(answers[question_id], bands) in condition["bands"]
+        for question_id in _matching_question_ids(condition["question_id"], answers)
+    )
+
+
+def condition_fully_matches(
+    condition: Mapping[str, Any], answers: Mapping[str, Any], bands: Mapping[str, Any]
+) -> bool:
+    """Return whether every answer one condition names bands into it.
+
+    `all_of` reads each condition as a whole rather than as one answer: when a
+    condition names a family of answers, a rule that clears the item only holds
+    while every one of them is clear. A condition that matched nothing is
+    unevaluated, never satisfied.
+    """
+
+    question_ids = _matching_question_ids(condition["question_id"], answers)
+    if not question_ids:
         return False
-    return answer_band(answer, bands) in condition["bands"]
+    return all(
+        answer_band(answers[question_id], bands) in condition["bands"]
+        for question_id in question_ids
+    )
 
 
 def rule_matches(
@@ -95,7 +139,10 @@ def rule_matches(
     if "any_of" in rule:
         return any(condition_matches(item, answers, bands) for item in rule["any_of"])
     conditions = rule["all_of"]
-    evaluated = [item for item in conditions if item["question_id"] in answers]
+    evaluated = [
+        item for item in conditions
+        if _matching_question_ids(item["question_id"], answers)
+    ]
     if not evaluated:
         # An all_of rule that evaluated nothing would match vacuously, which
         # would let a *missing* answer read as a clear verdict. Refuse instead.
@@ -108,7 +155,7 @@ def rule_matches(
         # question, so an unasked condition leaves it undecided rather than
         # satisfied.
         return False
-    return all(condition_matches(item, answers, bands) for item in evaluated)
+    return all(condition_fully_matches(item, answers, bands) for item in evaluated)
 
 
 def route_item(item_id: str, answers: Mapping[str, Any], operation_policy: Mapping[str, Any]) -> dict:

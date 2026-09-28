@@ -23,6 +23,7 @@ from decision_contract import (
     validate_result,
     validate_resume_cursor,
 )
+from routing import route_item
 
 
 def make_request(**overrides):
@@ -504,12 +505,12 @@ class PolicyContractTests(unittest.TestCase):
             policy["operations"]["knowledge_relevance"]["max_items_per_request"], 10
         )
 
-    def test_shipped_policy_declares_the_five_text_quality_dimensions(self):
+    def test_shipped_policy_declares_the_five_dimensions_and_the_red_line_pattern(self):
         policy = load_policy(default_policy_path())
         templates = policy["operations"]["text_quality_prefilter"]["question_templates"]
         self.assertEqual(sorted(templates), [
             "age_comprehension_risk", "direct_moralizing", "emotion_told_not_shown",
-            "read_aloud_friction", "weak_page_turn_motivation",
+            "read_aloud_friction", "redline:*", "weak_page_turn_motivation",
         ])
         for name, template in templates.items():
             with self.subTest(dimension=name):
@@ -578,6 +579,107 @@ class PolicyContractTests(unittest.TestCase):
                 policy["operations"][operation]["fallback_route"] = "screened_clear"
                 with self.assertRaises(ContractError):
                     validate_policy(policy)
+
+    def test_a_content_removing_route_may_not_be_a_fallback_route(self):
+        # The same fail-closed argument as `screened_clear`: dropping an item
+        # the rules could not decide is a silent loss, and a missing answer may
+        # never remove content.
+        for operation in OPERATIONS:
+            with self.subTest(operation=operation):
+                policy = make_policy()
+                policy["operations"][operation]["fallback_route"] = "exclude_soft"
+                with self.assertRaises(ContractError):
+                    validate_policy(policy)
+
+
+TEXT_QUALITY_DIMENSIONS = (
+    "direct_moralizing",
+    "age_comprehension_risk",
+    "read_aloud_friction",
+    "weak_page_turn_motivation",
+    "emotion_told_not_shown",
+)
+
+
+def noul(value):
+    return {"type": "noul", "noul": value}
+
+
+def text_quality_entry():
+    return operation_policy(load_policy(default_policy_path()), "text_quality_prefilter")
+
+
+def clear_page_answers(**overrides):
+    """The five quality dimensions of a page, all banded clear, plus any red lines."""
+
+    answers = {dimension: noul(0.05) for dimension in TEXT_QUALITY_DIMENSIONS}
+    answers.update(overrides)
+    return answers
+
+
+class ShippedTextQualityRoutingTests(unittest.TestCase):
+    """The shipped policy must be able to route a red-line dimension.
+
+    Task 6 asks one question per active red line under a dynamic id
+    (`redline:<rule_id>`, keyed as `<page>::redline:<rule_id>` in the request
+    and as `redline:<rule_id>` inside the item's answer set), so a routing table
+    that names only the five fixed dimensions sends every red-line answer to the
+    fallback. That escalates every page, which is pure overhead, and it loses
+    the per-red-line false-negative count spec §11.2 asks for.
+    """
+
+    def test_the_shipped_policy_declares_the_red_line_pattern_template(self):
+        # The rule conditions below name `redline:*`, and a condition may only
+        # name a declared template, so the pattern needs a declaration of its
+        # own. Task 6 inlines the concrete words of each red line into the
+        # question it sends, because only a rule's own text can name its pattern.
+        template = text_quality_entry()["question_templates"]["redline:*"]
+        self.assertEqual(template["type"], "noul")
+        self.assertTrue(template["instructions"].strip())
+
+    def test_every_rule_names_the_red_line_pattern(self):
+        for rule in text_quality_entry()["routing"]["rules"]:
+            conditions = rule.get("any_of") or rule.get("all_of")
+            with self.subTest(label=rule["label"]):
+                self.assertIn(
+                    "redline:*",
+                    {condition["question_id"] for condition in conditions},
+                )
+
+    def test_a_red_line_at_risk_escalates(self):
+        answers = clear_page_answers(**{"redline:redline-aaa": noul(0.9)})
+        route = route_item("page-1", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("escalate_llm", "risk"))
+
+    def test_a_red_line_in_the_grey_band_escalates(self):
+        answers = clear_page_answers(**{"redline:redline-aaa": noul(0.5)})
+        route = route_item("page-1", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("escalate_llm", "grey"))
+
+    def test_every_red_line_answer_must_be_clear_to_reach_screened_clear(self):
+        answers = clear_page_answers(
+            **{"redline:redline-aaa": noul(0.05), "redline:redline-bbb": noul(0.05)}
+        )
+        route = route_item("page-1", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("screened_clear", "clear"))
+        answers["redline:redline-bbb"] = noul(0.5)
+        self.assertEqual(
+            route_item("page-1", answers, text_quality_entry())["route"], "escalate_llm"
+        )
+
+    def test_a_page_without_active_red_lines_still_reaches_screened_clear(self):
+        # The pattern matched no answer, so it is unevaluated rather than
+        # failed: a page with nothing to red-line must not be escalated for it.
+        route = route_item("page-1", clear_page_answers(), text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("screened_clear", "clear"))
+
+    def test_a_closing_page_clears_on_the_dimensions_it_was_asked(self):
+        # The closing page is exempt from the page-turn dimension, so that
+        # question is never asked and the clear rule skips it.
+        answers = clear_page_answers()
+        del answers["weak_page_turn_motivation"]
+        route = route_item("page-9", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("screened_clear", "clear"))
 
 
 def make_context(**overrides):

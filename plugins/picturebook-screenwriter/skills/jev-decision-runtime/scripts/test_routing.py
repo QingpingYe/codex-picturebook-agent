@@ -1,8 +1,11 @@
 import unittest
 
+import decision_contract
 from routing import (
+    CONTENT_REMOVING_ROUTES,
     RoutingError,
     answer_band,
+    condition_fully_matches,
     condition_matches,
     probability_band,
     route_item,
@@ -53,6 +56,50 @@ class ConditionTests(unittest.TestCase):
         self.assertFalse(condition_matches(risk, {}, BANDS))
         self.assertFalse(condition_matches(clear, {}, BANDS))
 
+    def test_a_trailing_star_names_every_answer_with_that_prefix(self):
+        # One question per active red line arrives under a dynamic id
+        # (`redline:<rule_id>`), so the policy addresses the family instead of a
+        # list that would have to be regenerated whenever a red line changes.
+        condition = {"question_id": "redline:*", "bands": ["risk"]}
+        answers = {"redline:rule-aaa": noul(0.9), "redline:rule-bbb": noul(0.1)}
+        self.assertTrue(condition_matches(condition, answers, BANDS))
+
+    def test_a_pattern_that_matched_no_answer_never_satisfies_a_condition(self):
+        condition = {"question_id": "redline:*", "bands": ["risk"]}
+        self.assertFalse(
+            condition_matches(condition, {"direct_moralizing": noul(0.9)}, BANDS)
+        )
+        self.assertFalse(condition_matches(condition, {}, BANDS))
+
+    def test_a_pattern_only_names_answers_that_carry_its_prefix(self):
+        condition = {"question_id": "redline:*", "bands": ["risk"]}
+        answers = {"redline_rule": noul(0.9), "page-1::redline:x": noul(0.9)}
+        self.assertFalse(condition_matches(condition, answers, BANDS))
+
+    def test_an_answer_that_is_not_an_object_is_refused(self):
+        # A provider body is untrusted: `null` is an answer the router cannot
+        # band, so it refuses the item's route instead of reading the hole as
+        # "this condition does not hold".
+        with self.assertRaises(RoutingError):
+            condition_matches({"question_id": "relevant", "bands": ["risk"]},
+                              {"relevant": None}, BANDS)
+
+    def test_a_pattern_without_a_prefix_is_refused(self):
+        # A bare `*` would band every answer on the item, which is not what any
+        # rule author can mean; refuse rather than answer for the wrong set.
+        with self.assertRaises(RoutingError):
+            condition_matches({"question_id": "*", "bands": ["risk"]},
+                              {"relevant": noul(0.9)}, BANDS)
+
+    def test_every_matching_answer_must_band_for_a_fully_matched_condition(self):
+        condition = {"question_id": "redline:*", "bands": ["clear"]}
+        self.assertTrue(condition_fully_matches(
+            condition, {"redline:a": noul(0.05), "redline:b": noul(0.2)}, BANDS))
+        self.assertFalse(condition_fully_matches(
+            condition, {"redline:a": noul(0.05), "redline:b": noul(0.5)}, BANDS))
+        # Nothing matched is unevaluated, never satisfied.
+        self.assertFalse(condition_fully_matches(condition, {"a": noul(0.05)}, BANDS))
+
 
 class RuleTests(unittest.TestCase):
     def test_any_of_needs_one_match(self):
@@ -95,6 +142,48 @@ class RuleTests(unittest.TestCase):
             {"question_id": "never_asked", "bands": ["clear"]},
         ]}
         self.assertFalse(rule_matches(rule, {"a": noul(0.1)}, BANDS))
+
+    def test_any_of_matches_when_one_answer_behind_a_pattern_bands(self):
+        rule = {"route": "escalate_llm", "any_of": [
+            {"question_id": "redline:*", "bands": ["risk"]},
+        ]}
+        self.assertTrue(rule_matches(
+            rule, {"redline:a": noul(0.05), "redline:b": noul(0.9)}, BANDS))
+        self.assertFalse(rule_matches(rule, {"redline:a": noul(0.05)}, BANDS))
+        self.assertFalse(rule_matches(rule, {"direct_moralizing": noul(0.9)}, BANDS))
+
+    def test_all_of_requires_every_answer_behind_a_pattern_to_band(self):
+        rule = {"route": "screened_clear", "all_of": [
+            {"question_id": "redline:*", "bands": ["clear"]},
+        ]}
+        self.assertTrue(rule_matches(
+            rule, {"redline:a": noul(0.05), "redline:b": noul(0.2)}, BANDS))
+        self.assertFalse(rule_matches(
+            rule, {"redline:a": noul(0.05), "redline:b": noul(0.5)}, BANDS))
+
+    def test_a_pattern_that_matched_nothing_is_skipped_by_an_all_of_rule(self):
+        # A page with no active red line is asked no red-line question: that is
+        # the exemption, not a failed condition.
+        rule = {"route": "screened_clear", "all_of": [
+            {"question_id": "direct_moralizing", "bands": ["clear"]},
+            {"question_id": "redline:*", "bands": ["clear"]},
+        ]}
+        self.assertTrue(rule_matches(rule, {"direct_moralizing": noul(0.05)}, BANDS))
+
+    def test_a_pattern_that_matched_nothing_leaves_a_withholding_rule_undecided(self):
+        rule = {"route": "exclude_soft", "all_of": [
+            {"question_id": "relevant", "bands": ["clear"]},
+            {"question_id": "redline:*", "bands": ["clear"]},
+        ]}
+        self.assertFalse(rule_matches(rule, {"relevant": noul(0.05)}, BANDS))
+
+
+class ConstantAuthorityTests(unittest.TestCase):
+    def test_the_content_removing_route_vocabulary_has_one_authority(self):
+        # Phase 2 callers import it from `routing`; the contract owns it so the
+        # policy validator and the router cannot drift apart.
+        self.assertIs(CONTENT_REMOVING_ROUTES, decision_contract.CONTENT_REMOVING_ROUTES)
+        self.assertEqual(CONTENT_REMOVING_ROUTES, ("exclude_soft",))
 
 
 def operation_policy(**overrides):
