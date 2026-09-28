@@ -51,9 +51,9 @@ python scripts/screening_cli.py \
 ```
 
 - `--script` 指向被审的逐页脚本；红线词表由 `--bundle` 里的权威页面重建，字面扫描只补充候选证据，不缩小提问范围。
-- `--escalation-out` 写出的升级包只含非 `screened_clear` 的维度（高风险、灰区、异常与失败），交给普通 LLM 复核；`--report-out` 写出同一份报告，含比率、路由、`blocked_records` 与 `warnings`。
+- `--escalation-out` 写出的升级包含非 `screened_clear` 的维度（高风险、灰区、异常与失败），**外加代理冲突条目**（字面扫描命中、Jev 却判 clear，`reason: proxy_conflict`；`scope: window` 指某个页窗被问过该红线，`scope: draft` 指该规则根本没被问过），交给普通 LLM 复核；`--report-out` 写出同一份报告，含比率、路由、`blocked_records`、`proxy_conflicts` 与 `warnings`。
 - 报告里的 `catalog_gap=true` 表示红线词表为空——那是词表缺口，不是"草稿没有红线"；`page_count>0` 而 `item_count=0` 表示页面全部无文字，这两条都会在 `warnings` 里写明，空报告不是"通过"。
-- `calibration_status` 仍是 `experimental` 时 `may_skip_llm_review` 恒为 false：`screened_clear` 不缩减普通 LLM 复核范围。
+- `calibration_status` 仍是 `experimental` 时 `may_skip_llm_review_count` 恒为 0：`screened_clear` 不缩减普通 LLM 复核范围；即使已 `calibrated`，只要存在代理冲突，该计数也会归零——两路信号正好相反的那一项不能靠"clear"跳过。
 - 读不成逐页脚本的文件（页面表解析不出任何行）与读不成证据包的 bundle，都在发出任何请求前以 JSON 错误退出（退出码 1），不会留下升级包。
 - 预筛本身跑完就返回 0：即使所有维度都在等待 key 或已失败，结论也只在 `results[].status`、`summary` 与 `warnings` 里。只检查退出码会把它误读成"已通过"。
 - run id 默认取 `--run-dir` 的目录名；目录名不符合 `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`（含点号、空格、中文或过长）时命令拒绝执行，并提示显式传入 `--run-id`。

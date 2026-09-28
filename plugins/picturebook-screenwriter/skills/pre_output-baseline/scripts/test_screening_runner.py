@@ -369,6 +369,22 @@ class ProxyConflictTests(unittest.TestCase):
         self.assertEqual(len(conflicts), 1)
         self.assertEqual(conflicts[0]["reason"], "proxy_hit_not_escalated")
 
+    def test_a_rule_that_was_never_asked_becomes_a_draft_scoped_conflict(self):
+        # A window list cannot name the page a draft-level scan matched, and a
+        # rule the screen never asked about has no window at all: the hit still
+        # has to reach the plain LLM, with the scope saying it is draft-wide.
+        from screening_runner import _conflict_escalations
+
+        conflict = {"reason": "proxy_hit_not_escalated", "finding_id": "redline-aaa",
+                    "message": "候选命中", "evidence": "变勇敢了"}
+        entries = _conflict_escalations((conflict,), (), {}, {}, {})
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["scope"], "draft")
+        self.assertEqual(entries[0]["outcome"], "escalate_llm")
+        self.assertEqual(entries[0]["reason"], "proxy_conflict")
+        self.assertEqual(entries[0]["dimension"], "redline:redline-aaa")
+        self.assertEqual(entries[0]["evidence"], "变勇敢了")
+
     def test_no_proxy_findings_means_no_conflicts(self):
         self.assertEqual(detect_proxy_conflicts((), ()), ())
 

@@ -452,6 +452,50 @@ class ScreeningCliTests(unittest.TestCase):
         self.assertEqual(payload["may_skip_llm_review_count"], 0)
         self.assertTrue(any("代理冲突" in note for note in payload["warnings"]))
 
+    def _calibrated_policy(self):
+        """The shipped policy with this operation marked calibrated."""
+
+        policy = json.loads(Path(default_policy_path()).read_text(encoding="utf-8"))
+        policy["operations"]["text_quality_prefilter"]["calibration_status"] = "calibrated"
+        path = self.run_dir / "calibrated-policy.json"
+        path.write_text(json.dumps(policy, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def test_a_calibrated_run_without_a_conflict_reports_skippable_items(self):
+        # The companion case: under a calibrated policy a clear verdict really
+        # does reduce the review, which is what makes the conflict case below a
+        # live scenario rather than an always-zero assertion.
+        rules = catalog_from_bundle(bundle())
+        code, out, err, _ = self._run(
+            self._argv(policy=str(self._calibrated_policy())),
+            responses=[TransportResponse(200, success_body(answers_for(rules)), {})],
+        )
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertEqual(payload["calibration_status"], "calibrated")
+        self.assertEqual(payload["proxy_conflicts"], [])
+        self.assertTrue(payload["summary"]["screened_clear"])
+        self.assertEqual(payload["may_skip_llm_review_count"],
+                         payload["summary"]["screened_clear"])
+
+    def test_a_calibrated_run_cannot_skip_what_the_two_signals_disagree_on(self):
+        # spec §9.4 sends the disagreement to the plain LLM, so the conflict has
+        # to keep the review in place even where a clear verdict otherwise
+        # reduces it — the case a test under `experimental` cannot reach.
+        self.script_path.write_text(LITERAL_SCRIPT, encoding="utf-8")
+        rules = catalog_from_bundle(bundle())
+        code, out, err, _ = self._run(
+            self._argv(policy=str(self._calibrated_policy())),
+            responses=[TransportResponse(200, success_body(answers_for(rules)), {})],
+        )
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertEqual(payload["calibration_status"], "calibrated")
+        self.assertTrue(payload["summary"]["proxy_conflicts"])
+        self.assertTrue(payload["summary"]["screened_clear"])
+        self.assertEqual(payload["may_skip_llm_review_count"], 0)
+        self.assertEqual(payload["may_skip_llm_review_items"], [])
+
     def test_an_escalated_red_line_is_not_reported_as_a_conflict(self):
         self.script_path.write_text(LITERAL_SCRIPT, encoding="utf-8")
         rules = catalog_from_bundle(bundle())
