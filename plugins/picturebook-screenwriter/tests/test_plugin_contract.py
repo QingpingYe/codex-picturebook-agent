@@ -154,7 +154,7 @@ class PluginContractTests(unittest.TestCase):
                     "findings",
                     "blocked_reasons",
                 ],
-                "project_authority": "FAIL_blocks_confirmation",
+                "project_authority": "any_finding_blocks_confirmation",
                 "craft_benchmark": "FAIL_requires_user_confirmation",
                 "wiki_lint": "read_only",
                 "lexile_check": "optional_measured_only",
@@ -286,6 +286,80 @@ class JevPhase1DocumentationTests(unittest.TestCase):
         self.assertIn("TYPESAFE_API_KEY", text)
         self.assertIn("jev-decision-runtime", text)
         self.assertIn("不得把密钥粘贴到对话中", text)
+
+
+class JevPhase2DocumentationTests(unittest.TestCase):
+    def test_plugin_readme_documents_relevance_screening(self):
+        text = PLUGIN_README.read_text(encoding="utf-8")
+        self.assertIn("knowledge_relevance", text)
+        self.assertIn("硬约束块永不被过滤", text)
+
+    def test_enforcement_matrix_documents_the_screening_gates(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for required in (
+            "required_marking.py",
+            "recall.py",
+            "dependency_bundle",
+            "run_operation",
+            "more than one call to continue",
+            "re-sends a record it cannot read",
+            "attempt_status",
+            "reused only for the request it answered",
+            "blocked_records",
+            "clears only its own pending call",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+
+class JevPhase3DocumentationTests(unittest.TestCase):
+    def test_pre_output_skill_names_the_split_finding_sources(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("project_proxy", text)
+        self.assertIn("project_authority", text)
+
+    def test_pre_output_skill_stops_overclaiming_its_scan_coverage(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("称呼一致性和插画描述做零假阴性扫描", text)
+        self.assertIn("尚未实现", text)
+
+    def test_pre_output_skill_names_the_facts_the_code_provides(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("字数、句长、重复次数由代码算好放进 state", text)
+        for fact in ("char_count", "sentence_count", "max_line_repeat"):
+            with self.subTest(fact=fact):
+                self.assertIn(fact, text)
+
+    def test_enforcement_matrix_documents_the_screening_gates(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for required in ("screening.py", "redline_catalog.py", "screening_runner.py",
+                         "promoted", "screened_clear", "may_skip_llm_review",
+                         "blocked_records"):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+    def test_contract_declares_the_prefilter_operation(self):
+        runtime = json.loads(CONTRACT.read_text(encoding="utf-8"))["jev_runtime"]
+        self.assertIn("text_quality_prefilter", runtime["operations"])
+
+    def test_pre_output_skill_documents_the_screening_entry_point(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("screening_cli.py", text)
+        self.assertIn("--escalation-out", text)
+        self.assertIn("catalog_gap", text)
+
+    def test_enforcement_matrix_documents_the_pre_screen_entry_point(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        self.assertIn("screening_cli.py", text)
+        self.assertIn("item_count = 0", text)
 
 
 if __name__ == "__main__":

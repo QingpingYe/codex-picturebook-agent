@@ -30,6 +30,7 @@ from jev_client import (
     JevClientError,
     UrllibTransport,
 )
+from routing import UNREADABLE_ANSWER_ERRORS, route_item
 from telemetry import (
     DecisionTrace,
     Stopwatch,
@@ -55,6 +56,21 @@ _ATTEMPT_STATUS_FOR_OUTCOME = {
     "waiting_for_jev_key": "pending",
     "waiting_for_jev_access": "pending",
 }
+
+# The outcomes that leave an open call on disk instead of a decision: the
+# caller still has to configure a credential, or the attempt's fate is unknown.
+# Nothing is re-sent while one of these is recorded, because the call behind it
+# may already have been billed.
+OPEN_ATTEMPT_STATUSES = ("outcome_unknown", "in_flight")
+
+# The attempt statuses that leave nothing open behind them: `pending` is a call
+# that is still waiting for the credential (nothing reached the transport) and
+# `failed` is a settled failure the caller retries by re-running. Together with
+# `OPEN_ATTEMPT_STATUSES` these classify every status the request contract's
+# `ATTEMPT_STATUSES` declares, so a record carrying anything else — hand-edited,
+# or written by a version that knew a status this build does not — is a record
+# that cannot be shown to be harmless and is treated like an unreadable one.
+HARMLESS_ATTEMPT_STATUSES = ("pending", "failed")
 
 
 @dataclass(frozen=True)
@@ -223,10 +239,59 @@ def build_pending_call(request: Mapping[str, Any]) -> dict:
     }
 
 
+def _answers_by_item(answers: Mapping[str, Any]) -> dict[str, dict]:
+    """Group flat `<item_id>::<question_id>` answers back into one dict per item.
+
+    Answer keys are the transport's only requirement: every answer must carry
+    the same id the question used, so the grouping is entirely mechanical.
+    """
+
+    grouped: dict[str, dict] = {}
+    for question_ref, answer in answers.items():
+        item_id, separator, question_id = str(question_ref).partition("::")
+        if not separator:
+            raise ContractError(
+                f"answer key {question_ref!r} must be '<item_id>::<question_id>'"
+            )
+        grouped.setdefault(item_id, {})[question_id] = answer
+    return grouped
+
+
+def _routes_for(
+    status: str, answers: Mapping[str, Any], operation_policy_entry: Mapping[str, Any]
+) -> tuple[dict, ...]:
+    """Route each answered item using the operation's policy.
+
+    A failed or incomplete operation produces no routes: an unrouted item must
+    be treated as needing review, never as cleared. That is also why an answer
+    set the routing engine cannot read produces no routes instead of an
+    exception: the provider call behind those answers has already been paid for,
+    so a malformed answer may cost its own item a route but must still leave the
+    operation with a terminal result.
+    """
+
+    if status != "succeeded" or not answers:
+        return ()
+    try:
+        grouped = _answers_by_item(answers)
+    except ContractError:
+        return ()
+    routes: list[dict] = []
+    for item_id, item_answers in grouped.items():
+        if not item_id:
+            continue
+        try:
+            routes.append(route_item(item_id, item_answers, operation_policy_entry))
+        except UNREADABLE_ANSWER_ERRORS:
+            continue
+    return tuple(routes)
+
+
 def build_result(
     *,
     request: Mapping[str, Any],
     status: str,
+    operation_policy_entry: Mapping[str, Any],
     payload: Mapping[str, Any] | None = None,
     error_class: str | None = None,
     attempts: int = 0,
@@ -238,12 +303,22 @@ def build_result(
     usage = {"input_tokens": None, "output_tokens": None}
     resolved_model = None
     if status == "succeeded" and payload is not None:
-        answers = dict(payload.get("answers") or {})
+        # Routing runs before `validate_result` inside this function, so the
+        # envelope is checked here too: an answer set the router cannot read has
+        # to be a `ContractError` the caller can settle, never a `TypeError` or
+        # `AttributeError` raised after the call has already been paid for.
+        if not isinstance(payload, Mapping):
+            raise ContractError("a provider response must be a JSON object")
+        raw_answers = payload.get("answers")
+        if not isinstance(raw_answers, Mapping):
+            raise ContractError("a provider response must carry an object of answers")
+        answers = dict(raw_answers)
         input_tokens, output_tokens, _ = estimate_usage(
             payload.get("usage"), price_usd_per_million_input_tokens
         )
         usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
         resolved_model = payload.get("model")
+    routes = _routes_for(status, answers, operation_policy_entry)
     result = {
         "schema_version": "pb-jev-result-v1",
         "run_id": request["run_id"],
@@ -253,7 +328,7 @@ def build_result(
         "resolved_model": resolved_model,
         "policy_version": request["policy_version"],
         "answers": answers,
-        "routes": [],
+        "routes": list(routes),
         "usage": usage,
         "trace": dict(trace or {}) if status in RESULT_STATUSES_WITH_TRACE else {},
         "status": status,
@@ -262,6 +337,49 @@ def build_result(
         result["error_class"] = error_class
     validate_result(result)
     return result
+
+
+def result_answers_request(
+    result: Mapping[str, Any], request: Mapping[str, Any]
+) -> bool:
+    """True when a stored result records that it answered this exact request.
+
+    A terminal result is written only by a dispatch that succeeded, while
+    `request.json` is rewritten by every dispatch, so a run directory can hold
+    a result for other knowledge beside the request in hand. The identity that
+    tells them apart is `trace.input_sha256`: `trace_for` writes it from the
+    request the call answered, i.e. the same `sha256(canonical_json(request))`
+    computed here. A record without it — hand-written, or written by an older
+    version — proves nothing about the request in hand and is refused rather
+    than routed from, which is the fail-closed direction. The request hash
+    covers `policy_version` and `model` too, so a verdict the current policy
+    never calibrated is refused with it.
+    """
+
+    recorded = recorded_request_sha256(result)
+    if recorded is None:
+        return False
+    return recorded == sha256_hex(canonical_json(request))
+
+
+def recorded_request_sha256(result: Mapping[str, Any]) -> str | None:
+    """The request hash a stored result says it answered, when it names one.
+
+    `trace.input_sha256` is the only field tying a terminal record to the
+    request it answered, so it is read in one place. A record that names no
+    request at all and one that names a different request are both refused, but
+    they are different findings for the caller — a missing identity means the
+    file proves nothing, a different one means the file is the earlier edit's
+    verdict — so the screening path can tell them apart in its report.
+    """
+
+    trace = result.get("trace")
+    if not isinstance(trace, Mapping):
+        return None
+    recorded = trace.get("input_sha256")
+    if not isinstance(recorded, str) or not recorded:
+        return None
+    return recorded
 
 
 def read_decision_context(run_dir: Any) -> dict | None:
@@ -415,21 +533,37 @@ def execute(request, config, client, clock=None) -> dict:
             started_at=started_at,
             finished_at=finished_at,
         )
-        result = build_result(
-            request=request, status="succeeded", payload=outcome.payload,
-            attempts=outcome.attempts, elapsed_ms=elapsed_ms, trace=trace,
-            price_usd_per_million_input_tokens=(
-                config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
-            ),
-        )
+        try:
+            result = build_result(
+                request=request, status="succeeded", payload=outcome.payload,
+                operation_policy_entry=entry,
+                attempts=outcome.attempts, elapsed_ms=elapsed_ms, trace=trace,
+                price_usd_per_million_input_tokens=(
+                    config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
+                ),
+            )
+        except ContractError:
+            # A payload can satisfy answer-id validation and still break the
+            # result contract (an answer whose value cannot be read as a band,
+            # for instance). The call is already paid for, so that has to settle
+            # as a terminal failure the user can resume from rather than raise
+            # out of the runner and leave a pending call with no result.
+            return _settle(
+                request, config, operation_id, "failed",
+                error_class="incomplete_response", attempts=outcome.attempts,
+                elapsed_ms=elapsed_ms, started_at=started_at, finished_at=finished_at,
+            )
         # Terminal state must land before the pending call disappears, so a
         # crash in between leaves a resumable pending call rather than a
         # missing result.
         write_atomic(result_path(config.run_dir, operation_id), result)
         write_atomic(trace_path(config.run_dir, operation_id, outcome.attempts), trace)
         pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
+        # This operation is terminal, but the run may hold another one's open
+        # call: the context keeps naming it until that call is settled too.
         sync_decision_context(
-            config, credential_status="available", pending_call=None,
+            config, credential_status="available",
+            pending_call=remaining_pending_call(config, operation_id),
             resume_cursor=operation_cursor(operation_id),
         )
         return result
@@ -468,6 +602,7 @@ def _settle(
     )
     result = build_result(
         request=request, status=status, error_class=error_class,
+        operation_policy_entry=operation_policy(config.policy, request["operation"]),
         attempts=attempts, elapsed_ms=elapsed_ms, trace=trace,
         price_usd_per_million_input_tokens=(
             config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
@@ -496,6 +631,46 @@ def run_operation(request, config, client, clock=None, now=None) -> dict:
         release_lease(config, operation_id, lease.holder)
 
 
+def discard_failed_pending_call(request, config, *, now=None) -> bool:
+    """Drop the pending record of a settled failure, under the operation lease.
+
+    A screen keeps one call per batch, so a batch that settled as a failure has
+    to give its pending record back: `resume_operation` refuses a run that
+    holds more than one. Deleting that record is a write to the run directory
+    like any other, so it happens under the same lease every dispatch takes,
+    and only while the record still describes this request and no attempt is
+    open behind it. Everything else — a lease another runner holds, a record
+    for other knowledge, an attempt that may have been billed, or a record that
+    cannot be read — is left exactly as it is, because the one mistake the run
+    directory can no longer rule out is a second call for a batch that may
+    already have been paid for. Those records stay visible as pending calls, and
+    the run-level `pending_call` slot keeps naming one of them when the run
+    holds another operation's open call.
+    """
+
+    operation_id = operation_id_from_request(request)
+    try:
+        lease = acquire_lease(config, operation_id, now=now)
+    except LeaseHeld:
+        return False
+    try:
+        pending = read_json(pending_path(config.run_dir, operation_id))
+        if pending is None:
+            return False
+        if pending.get("request_fingerprint") != request_fingerprint(request):
+            return False
+        if pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES:
+            return False
+        pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
+        sync_decision_context(
+            config, credential_status="available",
+            pending_call=remaining_pending_call(config, operation_id),
+        )
+        return True
+    finally:
+        release_lease(config, operation_id, lease.holder)
+
+
 class NoPendingCall(RuntimeError):
     """There is no recoverable pending call for this run."""
 
@@ -513,6 +688,31 @@ def pending_operation_ids(run_dir: Any) -> list[str]:
         for path in root.iterdir()
         if path.is_dir() and (path / "pending.json").is_file()
     )
+
+
+def remaining_pending_call(config: RunnerConfig, operation_id: str) -> dict | None:
+    """The pending call another operation of this run still holds, if any.
+
+    `decision-context.json` carries a single `pending_call` slot while the run
+    directory can hold several waiting operations, so an operation that just
+    became terminal may only clear that slot when the run has nothing else to
+    continue: clearing it while `pending_operation_ids` still finds a record
+    tells every reader of the context — including a revision manifest that
+    copies it, as `stage_dag` does — that there is no call to pick up, while the
+    record on disk still says one may have been billed. The first operation in
+    the order `resume_operation` enumerates them supplies the descriptor. A
+    record that cannot be read supplies nothing, which is the one shape this
+    slot cannot carry; that record still stops its own batch on the screening
+    path and still blocks `resume`, which enumerate the directory itself.
+    """
+
+    for other in pending_operation_ids(config.run_dir):
+        if other == operation_id:
+            continue
+        record = read_json(pending_path(config.run_dir, other))
+        if record is not None:
+            return record
+    return None
 
 
 def _refs_equal(left: Any, right: Any) -> bool:
@@ -547,21 +747,27 @@ def resume_operation(
     if request_fingerprint(request) != pending.get("request_fingerprint"):
         return _superseded(request, config, operation_id, "request_fingerprint_mismatch")
     stored_result = read_json(result_path(config.run_dir, operation_id))
-    if stored_result is not None:
+    if stored_result is not None and result_answers_request(stored_result, request):
         # A crash between writing the terminal result and clearing the pending
         # call leaves both files behind. Only return it after confirming that
-        # the caller still has the exact revisions and request fingerprint.
+        # the caller still has the exact revisions and request fingerprint, and
+        # that the record answers *this* request: `result.json` is only
+        # rewritten by a dispatch that succeeds, so a failed or ambiguous
+        # attempt for other knowledge can leave an older request's verdict on
+        # disk. That verdict is no answer to the call in hand, so it is left
+        # where it is and the pending record keeps deciding what happens next.
         lease = acquire_lease(config, operation_id)
         try:
             pending_path(config.run_dir, operation_id).unlink(missing_ok=True)
             sync_decision_context(
-                config, credential_status="available", pending_call=None,
+                config, credential_status="available",
+                pending_call=remaining_pending_call(config, operation_id),
                 resume_cursor=operation_cursor(operation_id),
             )
             return stored_result
         finally:
             release_lease(config, operation_id, lease.holder)
-    if pending.get("attempt_status") in {"outcome_unknown", "in_flight"}:
+    if pending.get("attempt_status") in OPEN_ATTEMPT_STATUSES:
         if not allow_new_attempt:
             # The attempt may have been billed, so nothing is re-sent. The
             # operation stays in its own `outcome_unknown` state (not
@@ -569,6 +775,9 @@ def resume_operation(
             # call stays on disk until the user explicitly decides.
             return build_result(
                 request=request, status="outcome_unknown",
+                operation_policy_entry=operation_policy(
+                    config.policy, request["operation"]
+                ),
                 price_usd_per_million_input_tokens=(
                     config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
                 ),
@@ -589,6 +798,7 @@ def _superseded(request, config, operation_id, reason) -> dict:
     pending["attempt_status"] = "failed"
     result = build_result(
         request=request, status="failed", error_class="superseded",
+        operation_policy_entry=operation_policy(config.policy, request["operation"]),
         attempts=0, elapsed_ms=0,
         price_usd_per_million_input_tokens=(
             config.policy["price_snapshot"]["price_usd_per_million_input_tokens"]
@@ -614,7 +824,7 @@ CREDENTIAL_ARGUMENT_PREFIXES = (
 )
 
 
-def _reject_credential_arguments(arguments) -> str | None:
+def reject_credential_arguments(arguments) -> str | None:
     """Refuse credential flags before argparse can echo their values."""
 
     for argument in arguments:
@@ -659,7 +869,7 @@ def main(
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
 
-    refusal = _reject_credential_arguments(arguments)
+    refusal = reject_credential_arguments(arguments)
     if refusal is not None:
         print(refusal, file=err)
         return 2

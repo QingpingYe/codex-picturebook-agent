@@ -113,7 +113,7 @@ The plugin does not implement WorkBuddy TeamCreate, SendMessage, or native hooks
 3. `wiki-ingest/scripts/wiki_lint.py` 的 Wiki lint 和权威知识状态。
 4. 如用户要求，`lexile-check` 的实测结果。
 
-项目权威 FAIL 阻断确认，必须先修订。工艺基准 FAIL 不自动阻断，但必须列出差值并请求用户确认。若用户确认接受，记录确认理由；不得把接受后的工艺偏差伪装为通过。
+项目权威触犯阻断确认，必须先修订：`project_authority` 来源的 finding 一律阻断（不看记录的严重度，语义判定不能把它降级）。工艺基准 FAIL 不自动阻断，但必须列出差值并请求用户确认。若用户确认接受，记录确认理由；不得把接受后的工艺偏差伪装为通过。
 
 ## Knowledge Dependency Gate
 

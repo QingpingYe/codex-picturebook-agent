@@ -2,6 +2,7 @@ import unittest
 
 from decision_contract import (
     ATTEMPT_STATUSES,
+    BAND_VALUES,
     CONTEXT_SCHEMA,
     ContractError,
     OPERATIONS,
@@ -22,6 +23,7 @@ from decision_contract import (
     validate_result,
     validate_resume_cursor,
 )
+from routing import route_item
 
 
 def make_request(**overrides):
@@ -219,6 +221,33 @@ class ResultContractTests(unittest.TestCase):
                 answers={"relevant": {"type": "noul", "noul": 0.5}, "surprise": {"type": "noul", "noul": 0.5}},
             ))
 
+    def test_a_response_that_is_not_an_object_is_refused(self):
+        # A provider 200 body is untrusted input. A body that is not an object
+        # has no answers to compare, and reading one with `.get` would raise
+        # `AttributeError` past every caller that reports `ContractError` as a
+        # settled failure.
+        for body in ([], "just text", 42, None, True):
+            with self.subTest(body=body):
+                with self.assertRaises(ContractError):
+                    validate_answer_ids(make_request(), body)
+
+    def test_a_response_whose_answers_is_not_an_object_is_refused(self):
+        # `answers` has to be an object keyed by question id: `set(...)` over an
+        # array of pairs, or over a number, raises `TypeError` instead.
+        for answers in ([["a", 1]], 5, "nope", None):
+            with self.subTest(answers=answers):
+                with self.assertRaises(ContractError):
+                    validate_answer_ids(make_request(), make_result(answers=answers))
+
+    def test_answer_ids_that_are_not_strings_are_refused(self):
+        # JSON object keys are always strings, so this shape can only arrive
+        # from a stub provider; sorting a mixed key set would raise `TypeError`.
+        with self.assertRaises(ContractError):
+            validate_answer_ids(
+                make_request(),
+                make_result(answers={1: {"type": "noul", "noul": 0.5}}),
+            )
+
 
 def make_policy(**overrides):
     policy = {
@@ -233,14 +262,59 @@ def make_policy(**overrides):
             "knowledge_relevance": {
                 "policy_version": "knowledge-relevance-v1",
                 "calibration_status": "experimental",
-                "fallback_route": "escalate_llm",
-                "routing": {},
+                "fallback_route": "include",
+                "fallback_label": "uncertain",
+                "question_templates": {
+                    "relevant": {"type": "noul", "instructions": "该块是否直接影响当前产物？"},
+                },
+                "routing": {
+                    "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+                    "rules": [
+                        {"route": "include", "label": "relevant",
+                         "any_of": [{"question_id": "relevant", "bands": ["risk"]}]},
+                    ],
+                },
             },
             "text_quality_prefilter": {
                 "policy_version": "text-quality-prefilter-v1",
                 "calibration_status": "experimental",
                 "fallback_route": "escalate_llm",
-                "routing": {},
+                "fallback_label": "uncertain",
+                "max_items_per_request": 4,
+                "question_templates": {
+                    name: {"type": "noul", "instructions": f"{name}? 是否成立"}
+                    for name in (
+                        "direct_moralizing", "age_comprehension_risk",
+                        "read_aloud_friction", "weak_page_turn_motivation",
+                        "emotion_told_not_shown",
+                    )
+                },
+                "routing": {
+                    "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+                    "rules": [
+                        {"route": "escalate_llm", "label": "risk",
+                         "any_of": [
+                             {"question_id": name, "bands": ["risk"]}
+                             for name in ("direct_moralizing", "age_comprehension_risk",
+                                          "read_aloud_friction", "weak_page_turn_motivation",
+                                          "emotion_told_not_shown")
+                         ]},
+                        {"route": "escalate_llm", "label": "grey",
+                         "any_of": [
+                             {"question_id": name, "bands": ["grey"]}
+                             for name in ("direct_moralizing", "age_comprehension_risk",
+                                          "read_aloud_friction", "weak_page_turn_motivation",
+                                          "emotion_told_not_shown")
+                         ]},
+                        {"route": "screened_clear", "label": "clear",
+                         "all_of": [
+                             {"question_id": name, "bands": ["clear"]}
+                             for name in ("direct_moralizing", "age_comprehension_risk",
+                                          "read_aloud_friction", "weak_page_turn_motivation",
+                                          "emotion_told_not_shown")
+                         ]},
+                    ],
+                },
             },
         },
     }
@@ -286,9 +360,9 @@ class PolicyContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_policy(policy)
 
-    def test_routing_rules_are_refused_until_the_operation_defines_them(self):
-        # Phase 1 has no operation questions, so it cannot express a routing
-        # rule yet. Shipping an empty table is required, not optional.
+    def test_a_routing_table_without_bands_is_refused(self):
+        # The phase 1 empty-table guard is replaced by the real schema, so a
+        # table that cannot band anything is now the failure mode.
         policy = make_policy()
         policy["operations"]["knowledge_relevance"]["routing"] = {
             "relevant": {"clear_route": "exclude_soft"}
@@ -310,6 +384,302 @@ class PolicyContractTests(unittest.TestCase):
     def test_operation_policy_rejects_an_unknown_operation(self):
         with self.assertRaises(ContractError):
             operation_policy(make_policy(), "write_the_story")
+
+    def test_question_templates_are_required_once_routing_exists(self):
+        policy = make_policy()
+        del policy["operations"]["knowledge_relevance"]["question_templates"]
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_a_rule_may_only_reference_declared_question_templates(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "escalate_llm",
+                       "any_of": [{"question_id": "not_declared", "bands": ["risk"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_a_rule_may_only_reference_a_noul_question_template(self):
+        # Only noul answers can be banded, so a rule testing a choice or a
+        # score raises while routing and would abort the whole operation. The
+        # policy is refused up front instead of failing mid-flight.
+        policy = make_policy()
+        entry = policy["operations"]["knowledge_relevance"]
+        entry["question_templates"]["stance"] = {
+            "type": "choice",
+            "instructions": "该块主张什么立场？",
+            "criteria": {"support": "支持", "oppose": "反对"},
+        }
+        entry["routing"]["rules"].append(
+            {"route": "escalate_llm", "label": "stance",
+             "any_of": [{"question_id": "stance", "bands": ["risk"]}]}
+        )
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_an_unreferenced_non_noul_template_is_still_accepted(self):
+        # The guard is about banding, not about the template itself: a choice
+        # or a score may be declared as long as no routing rule tests it.
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["question_templates"]["stance"] = {
+            "type": "choice",
+            "instructions": "该块主张什么立场？",
+            "criteria": {"support": "支持", "oppose": "反对"},
+        }
+        validate_policy(policy)
+
+    def test_a_rule_needs_exactly_one_of_any_of_or_all_of(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "include",
+                       "any_of": [{"question_id": "relevant", "bands": ["risk"]}],
+                       "all_of": [{"question_id": "relevant", "bands": ["risk"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_clear_band_must_stay_below_the_risk_band(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.80", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "include",
+                       "any_of": [{"question_id": "relevant", "bands": ["risk"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_an_unknown_band_name_is_rejected(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["routing"] = {
+            "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
+            "rules": [{"route": "include",
+                       "any_of": [{"question_id": "relevant", "bands": ["maybe"]}]}],
+        }
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_band_vocabulary_is_published(self):
+        self.assertEqual(BAND_VALUES, ("clear", "grey", "risk"))
+
+    def test_max_items_per_request_is_optional_and_positive_when_present(self):
+        policy = make_policy()
+        policy["operations"]["knowledge_relevance"]["max_items_per_request"] = 10
+        validate_policy(policy)
+        policy["operations"]["knowledge_relevance"]["max_items_per_request"] = 0
+        with self.assertRaises(ContractError):
+            validate_policy(policy)
+
+    def test_shipped_policy_declares_the_four_knowledge_questions(self):
+        policy = load_policy(default_policy_path())
+        templates = policy["operations"]["knowledge_relevance"]["question_templates"]
+        self.assertEqual(
+            sorted(templates),
+            ["contradicts_task_assumption", "instruction_like_content",
+             "relevant", "usable_evidence"],
+        )
+        for name, template in templates.items():
+            with self.subTest(question=name):
+                self.assertEqual(template["type"], "noul")
+                self.assertTrue(template["instructions"].strip())
+
+    def test_shipped_policy_routes_conflicts_and_instructions_to_the_llm(self):
+        routing = load_policy(default_policy_path())["operations"]["knowledge_relevance"]["routing"]
+        labels_by_severity = [
+            (rule.get("label"), rule["route"]) for rule in routing["rules"]
+        ]
+        self.assertIn(("conflict", "escalate_llm"), labels_by_severity)
+        self.assertIn(("instruction_like_content", "escalate_llm"), labels_by_severity)
+        self.assertEqual(labels_by_severity[-1], ("clearly_irrelevant", "exclude_soft"))
+
+    def test_shipped_policy_falls_back_to_keeping_the_chunk(self):
+        entry = load_policy(default_policy_path())["operations"]["knowledge_relevance"]
+        self.assertEqual(entry["fallback_route"], "include")
+        self.assertEqual(entry["fallback_label"], "uncertain")
+
+    def test_shipped_policy_batches_at_ten_items(self):
+        policy = load_policy(default_policy_path())
+        self.assertEqual(
+            policy["operations"]["knowledge_relevance"]["max_items_per_request"], 10
+        )
+
+    def test_shipped_policy_declares_the_five_dimensions_and_the_red_line_pattern(self):
+        policy = load_policy(default_policy_path())
+        templates = policy["operations"]["text_quality_prefilter"]["question_templates"]
+        self.assertEqual(sorted(templates), [
+            "age_comprehension_risk", "direct_moralizing", "emotion_told_not_shown",
+            "read_aloud_friction", "redline:*", "weak_page_turn_motivation",
+        ])
+        for name, template in templates.items():
+            with self.subTest(dimension=name):
+                self.assertEqual(template["type"], "noul")
+
+    def test_every_text_quality_dimension_states_both_outcomes(self):
+        # The template *is* the instruction the model sees. Without an explicit
+        # false case the model has to invent the boundary of the dimension, and
+        # the probability it returns stops being comparable between runs.
+        templates = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["question_templates"]
+        for name, template in templates.items():
+            with self.subTest(dimension=name):
+                criteria = template.get("criteria")
+                self.assertEqual(sorted(criteria or {}), ["false", "true"])
+                for outcome, description in criteria.items():
+                    self.assertTrue(str(description).strip())
+
+    def test_shipped_policy_escalates_on_risk_and_on_grey(self):
+        routing = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["routing"]
+        labels = [rule.get("label") for rule in routing["rules"]]
+        self.assertEqual(labels, ["risk", "grey", "clear"])
+        self.assertEqual(routing["rules"][0]["route"], "escalate_llm")
+        self.assertEqual(routing["rules"][1]["route"], "escalate_llm")
+        self.assertEqual(routing["rules"][2]["route"], "screened_clear")
+
+    def test_the_clear_rule_covers_every_dimension(self):
+        # Set equality, not a count: a rule that names one dimension five times
+        # would satisfy a length check while leaving four dimensions unrouted.
+        templates = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["question_templates"]
+        routing = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["routing"]
+        covered = {condition["question_id"]
+                   for condition in routing["rules"][2]["all_of"]}
+        self.assertEqual(covered, set(templates))
+
+    def test_every_escalation_rule_covers_every_dimension(self):
+        templates = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["question_templates"]
+        routing = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["routing"]
+        for rule in routing["rules"][:2]:
+            with self.subTest(label=rule["label"]):
+                self.assertEqual(
+                    {condition["question_id"] for condition in rule["any_of"]},
+                    set(templates),
+                )
+
+    def test_shipped_policy_falls_back_to_escalation(self):
+        entry = load_policy(default_policy_path())["operations"]["text_quality_prefilter"]
+        self.assertEqual(entry["fallback_route"], "escalate_llm")
+
+    def test_shipped_policy_batches_text_quality_at_four_pages(self):
+        # A text-quality item is one page carrying its dimensions, so the
+        # per-request item ceiling is a page ceiling.
+        entry = load_policy(default_policy_path())["operations"]["text_quality_prefilter"]
+        self.assertEqual(entry["max_items_per_request"], 4)
+
+    def test_screened_clear_may_not_be_a_fallback_route(self):
+        # A fallback means "we do not know", which can never be a clearance.
+        for operation in OPERATIONS:
+            with self.subTest(operation=operation):
+                policy = make_policy()
+                policy["operations"][operation]["fallback_route"] = "screened_clear"
+                with self.assertRaises(ContractError):
+                    validate_policy(policy)
+
+    def test_a_content_removing_route_may_not_be_a_fallback_route(self):
+        # The same fail-closed argument as `screened_clear`: dropping an item
+        # the rules could not decide is a silent loss, and a missing answer may
+        # never remove content.
+        for operation in OPERATIONS:
+            with self.subTest(operation=operation):
+                policy = make_policy()
+                policy["operations"][operation]["fallback_route"] = "exclude_soft"
+                with self.assertRaises(ContractError):
+                    validate_policy(policy)
+
+
+TEXT_QUALITY_DIMENSIONS = (
+    "direct_moralizing",
+    "age_comprehension_risk",
+    "read_aloud_friction",
+    "weak_page_turn_motivation",
+    "emotion_told_not_shown",
+)
+
+
+def noul(value):
+    return {"type": "noul", "noul": value}
+
+
+def text_quality_entry():
+    return operation_policy(load_policy(default_policy_path()), "text_quality_prefilter")
+
+
+def clear_page_answers(**overrides):
+    """The five quality dimensions of a page, all banded clear, plus any red lines."""
+
+    answers = {dimension: noul(0.05) for dimension in TEXT_QUALITY_DIMENSIONS}
+    answers.update(overrides)
+    return answers
+
+
+class ShippedTextQualityRoutingTests(unittest.TestCase):
+    """The shipped policy must be able to route a red-line dimension.
+
+    Task 6 asks one question per active red line under a dynamic id
+    (`redline:<rule_id>`, keyed as `<page>::redline:<rule_id>` in the request
+    and as `redline:<rule_id>` inside the item's answer set), so a routing table
+    that names only the five fixed dimensions sends every red-line answer to the
+    fallback. That escalates every page, which is pure overhead, and it loses
+    the per-red-line false-negative count spec §11.2 asks for.
+    """
+
+    def test_the_shipped_policy_declares_the_red_line_pattern_template(self):
+        # The rule conditions below name `redline:*`, and a condition may only
+        # name a declared template, so the pattern needs a declaration of its
+        # own. Task 6 inlines the concrete words of each red line into the
+        # question it sends, because only a rule's own text can name its pattern.
+        template = text_quality_entry()["question_templates"]["redline:*"]
+        self.assertEqual(template["type"], "noul")
+        self.assertTrue(template["instructions"].strip())
+
+    def test_every_rule_names_the_red_line_pattern(self):
+        for rule in text_quality_entry()["routing"]["rules"]:
+            conditions = rule.get("any_of") or rule.get("all_of")
+            with self.subTest(label=rule["label"]):
+                self.assertIn(
+                    "redline:*",
+                    {condition["question_id"] for condition in conditions},
+                )
+
+    def test_a_red_line_at_risk_escalates(self):
+        answers = clear_page_answers(**{"redline:redline-aaa": noul(0.9)})
+        route = route_item("page-1", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("escalate_llm", "risk"))
+
+    def test_a_red_line_in_the_grey_band_escalates(self):
+        answers = clear_page_answers(**{"redline:redline-aaa": noul(0.5)})
+        route = route_item("page-1", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("escalate_llm", "grey"))
+
+    def test_every_red_line_answer_must_be_clear_to_reach_screened_clear(self):
+        answers = clear_page_answers(
+            **{"redline:redline-aaa": noul(0.05), "redline:redline-bbb": noul(0.05)}
+        )
+        route = route_item("page-1", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("screened_clear", "clear"))
+        answers["redline:redline-bbb"] = noul(0.5)
+        self.assertEqual(
+            route_item("page-1", answers, text_quality_entry())["route"], "escalate_llm"
+        )
+
+    def test_a_page_without_active_red_lines_still_reaches_screened_clear(self):
+        # The pattern matched no answer, so it is unevaluated rather than
+        # failed: a page with nothing to red-line must not be escalated for it.
+        route = route_item("page-1", clear_page_answers(), text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("screened_clear", "clear"))
+
+    def test_a_closing_page_clears_on_the_dimensions_it_was_asked(self):
+        # The closing page is exempt from the page-turn dimension, so that
+        # question is never asked and the clear rule skips it.
+        answers = clear_page_answers()
+        del answers["weak_page_turn_motivation"]
+        route = route_item("page-9", answers, text_quality_entry())
+        self.assertEqual((route["route"], route["label"]), ("screened_clear", "clear"))
 
 
 def make_context(**overrides):

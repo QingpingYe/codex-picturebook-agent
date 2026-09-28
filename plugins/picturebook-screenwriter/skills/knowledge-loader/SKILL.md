@@ -23,6 +23,34 @@ description: 只读检索飞书权威知识库，为编剧工作流提供带 rev
 10. `index_synced=false` 的证据可以读取，但必须报告“索引尚未同步”，不得描述为已完全对齐的权威快照，也不得用它覆盖最后确认的本地缓存。重读旧产物时，该状态必须按 `index_unsynced` 陈旧原因处理。
 11. 目标 Wiki 不可用时，只有调用方显式允许，才能使用最后确认的本地缓存。缓存不是权威版本，必须在警告中说明“离线”、“非权威”和“最后确认”。
 
+### 相关性甄别（仅在用户选择 Jev 辅助路径时）
+
+权威读取完成后，可先把页面正文切成块并标记硬约束，再让 Jev 只判断软候选块是否与当前产物相关：
+
+```bash
+python scripts/relevance_cli.py \
+    --bundle <authority bundle.json> \
+    --run-dir <run_dir> \
+    [--run-id <run_id>] \
+    --artifact-type script \
+    --task "起草第 5 页" \
+    --brief "分享主题，3-6 岁" \
+    [--terms 逗号分隔召回词] \
+    [--declared-page-type <页型>]... [--declared-key <知识 key>]... \
+    [--filtered-out <精简上下文 bundle.json>] \
+    [--dependency-out <未改动的锁 bundle.json>]
+```
+
+- `--filtered-out` 写出的证据包只包含保留的块，用于普通 LLM 的上下文。
+- `--dependency-out` 写出的证据包**未被精简**，用于 `build_dependency_record()`；锁记录必须覆盖全部权威页面，否则排除一个块会让该页的陈旧检测失效。
+- 硬约束块、未被召回的软块、以及任何无法分类的内容一律保留；只有召回命中的软块才可能拿到 `exclude_soft`。
+- 甄别不修改权威知识，也不改写 `revision_id` / `source_revisions` / `doc_token`。
+- run id 默认取 `--run-dir` 的目录名；目录名不符合 `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`（含点号、空格、中文或过长）时命令拒绝执行，并提示显式传入 `--run-id`。
+- 命令只校验它自己会读的那几个字段：顶层必须是对象、`items` 必须是对象数组、每条条目必须有非空文本 `key` 与文本 `content`、`warnings`（键存在时必须是文本数组）、`source_revisions`（键存在时必须是文本到文本的映射）；这两个字段都没有 `null` 例外，因为读取方只对缺键取默认值，`null` 会在付费请求之后才报错。其余字段一律原样透传，不做校验也不改写。任一项不符时，命令在发出任何请求前就以 JSON 错误退出（退出码 1），不会把“没读到”报成“已甄别”。
+- 命令在甄别完成后一律返回 0：即使所有条目都降级为等待 key 或失败，也只体现在 `results[].status` 里。只检查退出码会把它误读成“已通过”。
+- 一个需要多个请求的证据包按批甄别，一次只开一个调用：只有当磁盘上的 `result.json` 记录了它回答的正是本次请求（`trace.input_sha256` 等于本次请求的哈希）时才会复用它。`request.json` 每次派发都会被覆盖，`result.json` 只由成功的派发写入，所以复用前必须核对这条身份，否则编辑过的页面会被上一次编辑的结论判定。某个批次失败时，用**重跑同一条命令**来重试它：失败批次的 pending 记录会在租约内清掉，它的 trace 保留（失败不写 `result.json`）；只有等待 key 或去向不明的那一个批次会留下 pending call，所以运行目录里至多只有一个待继续调用，`resume` 始终可用。
+- 只要磁盘上留着本批次读不出来的记录，该批次就一律保留为不确定、不会被再次发送，并在报告的 `blocked_records` 里给出该记录的路径与原因，供人工处理后重跑。「读不出来」包括：`request.json` / `result.json` / `pending.json` 解析失败或解析成非对象（被手工改坏、由更早版本写入）；`result.json` 无法确认属于本次请求——回答的是上一次编辑报 `stale_result`，完全没有记录自己回答过哪次请求（缺少 `trace.input_sha256`）则报 `unreadable_result`；以及 pending 记录的 `attempt_status` 不是 `pending`（等待 key，尚未派出）与 `failed`（已结算的失败，重跑即重试）这两种不含未决调用的取值时报 `unreadable_pending`。
+
 ## 输出
 
 返回 `KnowledgeEvidenceBundle`：

@@ -19,6 +19,15 @@ description: 共享 Jev 决策运行器。仅当用户已选择 Jev 辅助路径
 2. 本技能不能证明用户意图：它只能保证“没有 key 就不发请求”“endpoint 不是 allowlist 就拒绝”“响应不完整就不判定通过”。是否被调用仍取决于技能指令。
 3. 本技能不拥有写工作区文件、同步飞书、调用图片生成或修改 DAG 状态的权限。
 
+## 路由
+
+运行器按策略文件里的规则为**每个 item**（知识块、页面、红线）计算一条路由，而不是按问题计算——一条路由可以由多个答案共同决定。规则按声明顺序首命中：
+
+- band 由 `routing.bands` 的 `clear_at_or_below` / `risk_at_or_above` 决定，用 Decimal 比较。
+- 只有 `noul` 答案可以进 band；`choice` 与 `score` 的数值语义不同，强行 band 会让规则表达出作者没写的含义。
+- 缺少某个答案的条件一律不成立，item 落入 `fallback_route`。
+- 没有路由的结果只可能来自失败或中断，绝不代表“已通过”。
+
 ## 安全约束
 
 - 凭证只从环境变量 `TYPESAFE_API_KEY` 读取，缺失或全空白即视为缺失。
@@ -44,6 +53,8 @@ python scripts/jev_runner.py resume \
 - 凭证只从环境变量 `TYPESAFE_API_KEY` 读取。任何 `--api-key` / `--token` / `--secret` 形式的参数都会被**在解析前**拒绝，且错误信息只回显参数名、不回显参数值。
 - `--policy` 省略时使用 `references/decision-policies.json`。
 - `resume` 需要调用方提供**当前** revision 向量；与 pending call 中记录的不同即判定 `superseded`，不会改用新输入重跑。
+- 只有当磁盘上的 `result.json` 记录了它回答的正是本次请求（`trace.input_sha256` 等于本次请求的哈希）时，`resume` 才会直接返回它：`request.json` 每次派发都会被覆盖，而 `result.json` 只由成功的派发写入，所以目录里可能留着更早一次请求的结论。记录缺少该字段、或属于另一次请求时，`resume` 按 pending 记录继续（等待 key 的批次可以重发，去向不明的批次仍只回报 `outcome_unknown`），并且**不会**删掉那条 pending 记录，因为它可能是“这次调用已经计费”的唯一凭据。
+- `decision-context.json` 只有一个 `pending_call` 槽位，而一个运行目录可以同时存在多个等待中的操作。一个操作进入终态、清掉自己的 pending 记录时，只有当运行目录里已经没有别的未决调用才会清空该字段；还有别的操作在等待时，该字段继续指向那条记录，因此复制这份上下文的清单（例如 `stage_dag` 写入的 revision manifest）不会被误告成「没有需要继续的调用」。
 
 ## 强制力分级
 

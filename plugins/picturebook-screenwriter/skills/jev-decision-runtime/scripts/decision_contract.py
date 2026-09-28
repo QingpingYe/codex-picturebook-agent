@@ -18,11 +18,25 @@ POLICY_SCHEMA = "pb-jev-policy-v1"
 OPERATIONS = ("knowledge_relevance", "text_quality_prefilter")
 PRIMITIVES = ("noul", "choice", "score")
 
-# Phase 1 emits no routes (routing tables arrive with the Phase 2/3 operation
-# policies), but the vocabulary is fixed here so the result contract is
-# complete. A route describes one item — a knowledge chunk, a page, or a red
-# line — not one question, because a single route can depend on several answers.
+# A route describes one item — a knowledge chunk, a page, or a red line — not
+# one question, because a single route can depend on several answers. The
+# vocabulary is fixed here so the result contract is complete; the per-operation
+# routing tables that produce these routes arrive with each operation's policy.
 ROUTE_VALUES = ("include", "exclude_soft", "screened_clear", "escalate_llm", "needs_user_choice")
+
+# Routes that withhold content from what the plain-LLM path gets to see. The
+# vocabulary lives on the contract rather than in `routing` so the policy
+# validator and the router read the same tuple; `routing` re-exports it for the
+# callers that already import it from there.
+CONTENT_REMOVING_ROUTES = ("exclude_soft",)
+
+# A fallback is the answer to "the rules did not decide", so it can neither be a
+# clearance nor a content removal: both would turn a missing or unreadable
+# answer into a decision that suppresses evidence.
+FORBIDDEN_FALLBACK_ROUTES = ("screened_clear",) + CONTENT_REMOVING_ROUTES
+
+# The band vocabulary a routing table may place probabilities into.
+BAND_VALUES = ("clear", "grey", "risk")
 
 RESULT_STATUSES = (
     "succeeded",
@@ -57,6 +71,17 @@ _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 # credential-shaped field name looks like. Suffix matching keeps the token
 # counters (input_tokens / output_tokens) out of the net.
 _CREDENTIAL_SUFFIXES = ("api_key", "apikey", "authorization", "password", "secret", "token")
+
+
+def is_valid_run_id(value: Any) -> bool:
+    """True when `value` is safe to interpolate into the operation directory.
+
+    Callers that name a run themselves (a CLI deriving one from a directory,
+    for instance) check this before building a request, so the refusal can name
+    the flag that fixes it instead of surfacing as a request-contract error.
+    """
+
+    return isinstance(value, str) and bool(_RUN_ID_RE.fullmatch(value))
 
 
 class ContractError(ValueError):
@@ -164,7 +189,7 @@ def validate_request(payload: Any) -> None:
     if payload.get("schema_version") != REQUEST_SCHEMA:
         raise ContractError(f"request.schema_version must be {REQUEST_SCHEMA!r}")
     run_id = _require_nonempty_str(payload, "run_id", "request")
-    if not _RUN_ID_RE.fullmatch(run_id):
+    if not is_valid_run_id(run_id):
         raise ContractError(
             "request.run_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}: it becomes "
             "part of the on-disk operation directory"
@@ -310,10 +335,26 @@ def validate_result(payload: Any) -> None:
 
 
 def validate_answer_ids(request: Any, result: Any) -> None:
-    """Reject a response whose answer ids differ from the submitted questions."""
+    """Reject a response whose answer ids differ from the submitted questions.
 
+    The provider's 200 body is untrusted input: a body that is not an object,
+    or whose `answers` is not an object of string ids, carries no answer set to
+    compare. Reading one of those shapes with `.get` / `set` / `sorted` would
+    raise `AttributeError` or `TypeError` *after* the call has been paid for, so
+    an ill-shaped envelope is reported as the same `ContractError` an incomplete
+    response gets.
+    """
+
+    if not isinstance(result, Mapping):
+        raise ContractError("a provider response must be a JSON object")
+    answers = result.get("answers")
+    if not isinstance(answers, Mapping):
+        raise ContractError("a provider response must carry an object of answers")
+    for question_id in answers:
+        if not isinstance(question_id, str):
+            raise ContractError("answer ids must be strings")
     expected = set(request["questions"])
-    actual = set(result.get("answers") or {})
+    actual = set(answers)
     missing = sorted(expected - actual)
     unknown = sorted(actual - expected)
     if missing:
@@ -333,23 +374,94 @@ def _require_decimal_string(payload: Mapping[str, Any], key: str, label: str) ->
     return value
 
 
-def _validate_routing_table(routing: Any, label: str) -> None:
-    """Phase 1 ships no routing rules.
+def _validate_question_templates(templates: Any, label: str) -> None:
+    if not isinstance(templates, Mapping) or not templates:
+        raise ContractError(f"{label}.question_templates must be a non-empty object")
+    for question_key, template in templates.items():
+        if not isinstance(question_key, str) or not question_key.strip():
+            raise ContractError(f"{label}.question_templates keys must be non-empty strings")
+        _validate_question(question_key, template)
 
-    The per-operation routing schema (question bands, match rules, labels) is
-    designed together with each operation's questions in Phase 2 and Phase 3,
-    because a routing rule cannot be expressed without knowing which questions
-    exist and which direction of each probability means risk. Phase 1 therefore
-    requires only that the table is a table.
+
+def _validate_condition(
+    condition: Any, position: int, rule_label: str, keyword: str, templates: Mapping[str, Any]
+) -> None:
+    label = f"{rule_label}.{keyword}[{position}]"
+    condition = _require_object(condition, label)
+    question_id = _require_nonempty_str(condition, "question_id", label)
+    if question_id not in templates:
+        raise ContractError(
+            f"{label}.question_id must name a declared question template, got {question_id!r}"
+        )
+    # Only noul answers carry a probability a band can be computed from, so a
+    # rule that tests a choice or a score would raise while routing and abort
+    # the whole operation. Refuse the policy up front rather than discovering
+    # it mid-flight.
+    primitive = templates[question_id].get("type")
+    if primitive != "noul":
+        raise ContractError(
+            f"{label}.question_id must name a noul question template: "
+            f"only noul answers can be banded, but {question_id!r} is {primitive!r}"
+        )
+    bands = condition.get("bands")
+    if not isinstance(bands, list) or not bands:
+        raise ContractError(f"{label}.bands must be a non-empty array")
+    for band in bands:
+        if band not in BAND_VALUES:
+            raise ContractError(f"{label}.bands must be drawn from {BAND_VALUES}")
+
+
+def _validate_rule(rule: Any, index: int, label: str, templates: Mapping[str, Any]) -> None:
+    rule_label = f"{label}.routing.rules[{index}]"
+    rule = _require_object(rule, rule_label)
+    route = _require_nonempty_str(rule, "route", rule_label)
+    if route not in ROUTE_VALUES:
+        raise ContractError(f"{rule_label}.route must be one of {ROUTE_VALUES}")
+    if "label" in rule:
+        _require_nonempty_str(rule, "label", rule_label)
+    has_any = "any_of" in rule
+    has_all = "all_of" in rule
+    if has_any == has_all:
+        raise ContractError(f"{rule_label} must declare exactly one of any_of or all_of")
+    keyword = "any_of" if has_any else "all_of"
+    conditions = rule[keyword]
+    if not isinstance(conditions, list) or not conditions:
+        raise ContractError(f"{rule_label}.{keyword} must be a non-empty array")
+    for position, condition in enumerate(conditions):
+        _validate_condition(condition, position, rule_label, keyword, templates)
+
+
+def _validate_routing_table(entry: Mapping[str, Any], label: str) -> None:
+    """Validate the per-operation routing schema.
+
+    Phase 1 required this table to be empty, because a routing rule cannot be
+    expressed before the questions it tests exist. This replaces that guard
+    with the real schema; the question templates and the routing rules that
+    reference them must now be declared together.
     """
 
+    templates = entry.get("question_templates")
+    _validate_question_templates(templates, label)
+
+    routing = entry.get("routing")
     if not isinstance(routing, Mapping):
         raise ContractError(f"{label}.routing must be an object")
-    if routing:
+    bands = _require_object(routing.get("bands"), f"{label}.routing.bands")
+    clear = _require_decimal_string(bands, "clear_at_or_below", f"{label}.routing.bands")
+    risk = _require_decimal_string(bands, "risk_at_or_above", f"{label}.routing.bands")
+    for key, value in (("clear_at_or_below", clear), ("risk_at_or_above", risk)):
+        if not 0.0 <= float(value) <= 1.0:
+            raise ContractError(f"{label}.routing.bands.{key} must be between 0 and 1")
+    if float(clear) >= float(risk):
         raise ContractError(
-            f"{label}.routing must be empty until the operation's routing schema "
-            "is defined"
+            f"{label}.routing.bands.clear_at_or_below must be below risk_at_or_above, "
+            "otherwise no grey band exists"
         )
+    rules = routing.get("rules")
+    if not isinstance(rules, list) or not rules:
+        raise ContractError(f"{label}.routing.rules must be a non-empty array")
+    for index, rule in enumerate(rules):
+        _validate_rule(rule, index, label, templates)
 
 
 def validate_policy(payload: Any) -> None:
@@ -385,7 +497,21 @@ def validate_policy(payload: Any) -> None:
         fallback = _require_nonempty_str(entry, "fallback_route", label)
         if fallback not in ROUTE_VALUES:
             raise ContractError(f"{label}.fallback_route must be one of {ROUTE_VALUES}")
-        _validate_routing_table(entry.get("routing"), label)
+        if fallback in FORBIDDEN_FALLBACK_ROUTES:
+            raise ContractError(
+                f"{label}.fallback_route must not be {fallback!r}: a fallback means "
+                "the rules did not decide, so it can neither clear the item nor "
+                "withhold it"
+            )
+        _validate_routing_table(entry, label)
+        if "fallback_label" in entry:
+            _require_nonempty_str(entry, "fallback_label", label)
+        if "max_items_per_request" in entry:
+            value = entry["max_items_per_request"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ContractError(
+                    f"{label}.max_items_per_request must be a positive integer"
+                )
 
 
 def default_policy_path() -> Path:
@@ -409,7 +535,9 @@ def operation_policy(policy: Mapping[str, Any], operation: str) -> dict:
     entry = (policy.get("operations") or {}).get(operation)
     if not isinstance(entry, Mapping):
         raise ContractError(f"policy has no entry for operation {operation!r}")
-    return dict(entry)
+    resolved = dict(entry)
+    resolved.setdefault("max_items_per_request", 10)
+    return resolved
 
 
 SELECTION_STATUSES = ("confirmed",)

@@ -13,6 +13,8 @@
 - `image-generate`：仅在用户明确确认后调用图片 API
 - `illustration-export`：资产登记、本地 HTML 预览与显式图片内嵌
 - `session-export`：仅在用户明确要求时导出会话证据，且必须使用用户提供的绝对输出目录
+- `text_quality_prefilter`：对全部活动红线与逐页文本质量做 Jev 预筛，只把高风险、灰区和冲突项升级普通 LLM
+- `knowledge_relevance`：把权威知识切块并甄别相关性，硬约束块永不被过滤
 - `knowledge-loader`：只读检索多人协作飞书权威知识库
 - `feishu-knowledge-store`：人工优先合并、冲突队列与远端租约
 - `jev-decision-runtime`：共享 Jev 决策运行器；只在用户选择 Jev 辅助路径后调用，负责凭证门、请求契约、重试、恢复点、租约、原子终态与成本估算
@@ -110,3 +112,5 @@ $env:TYPESAFE_API_KEY = "<your-key>"
 **不得把密钥粘贴到对话中**，也不要把它写进配置、仓库或插件目录。endpoint 固定为 `https://api.typesafe.ai/v1/systemone`，不接受 base URL 覆盖，禁用 redirect。模型固定为 `jev-1.13.0`，不使用会漂移的 `latest` 别名。
 
 未校准期间所有 operation 均为 `experimental`：`screened_clear` 只是 Jev 的候选结论，不缩减普通 LLM 的复核范围。
+
+两条 operation 都有可直接运行的入口：知识相关性甄别用 `python skills/knowledge-loader/scripts/relevance_cli.py …`，文本质量预筛用 `python skills/pre_output-baseline/scripts/screening_cli.py …`。两者都只在用户选择 Jev 辅助路径后由技能指令调用；预筛的 `screened_clear` 与升级包都在报告的 JSON 里，退出码为 0 不代表通过。
