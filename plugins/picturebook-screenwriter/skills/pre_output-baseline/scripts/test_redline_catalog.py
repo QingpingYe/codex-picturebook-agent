@@ -4,12 +4,15 @@ from redline_catalog import (
     MACHINE_DATA_BLOCK,
     RedlineRule,
     catalog_from_bundle,
+    machine_block_terms,
     parse_machine_data_terms,
     parse_quoted_terms,
     rule_triples,
 )
 
 CORRECTIONS_KEY = "海外绘本/小老鼠迈尔斯/corrections"
+CHARACTERS_KEY = "海外绘本/小老鼠迈尔斯/characters"
+FINGERPRINT_KEY = "海外绘本/小老鼠迈尔斯/story-fingerprint-spec"
 
 WITH_BLOCK = """# 纠正台账
 
@@ -32,11 +35,126 @@ redline_terms:
 - 2026-09-01：新增一条。
 """
 
+# The shape structured-output-templates.md prints for corrections: the anchor is
+# followed by the bare key line and its list, with no fence around it.
+UNFENCED_BLOCK = """# 纠正台账
+
+## 红线机器可读块
+
+<!-- machine-data: redline_terms -->
+redline_terms:
+  - "tip-tap-tremble"
+  - "变勇敢了"
+  - 魔法解决一切
+
+## 迭代历史
+
+- 2026-09-01：新增一条。
+"""
+
 WITHOUT_BLOCK = """# 纠正台账
 
 ## 强制性禁止条目
 
 绝不可出现 `变勇敢了`、`魔法解决一切` 以及 "tip-tap-tremble" 这类写法。
+"""
+
+# The anchor and the prose quotes sit in one section, so the block has to win
+# inside that section rather than only across sections.
+SAME_SECTION_BLOCK = """# 纠正台账
+
+## 强制性禁止条目
+
+绝不可把解决问题的方式写成 `变勇敢了`。
+
+<!-- machine-data: redline_terms -->
+redline_terms:
+  - "tip-tap-tremble"
+"""
+
+# The fence belongs to a later section of the same page, not to the anchor above.
+LATER_UNRELATED_FENCE = """# 纠正台账
+
+## 红线机器可读块
+
+<!-- machine-data: redline_terms -->
+
+```yaml
+props:
+  - "无关内容"
+```
+"""
+
+# An orphan opener is text, not a block: `chunker` already refuses to open a
+# fence that nothing closes.
+UNTERMINATED_FENCE_BLOCK = """# 纠正台账
+
+## 红线机器可读块
+
+<!-- machine-data: redline_terms -->
+```yaml
+redline_terms:
+  - "不该读到的词"
+"""
+
+BOTH_MACHINE_BLOCKS = """# 纠正台账
+
+## 强制性禁止条目
+
+<!-- machine-data: redline_terms -->
+```yaml
+redline_terms:
+  - "变勇敢了"
+```
+
+<!-- machine-data: banned_terms -->
+```yaml
+banned_terms:
+  - "小英雄"
+```
+"""
+
+BANNED_TERMS_BLOCK = """# 选题指纹与门禁规格
+
+## 禁用词与禁止写法
+
+<!-- machine-data: banned_terms -->
+```yaml
+banned_terms:
+  - "小英雄"
+  - "突然之间"
+```
+"""
+
+# 「创作边界」 is declared a constraint heading for this page type even though it
+# carries none of the generic prohibition words.
+CHARACTERS_BODY = """# 角色档案
+
+## 创作边界
+
+迈尔斯绝不可说出 `随它去吧` 这类话。
+"""
+
+# 「金句纠正」 is a corrections constraint heading with no generic marker either.
+CORRECTIONS_GOLDEN_BODY = """# 纠正台账
+
+## 金句纠正
+
+不要写 `我长大了` 这种句式。
+"""
+
+# A constraint section that carries a fence but no machine block: the fallback
+# has to read the quoted fragment and nothing else.
+FENCED_PROSE_SECTION = """# 纠正台账
+
+## 强制性禁止条目
+
+绝不可出现下面这类写法：
+
+```yaml
+props:
+  - "无关内容"
+```
 """
 
 
@@ -65,10 +183,33 @@ class ParseMachineDataTests(unittest.TestCase):
             ("tip-tap-tremble", "变勇敢了", "魔法解决一切"),
         )
 
+    def test_the_unfenced_template_shape_is_read_too(self):
+        self.assertEqual(
+            parse_machine_data_terms(UNFENCED_BLOCK, MACHINE_DATA_BLOCK),
+            ("tip-tap-tremble", "变勇敢了", "魔法解决一切"),
+        )
+
     def test_quoted_and_bare_list_items_both_parse(self):
         terms = parse_machine_data_terms(WITH_BLOCK, MACHINE_DATA_BLOCK)
         self.assertIn("变勇敢了", terms)
         self.assertIn("魔法解决一切", terms)
+
+    def test_a_fence_that_does_not_open_right_after_the_anchor_is_not_this_block(self):
+        self.assertEqual(parse_machine_data_terms(LATER_UNRELATED_FENCE, MACHINE_DATA_BLOCK), ())
+
+    def test_an_unclosed_fence_is_not_read_as_the_block(self):
+        self.assertEqual(
+            parse_machine_data_terms(UNTERMINATED_FENCE_BLOCK, MACHINE_DATA_BLOCK), ()
+        )
+
+    def test_a_differently_cased_or_spaced_anchor_is_read(self):
+        cased = UNFENCED_BLOCK.replace(
+            "<!-- machine-data: redline_terms -->", "<!-- Machine-Data:redline_terms-->"
+        )
+        self.assertEqual(
+            parse_machine_data_terms(cased, MACHINE_DATA_BLOCK),
+            ("tip-tap-tremble", "变勇敢了", "魔法解决一切"),
+        )
 
     def test_a_missing_block_returns_nothing(self):
         self.assertEqual(parse_machine_data_terms(WITHOUT_BLOCK, MACHINE_DATA_BLOCK), ())
@@ -80,10 +221,22 @@ class ParseMachineDataTests(unittest.TestCase):
         self.assertNotIn("redline_terms", parse_machine_data_terms(WITH_BLOCK, MACHINE_DATA_BLOCK))
 
 
+class MachineBlockTermsTests(unittest.TestCase):
+    def test_both_declared_machine_blocks_are_read(self):
+        self.assertEqual(machine_block_terms(BOTH_MACHINE_BLOCKS), ("变勇敢了", "小英雄"))
+
+
 class ParseQuotedTests(unittest.TestCase):
     def test_backticked_and_quoted_fragments_are_extracted(self):
         terms = parse_quoted_terms('绝不可出现 `变勇敢了` 以及 "魔法解决一切"。')
         self.assertEqual(set(terms), {"变勇敢了", "魔法解决一切"})
+
+    def test_a_fence_delimiter_is_not_a_quoted_fragment(self):
+        terms = parse_quoted_terms('```yaml\nprops:\n  - "无关内容"\n```')
+        self.assertEqual(terms, ("无关内容",))
+
+    def test_a_fragment_never_spans_a_line(self):
+        self.assertEqual(parse_quoted_terms("绝不可写 `跨行\n内容`。"), ())
 
     def test_prose_without_markers_yields_nothing(self):
         self.assertEqual(parse_quoted_terms("这一节讲的是为什么这些写法不行。"), ())
@@ -97,14 +250,39 @@ class CatalogTests(unittest.TestCase):
             ["tip-tap-tremble", "变勇敢了", "魔法解决一切"],
         )
 
+    def test_the_unfenced_template_shape_reaches_the_catalog(self):
+        rules = catalog_from_bundle(bundle(item(body=UNFENCED_BLOCK)))
+        self.assertEqual(
+            [rule.pattern for rule in rules],
+            ["tip-tap-tremble", "变勇敢了", "魔法解决一切"],
+        )
+
     def test_the_prohibition_sections_are_a_fallback_when_the_block_is_absent(self):
         rules = catalog_from_bundle(bundle(item(body=WITHOUT_BLOCK)))
         self.assertEqual(set(rule.pattern for rule in rules),
                          {"变勇敢了", "魔法解决一切", "tip-tap-tremble"})
 
-    def test_the_block_is_preferred_over_the_fallback_for_the_same_page(self):
-        rules = catalog_from_bundle(bundle(item()))
-        self.assertNotIn("绝不可把解决问题的方式写成", " ".join(r.pattern for r in rules))
+    def test_a_fenced_section_is_scraped_without_its_fence_delimiters(self):
+        rules = catalog_from_bundle(bundle(item(body=FENCED_PROSE_SECTION)))
+        self.assertEqual([rule.pattern for rule in rules], ["无关内容"])
+
+    def test_the_block_is_preferred_over_the_fallback_for_the_same_section(self):
+        rules = catalog_from_bundle(bundle(item(body=SAME_SECTION_BLOCK)))
+        self.assertEqual([rule.pattern for rule in rules], ["tip-tap-tremble"])
+
+    def test_a_declared_constraint_heading_is_scraped_even_without_a_generic_marker(self):
+        characters = catalog_from_bundle(bundle(item(key=CHARACTERS_KEY, body=CHARACTERS_BODY)))
+        golden = catalog_from_bundle(bundle(item(body=CORRECTIONS_GOLDEN_BODY)))
+        self.assertEqual([rule.pattern for rule in characters], ["随它去吧"])
+        self.assertEqual([rule.pattern for rule in golden], ["我长大了"])
+
+    def test_the_banned_terms_block_feeds_the_catalog(self):
+        rules = catalog_from_bundle(bundle(item(key=FINGERPRINT_KEY, body=BANNED_TERMS_BLOCK)))
+        self.assertEqual([rule.pattern for rule in rules], ["小英雄", "突然之间"])
+
+    def test_both_machine_blocks_of_one_page_are_catalogued(self):
+        rules = catalog_from_bundle(bundle(item(body=BOTH_MACHINE_BLOCKS)))
+        self.assertEqual([rule.pattern for rule in rules], ["变勇敢了", "小英雄"])
 
     def test_every_rule_carries_its_source_page_and_revision(self):
         for rule in catalog_from_bundle(bundle(item())):
@@ -128,13 +306,15 @@ class CatalogTests(unittest.TestCase):
         rules = catalog_from_bundle(bundle(item(key="海外绘本/小老鼠迈尔斯/ip-overview")))
         self.assertEqual(rules, ())
 
-    def test_the_page_type_decides_whether_a_machine_block_counts(self):
-        # The fixture above carries a `redline_terms` block on a page type the
-        # templates never declare prohibitions on, so the block is a gap in the
-        # knowledge base rather than a red line. Same body, two page types.
-        inside = catalog_from_bundle(bundle(item()))
-        outside = catalog_from_bundle(bundle(item(key="海外绘本/小老鼠迈尔斯/characters")))
-        self.assertEqual(len(inside), 3)
+    def test_a_machine_block_counts_on_every_constraint_page(self):
+        # Same body, two page types: `characters` is in scope because it declares
+        # its own constraint heading, `ip-overview` declares none.
+        inside = catalog_from_bundle(bundle(item(key=CHARACTERS_KEY)))
+        outside = catalog_from_bundle(bundle(item(key="海外绘本/小老鼠迈尔斯/ip-overview")))
+        self.assertEqual(
+            [rule.pattern for rule in inside],
+            ["tip-tap-tremble", "变勇敢了", "魔法解决一切"],
+        )
         self.assertEqual(outside, ())
 
     def test_an_empty_bundle_yields_an_empty_catalog(self):
@@ -151,7 +331,7 @@ class CatalogTests(unittest.TestCase):
                          ("redline-abc", "变勇敢了", "禁止直接把成长写成变勇敢"))
 
 
-class ProhibitionVocabularyAuthorityTests(unittest.TestCase):
+class ConstraintVocabularyAuthorityTests(unittest.TestCase):
     def test_the_prohibition_vocabulary_has_a_single_authority(self):
         # The marking stage and the catalog stage must share one vocabulary, or
         # a section could be protected by one and filtered by the other.
@@ -163,6 +343,15 @@ class ProhibitionVocabularyAuthorityTests(unittest.TestCase):
 
         self.assertIs(redline_catalog.PROHIBITION_PAGE_TYPES, AUTHORITY_TYPES)
         self.assertIs(redline_catalog.PROHIBITION_HEADING_MARKERS, AUTHORITY_MARKERS)
+
+    def test_the_constraint_pages_cover_every_declared_constraint_heading(self):
+        import redline_catalog
+        from required_marking import REQUIRED_HEADING_MARKERS as AUTHORITY_HEADINGS
+
+        self.assertEqual(
+            set(redline_catalog.CONSTRAINT_PAGE_TYPES),
+            set(redline_catalog.PROHIBITION_PAGE_TYPES) | set(AUTHORITY_HEADINGS),
+        )
 
 
 if __name__ == "__main__":
