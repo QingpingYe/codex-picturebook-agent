@@ -27,6 +27,7 @@ if str(_KNOWLEDGE_SCRIPTS) not in sys.path:
 from required_marking import (  # noqa: E402
     PROHIBITION_HEADING_MARKERS,
     PROHIBITION_PAGE_TYPES,
+    REQUIRED_ALL_PAGE_TYPES,
     REQUIRED_HEADING_MARKERS,
     mark_bundle,
     page_type_of,
@@ -39,12 +40,18 @@ from required_marking import (  # noqa: E402
 MACHINE_DATA_BLOCK = "redline_terms"
 MACHINE_DATA_BLOCKS = ("redline_terms", "banned_terms")
 
-# A page is in scope when it is one of the prohibition page types or declares its
-# own constraint headings: exactly the pages `required_marking` protects a
-# section of. `content-spec` is deliberately out — no template gives it a
-# prohibition section, and its machine blocks describe page allocation.
+# A page is in scope when it is one of the prohibition page types, declares its
+# own constraint headings, or is a whole-page constraint. `content-spec` is the
+# last case: its data-placement row puts the banned-word list there whenever it
+# does not live on the fingerprint page, and because the page carries no
+# prohibition heading the machine block is the only reader that can see it.
+# Other page types stay out — no template gives them a constraint, and their
+# machine blocks describe page allocation — so their blocks remain invisible on
+# purpose.
 CONSTRAINT_PAGE_TYPES = tuple(sorted(
-    set(PROHIBITION_PAGE_TYPES) | set(REQUIRED_HEADING_MARKERS)
+    set(PROHIBITION_PAGE_TYPES)
+    | set(REQUIRED_HEADING_MARKERS)
+    | set(REQUIRED_ALL_PAGE_TYPES)
 ))
 
 _LIST_ITEM = re.compile(r"^\s*-\s*(?:\"([^\"]+)\"|'([^']+)'|(.+?))\s*$")

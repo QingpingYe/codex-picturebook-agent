@@ -13,6 +13,7 @@ from redline_catalog import (
 CORRECTIONS_KEY = "海外绘本/小老鼠迈尔斯/corrections"
 CHARACTERS_KEY = "海外绘本/小老鼠迈尔斯/characters"
 FINGERPRINT_KEY = "海外绘本/小老鼠迈尔斯/story-fingerprint-spec"
+CONTENT_SPEC_KEY = "海外绘本/小老鼠迈尔斯/content-spec"
 
 WITH_BLOCK = """# 纠正台账
 
@@ -157,6 +158,38 @@ props:
 ```
 """
 
+# The data-placement table (structured-output-templates.md:374) puts the banned
+# word list on the content specification whenever it does not live on the
+# fingerprint page. That page carries no prohibition heading and no generic
+# marker, so the machine block is the only reader that can see these red lines.
+CONTENT_SPEC_BANNED = """# 内容规格
+
+## 核心参数
+
+| 页数 | 蓝思范围 |
+| --- | --- |
+| 24 | 200L-400L |
+
+<!-- machine-data: banned_terms -->
+```yaml
+banned_terms:
+  - "小英雄"
+```
+"""
+
+# The content specification's other machine blocks describe layout, not red
+# lines, so widening the page scope must stay block-name scoped.
+CONTENT_SPEC_HOUSEKEEPING = """# 内容规格
+
+## 定稿分集信息
+
+<!-- machine-data: dimensions -->
+```yaml
+dimensions:
+  - "五段式页分配"
+```
+"""
+
 
 def item(key=CORRECTIONS_KEY, body=WITH_BLOCK, revision_id=17):
     return {
@@ -284,6 +317,16 @@ class CatalogTests(unittest.TestCase):
         rules = catalog_from_bundle(bundle(item(body=BOTH_MACHINE_BLOCKS)))
         self.assertEqual([rule.pattern for rule in rules], ["变勇敢了", "小英雄"])
 
+    def test_a_banned_terms_block_on_the_content_spec_page_is_catalogued(self):
+        rules = catalog_from_bundle(bundle(item(key=CONTENT_SPEC_KEY, body=CONTENT_SPEC_BANNED)))
+        self.assertEqual([rule.pattern for rule in rules], ["小英雄"])
+
+    def test_a_housekeeping_machine_block_on_the_content_spec_page_stays_out(self):
+        rules = catalog_from_bundle(
+            bundle(item(key=CONTENT_SPEC_KEY, body=CONTENT_SPEC_HOUSEKEEPING))
+        )
+        self.assertEqual(rules, ())
+
     def test_every_rule_carries_its_source_page_and_revision(self):
         for rule in catalog_from_bundle(bundle(item())):
             with self.subTest(pattern=rule.pattern):
@@ -346,11 +389,16 @@ class ConstraintVocabularyAuthorityTests(unittest.TestCase):
 
     def test_the_constraint_pages_cover_every_declared_constraint_heading(self):
         import redline_catalog
-        from required_marking import REQUIRED_HEADING_MARKERS as AUTHORITY_HEADINGS
+        from required_marking import (
+            REQUIRED_ALL_PAGE_TYPES as AUTHORITY_WHOLE_PAGES,
+            REQUIRED_HEADING_MARKERS as AUTHORITY_HEADINGS,
+        )
 
         self.assertEqual(
             set(redline_catalog.CONSTRAINT_PAGE_TYPES),
-            set(redline_catalog.PROHIBITION_PAGE_TYPES) | set(AUTHORITY_HEADINGS),
+            set(redline_catalog.PROHIBITION_PAGE_TYPES)
+            | set(AUTHORITY_HEADINGS)
+            | set(AUTHORITY_WHOLE_PAGES),
         )
 
 
