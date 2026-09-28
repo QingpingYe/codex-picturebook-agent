@@ -29,7 +29,15 @@ if str(_RUNTIME_SCRIPTS) not in sys.path:
 
 # The operation vocabulary has exactly one authority. Re-declaring it here would
 # let a sample file name an operation the runtime cannot screen.
-from decision_contract import OPERATIONS  # noqa: E402
+# The bands are read from the shipped policy for the same reason: the ceiling
+# below which a clear boundary has to stay is a property of the operation, not
+# of this tool's grid.
+from decision_contract import (  # noqa: E402
+    OPERATIONS,
+    default_policy_path,
+    load_policy,
+    operation_policy,
+)
 
 LABELS = ("clear", "issue", "borderline")
 
@@ -141,6 +149,12 @@ def load_outcomes(path: Any) -> tuple[SampleOutcome, ...]:
         if not isinstance(failed, bool):
             raise ValueError(f"failed must be true or false for {sample_id}")
         probability = entry.get("probability")
+        if isinstance(probability, bool):
+            # `float(True)` would read as a certain red line instead of the
+            # unreadable measurement it is.
+            raise ValueError(f"{sample_id} has an unreadable probability")
+        if probability is not None and _measurement(probability) is None:
+            raise ValueError(f"{sample_id} has an unreadable probability")
         if not failed and _measurement(probability) is None:
             raise ValueError(
                 f"{sample_id} has no readable probability and is not marked failed"
@@ -164,13 +178,19 @@ def _measurement(value: Any) -> Decimal | None:
 
     if value is None:
         return None
+    if isinstance(value, bool):
+        # `float(True)` is 1.0, and a boolean is never a measured probability.
+        # Reading one as a certain red line would put a made-up number on the
+        # risk side of every boundary.
+        return None
     try:
         number = float(value)
-    except (TypeError, ValueError):
+        exact = Decimal(str(value))
+    except (TypeError, ValueError, ArithmeticError):
         return None
     if not math.isfinite(number) or not 0.0 <= number <= 1.0:
         return None
-    return Decimal(str(value))
+    return exact
 
 
 def _join(
@@ -202,6 +222,15 @@ def sweep(
 
     entries = tuple(outcomes)
     total = len(entries)
+    for entry in entries:
+        if entry.sample.label not in LABELS:
+            # A measurement carries no label of its own, so a sweep over raw
+            # outcomes would count every sample as neither a false negative nor
+            # a false positive and read as if it were safe. Refuse instead.
+            raise ValueError(
+                "every outcome needs a labelled sample; "
+                f"{entry.sample.sample_id!r} has {entry.sample.label!r}"
+            )
     rows = []
     for raw in thresholds:
         threshold = Decimal(str(raw))
@@ -241,6 +270,7 @@ def recommend(
     *,
     max_false_negative_rate: float = 0.0,
     thresholds: Sequence[str] = DEFAULT_SWEEP,
+    ceiling: str | None = None,
 ) -> dict:
     """Pick the loosest boundary that still honours the false-negative budget.
 
@@ -248,6 +278,12 @@ def recommend(
     worth running; the false-negative budget is the hard constraint, so the
     default of zero refuses any boundary that would clear an item a human
     labelled `issue` — the same place a hard constraint would be lost.
+
+    `ceiling` is the operation's fixed `risk_at_or_above`, and a boundary must
+    stay strictly below it. On the boundary itself every answer bands `clear`,
+    which erases the grey band: the grey escalation rule becomes dead code and
+    the content-removing `all_of` rules fire more often. A recommendation that
+    could not be pasted into the policy is not a recommendation.
     """
 
     entries = tuple(outcomes)
@@ -256,7 +292,24 @@ def recommend(
             f"at least {MIN_SAMPLES} labelled samples are required to recommend "
             "a threshold"
         )
-    rows = sweep(entries, thresholds)
+    limit = None if ceiling is None else Decimal(str(ceiling))
+    candidates = []
+    excluded = []
+    for raw in thresholds:
+        if limit is not None and Decimal(str(raw)) >= limit:
+            excluded.append(str(raw))
+            continue
+        candidates.append(raw)
+    if not candidates:
+        return {
+            "threshold": None,
+            "reason": "no_candidate_stays_below_the_risk_band",
+            "max_false_negative_rate": max_false_negative_rate,
+            "samples": len(entries),
+            "ceiling": None if ceiling is None else str(ceiling),
+            "excluded_thresholds": excluded,
+        }
+    rows = sweep(entries, candidates)
     acceptable = [
         row for row in rows if row["false_negative_rate"] <= max_false_negative_rate
     ]
@@ -266,14 +319,17 @@ def recommend(
             "reason": "no_threshold_meets_the_false_negative_budget",
             "max_false_negative_rate": max_false_negative_rate,
             "samples": len(entries),
+            "ceiling": None if ceiling is None else str(ceiling),
+            "excluded_thresholds": excluded,
         }
     best = max(
         acceptable, key=lambda row: (row["screened_clear"], float(row["threshold"]))
     )
-    return {
+    recommendation = {
         "threshold": best["threshold"],
         "max_false_negative_rate": max_false_negative_rate,
         "samples": len(entries),
+        "ceiling": None if ceiling is None else str(ceiling),
         "screened_clear": best["screened_clear"],
         "escalated": best["escalated"],
         "failed": best["failed"],
@@ -283,6 +339,22 @@ def recommend(
         "escalation_rate": best["escalation_rate"],
         "false_negative_rate": best["false_negative_rate"],
     }
+    if excluded:
+        recommendation["warning"] = (
+            "candidate thresholds at or above the operation's risk_at_or_above "
+            f"were excluded because they would erase the grey band: {excluded}"
+        )
+        recommendation["excluded_thresholds"] = excluded
+    return recommendation
+
+
+def operation_ceiling(operation: str) -> str | None:
+    """The operation's fixed `risk_at_or_above`, the exclusive clear ceiling."""
+
+    entry = operation_policy(load_policy(default_policy_path()), operation)
+    bands = (entry.get("routing") or {}).get("bands") or {}
+    ceiling = bands.get("risk_at_or_above")
+    return None if ceiling is None else str(ceiling)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -311,6 +383,10 @@ def main(argv=None, stdout=None, stderr=None) -> int:
         return 2 if exit_error.code else 0
 
     try:
+        # The operation vocabulary and its bands have one authority each, so an
+        # unsupported operation fails here with the contract's own message
+        # rather than as an empty sample set further down.
+        ceiling = operation_ceiling(args.operation)
         joined = _join(load_outcomes(args.outcomes), args.samples)
         scoped = tuple(
             entry for entry in joined if entry.sample.operation == args.operation
@@ -322,14 +398,18 @@ def main(argv=None, stdout=None, stderr=None) -> int:
             "operation": args.operation,
             "samples": len(scoped),
             "ignored_outcomes": len(joined) - len(scoped),
+            # Every sweep row above this ceiling is a measurement, not a
+            # boundary anyone may paste into the policy.
+            "clear_ceiling": ceiling,
             "sweep": list(sweep(scoped, thresholds)),
             "recommendation": recommend(
                 scoped,
                 max_false_negative_rate=args.max_false_negative_rate,
                 thresholds=thresholds,
+                ceiling=ceiling,
             ),
         }
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, ArithmeticError) as error:
         print(
             json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False),
             file=err,

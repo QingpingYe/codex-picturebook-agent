@@ -157,6 +157,11 @@ class LoadOutcomesTests(unittest.TestCase):
         ))
         self.assertEqual(outcomes[0].sample.label, "")
 
+    def test_a_boolean_measurement_is_refused(self):
+        # `float(True)` is 1.0, so a boolean would read as a certain red line.
+        with self.assertRaises(ValueError):
+            load_outcomes(self.write('[{"sample_id": "s1", "probability": true}]'))
+
 
 class SweepTests(unittest.TestCase):
     def outcomes(self):
@@ -205,6 +210,17 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(row["borderline_cleared"], 1)
 
 
+    def test_an_unlabelled_outcome_is_refused(self):
+        # A measurement carries no label of its own, so a sweep over raw
+        # outcomes would count every sample as neither a false negative nor a
+        # false positive and read as if nothing were lost.
+        entries = (
+            SampleOutcome(CalibrationSample("s1", "", "", "", "", "", ""), 0.05, False),
+        )
+        with self.assertRaises(ValueError):
+            sweep(entries, ("0.25",))
+
+
 class RecommendTests(unittest.TestCase):
     def outcomes(self):
         return (
@@ -245,6 +261,30 @@ class RecommendTests(unittest.TestCase):
         self.assertIsNone(result["threshold"])
         self.assertIn("reason", result)
         self.assertEqual(result["samples"], 4)
+
+
+    def test_a_recommendation_never_reaches_the_risk_band(self):
+        # A boundary on the operation's risk floor bands every answer clear: the
+        # grey band disappears and the content-removing rules fire more often,
+        # which is why the tool must never hand a human such a boundary.
+        entries = tuple(
+            outcome(f"clear-{index}", 0.05, label="clear") for index in range(4)
+        ) + (outcome("issue-1", 0.90),)
+        picked = recommend(
+            entries, thresholds=("0.60", "0.70", "0.80"), ceiling="0.70"
+        )
+        self.assertEqual(picked["threshold"], "0.60")
+        self.assertEqual(picked["excluded_thresholds"], ["0.70", "0.80"])
+        self.assertIn("warning", picked)
+
+    def test_a_grid_entirely_above_the_ceiling_refuses_rather_than_picking_one(self):
+        entries = tuple(
+            outcome(f"clear-{index}", 0.05, label="clear") for index in range(4)
+        )
+        picked = recommend(entries, thresholds=("0.70", "0.80"), ceiling="0.70")
+        self.assertIsNone(picked["threshold"])
+        self.assertEqual(picked["reason"], "no_candidate_stays_below_the_risk_band")
+        self.assertEqual(picked["excluded_thresholds"], ["0.70", "0.80"])
 
 
 class CliTests(unittest.TestCase):
@@ -335,6 +375,84 @@ class CliTests(unittest.TestCase):
         stderr = io.StringIO()
         self.assertEqual(main([], stdout=io.StringIO(), stderr=stderr), 2)
         self.assertIn("calibrate.py", stderr.getvalue())
+
+    def _rubric_outcomes(self):
+        samples = load_samples(SAMPLES_PATH)
+        rubric = {"clear": 0.05, "borderline": 0.50, "issue": 0.90}
+        return self.write_outcomes([
+            {"sample_id": entry.sample_id, "probability": rubric[entry.label],
+             "failed": False}
+            for entry in samples
+        ])
+
+    def test_the_shipped_floors_keep_the_recommendation_out_of_the_risk_band(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = main(["--samples", str(SAMPLES_PATH),
+                     "--outcomes", str(self._rubric_outcomes()),
+                     "--operation", "text_quality_prefilter"],
+                    stdout=stdout, stderr=stderr)
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["clear_ceiling"], "0.70")
+        self.assertLess(float(payload["recommendation"]["threshold"]), 0.70)
+
+    def test_an_unsupported_operation_names_the_contract_reason(self):
+        outcomes = self.write_outcomes([
+            {"sample_id": "s1", "probability": 0.9, "failed": False},
+            {"sample_id": "s2", "probability": 0.1, "failed": False},
+            {"sample_id": "s3", "probability": 0.5, "failed": False},
+            {"sample_id": "s4", "probability": 0.8, "failed": False},
+        ])
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = main(["--samples", str(self.write_samples()), "--outcomes", str(outcomes),
+                     "--operation", "no_such_operation"],
+                    stdout=stdout, stderr=stderr)
+        self.assertEqual(code, 1)
+        self.assertIn("not supported", stderr.getvalue())
+
+    def test_a_boolean_measurement_reports_an_error_not_a_traceback(self):
+        outcomes = self.write_outcomes([
+            {"sample_id": "s1", "probability": True},
+            {"sample_id": "s2", "probability": 0.1, "failed": False},
+            {"sample_id": "s3", "probability": 0.5, "failed": False},
+            {"sample_id": "s4", "probability": 0.8, "failed": False},
+        ])
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = main(["--samples", str(self.write_samples()), "--outcomes", str(outcomes),
+                     "--operation", "text_quality_prefilter"],
+                    stdout=stdout, stderr=stderr)
+        self.assertEqual(code, 1)
+        self.assertIn("error", stderr.getvalue())
+
+    def test_an_unreadable_explicit_threshold_reports_an_error(self):
+        outcomes = self.write_outcomes([
+            {"sample_id": "s1", "probability": 0.9, "failed": False},
+            {"sample_id": "s2", "probability": 0.1, "failed": False},
+            {"sample_id": "s3", "probability": 0.5, "failed": False},
+            {"sample_id": "s4", "probability": 0.8, "failed": False},
+        ])
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = main(["--samples", str(self.write_samples()), "--outcomes", str(outcomes),
+                     "--operation", "text_quality_prefilter", "--threshold", "abc"],
+                    stdout=stdout, stderr=stderr)
+        self.assertEqual(code, 1)
+        self.assertIn("error", stderr.getvalue())
+
+    def test_an_explicit_threshold_is_measured(self):
+        outcomes = self.write_outcomes([
+            {"sample_id": "s1", "probability": 0.9, "failed": False},
+            {"sample_id": "s2", "probability": 0.1, "failed": False},
+            {"sample_id": "s3", "probability": 0.5, "failed": False},
+            {"sample_id": "s4", "probability": 0.8, "failed": False},
+        ])
+        stdout = io.StringIO()
+        code = main(["--samples", str(self.write_samples()), "--outcomes", str(outcomes),
+                     "--operation", "text_quality_prefilter", "--threshold", "0.20"],
+                    stdout=stdout, stderr=io.StringIO())
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual([row["threshold"] for row in payload["sweep"]], ["0.20"])
+        self.assertEqual(payload["recommendation"]["threshold"], "0.20")
 
     def test_the_shipped_sample_file_is_calibratable(self):
         # The shipped set has to be able to express a working boundary: an
