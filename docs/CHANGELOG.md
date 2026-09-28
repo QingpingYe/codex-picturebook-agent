@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- The machine-readable contract now states that a `project_authority` finding blocks the confirmation gate at any severity (`any_finding_blocks_confirmation`), matching the runtime, where promotion forces `severity="FAIL"` and a later judgment can no longer soften it.
 - Knowledge loading now rejects page revisions behind the remote index, marks page-ahead evidence as `index_synced=false`, and prevents unsynced reads from replacing the last confirmed cache.
 - Terminal stage-run validation now evaluates run-level status and outcome without shadowing by stage fields.
 - `knowledge_relevance` now reuses a stored terminal result only when it records the request it answered, so an edited authority page is never routed on the previous edit's verdicts; the record that keeps a batch out of the screen is reported as `blocked_records`, and a failed batch's pending record is dropped under the operation lease instead of after it.

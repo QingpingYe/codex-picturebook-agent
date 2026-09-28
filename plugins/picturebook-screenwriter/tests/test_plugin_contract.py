@@ -154,7 +154,7 @@ class PluginContractTests(unittest.TestCase):
                     "findings",
                     "blocked_reasons",
                 ],
-                "project_authority": "FAIL_blocks_confirmation",
+                "project_authority": "any_finding_blocks_confirmation",
                 "craft_benchmark": "FAIL_requires_user_confirmation",
                 "wiki_lint": "read_only",
                 "lexile_check": "optional_measured_only",
