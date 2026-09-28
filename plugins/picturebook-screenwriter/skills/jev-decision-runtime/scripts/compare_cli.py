@@ -77,7 +77,9 @@ def _build_parser(stderr=None) -> argparse.ArgumentParser:
     parser.add_argument("--run-dir", required=True,
                         help="the jev_assisted run directory holding the traces")
     parser.add_argument("--llm-usage", required=True,
-                        help="the plain-LLM usage entry, read out of CC Switch by hand")
+                        help="the plain-LLM usage entry read out of CC Switch by hand; "
+                             "its optional upgraded_llm_usage block carries the escalated "
+                             "items' plain-LLM calls, tokens and cost")
     parser.add_argument("--output-dir",
                         help="absolute directory to export into; omit to only print")
     parser.add_argument("--plugin-root", help="plugin install root, for the boundary check")

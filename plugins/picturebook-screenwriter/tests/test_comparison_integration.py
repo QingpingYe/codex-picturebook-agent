@@ -152,6 +152,42 @@ class Phase4IntegrationTests(unittest.TestCase):
         self.assertIsNone(report["jev_assisted"]["cache_tokens"])
         self.assertEqual(report["llm"]["cache_tokens"], 12000)
 
+    def test_the_jev_path_has_no_total_until_the_escalated_batch_is_measured(self):
+        # The call the pre-screen hands back to the plain LLM bills separately.
+        # Until somebody copies that batch out of CC Switch the Jev-assisted
+        # path has no total, and the pre-screen's own estimate must not stand in
+        # for one.
+        report = build_case_report(run_dir=self.run_dir, llm_usage_path=self.usage,
+                                   policy=self.policy)
+        jev = report["jev_assisted"]
+        self.assertIsNone(jev["total_estimated_cost_usd"])
+        self.assertIsNone(jev["llm_request_count"])
+        self.assertTrue(any("upgraded_llm_usage" in note for note in jev["notes"]))
+        row = next(line for line in report_to_markdown(report).splitlines()
+                   if line.startswith("| total_estimated_cost_usd"))
+        self.assertIn("未测得（Jev 辅助）", row)
+
+    def test_the_escalated_batch_supplies_the_jev_path_total(self):
+        payload = llm_usage(upgraded_llm_usage={
+            "elapsed_ms": 42000,
+            "request_count": 3,
+            "input_tokens": 12000,
+            "output_tokens": 900,
+            "cache_tokens": 0,
+            "estimated_cost_usd": "0.210000000000",
+        })
+        self.usage.write_text(json.dumps(payload, ensure_ascii=False),
+                              encoding="utf-8")
+        report = build_case_report(run_dir=self.run_dir, llm_usage_path=self.usage,
+                                   policy=self.policy)
+        jev = report["jev_assisted"]
+        self.assertEqual(jev["llm_request_count"], 3)
+        self.assertEqual(jev["total_estimated_cost_usd"], "0.210512400000")
+        self.assertEqual(jev["total_elapsed_ms"], 600 + 42000)
+        self.assertEqual(jev["estimated_cost_usd"], "0.000512400000")
+        self.assertEqual(report["llm"]["total_estimated_cost_usd"], "1.234500000000")
+        self.assertIn("### 普通 LLM 用量与本路径总账", report_to_markdown(report))
+
     def test_a_shared_case_id_makes_the_runs_comparable(self):
         report = build_case_report(run_dir=self.run_dir, llm_usage_path=self.usage,
                                    policy=self.policy)

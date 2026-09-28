@@ -389,6 +389,12 @@ class JevPhase4DocumentationTests(unittest.TestCase):
         self.assertEqual(comparison["llm_usage_source"], "manual_entry")
         self.assertEqual(comparison["export_gate"], "explicit_user_request")
         self.assertEqual(comparison["output_dir"], "user_supplied_absolute")
+        self.assertEqual(comparison["escalated_llm_slots"],
+                         "manual_entry_upgraded_llm_usage")
+        self.assertEqual(
+            comparison["path_total_cost"],
+            "pre_screen_estimate_plus_escalated_llm_estimate",
+        )
         self.assertEqual(comparison["calibration_change"], "human_only")
 
     def test_runtime_skill_documents_the_comparison(self):

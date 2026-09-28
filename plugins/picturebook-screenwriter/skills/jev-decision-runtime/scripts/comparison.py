@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,55 @@ METRIC_NAMES = (
 ITEMS_ENTERED_BY_OPERATION = (
     ("knowledge_relevance", "knowledge_items_entered"),
     ("text_quality_prefilter", "quality_items_entered"),
+)
+
+# spec §10.3 keeps the two halves of a Jev-assisted run apart: the pre-screen's
+# own usage comes from the traces, and the plain-LLM calls it handed the
+# escalated items come from the user's manual CC Switch reading. Without the
+# second half the Jev column's cost is the pre-screen's bill, not the path's.
+UPGRADED_LLM_BLOCK = "upgraded_llm_usage"
+
+UPGRADED_LLM_FIELDS = (
+    "elapsed_ms",
+    "request_count",
+    "input_tokens",
+    "output_tokens",
+    "cache_tokens",
+    "estimated_cost_usd",
+)
+
+# The slot names are prefixed so a reader can never confuse the escalated batch
+# with the pre-screen's own numbers sitting in the row above.
+UPGRADED_LLM_SLOT_NAMES = tuple(f"llm_{name}" for name in UPGRADED_LLM_FIELDS)
+
+# This path's own total, as opposed to any single device inside it.
+ADDON_METRIC_NAMES = UPGRADED_LLM_SLOT_NAMES + (
+    "total_elapsed_ms",
+    "total_estimated_cost_usd",
+)
+
+ADDON_METRIC_LABELS = {
+    "llm_elapsed_ms": "普通 LLM 耗时",
+    "llm_request_count": "普通 LLM 请求数",
+    "llm_input_tokens": "普通 LLM input token",
+    "llm_output_tokens": "普通 LLM output token",
+    "llm_cache_tokens": "普通 LLM cache token",
+    "llm_estimated_cost_usd": "普通 LLM 估算成本",
+    "total_elapsed_ms": "本路径估算总耗时",
+    "total_estimated_cost_usd": "本路径估算总成本",
+}
+
+# The plain-LLM column is itself the plain LLM, so each of its slots is that
+# column's own measurement: there is no pre-screen beside it to add.
+PLAIN_LLM_COLUMN_SLOTS = (
+    ("llm_elapsed_ms", "elapsed_ms"),
+    ("llm_request_count", "request_count"),
+    ("llm_input_tokens", "input_tokens"),
+    ("llm_output_tokens", "output_tokens"),
+    ("llm_cache_tokens", "cache_tokens"),
+    ("llm_estimated_cost_usd", "estimated_cost_usd"),
+    ("total_elapsed_ms", "elapsed_ms"),
+    ("total_estimated_cost_usd", "estimated_cost_usd"),
 )
 
 
@@ -139,6 +188,21 @@ class CaseMetrics:
     quality_items_entered: int | None = None
     issues_found: int | None = None
     misses_or_disagreements: int | None = None
+    # The plain-LLM half of this path. On the plain-LLM column these mirror the
+    # fields above; on the Jev-assisted column they are the escalated items the
+    # user read out of CC Switch after the pre-screen, which have their own
+    # request count, tokens, time and bill.
+    llm_elapsed_ms: int | None = None
+    llm_request_count: int | None = None
+    llm_input_tokens: int | None = None
+    llm_output_tokens: int | None = None
+    llm_cache_tokens: int | None = None
+    llm_estimated_cost_usd: str | None = None
+    # The path's own total. It exists only when every part of the path was
+    # measured: a total built from one measured half reads as the whole path's
+    # bill while the other half's calls are missing from it.
+    total_elapsed_ms: int | None = None
+    total_estimated_cost_usd: str | None = None
     notes: tuple[str, ...] = ()
 
 
@@ -146,6 +210,21 @@ def _metrics_dict(metrics: CaseMetrics) -> dict:
     payload = asdict(metrics)
     payload["notes"] = list(payload["notes"])
     return payload
+
+
+def with_plain_llm_slots(metrics: CaseMetrics) -> CaseMetrics:
+    """Mirror the plain-LLM column into the slots spec §10.3 asks for.
+
+    That column runs no pre-screen, so the plain-LLM half of the path is the
+    whole path and its total is its own measurement. Materialising the slots
+    here rather than in the report renderer keeps the JSON and the Markdown
+    saying the same thing, and keeps every comparison — including one assembled
+    by a caller — carrying the row the reader compares across the two columns.
+    """
+
+    return replace(metrics, **{
+        slot: getattr(metrics, source) for slot, source in PLAIN_LLM_COLUMN_SLOTS
+    })
 
 
 def build_report(
@@ -163,7 +242,7 @@ def build_report(
         "identity_digest": identity_digest(identity),
         "comparable": bool(comparable),
         "comparability_reasons": list(reasons),
-        "llm": _metrics_dict(llm),
+        "llm": _metrics_dict(with_plain_llm_slots(llm)),
         "jev_assisted": _metrics_dict(jev_assisted),
         "calibration": [dict(entry) for entry in calibration],
     }
@@ -243,6 +322,12 @@ def report_to_markdown(report: Mapping[str, Any]) -> str:
     lines.append("")
     for name in METRIC_NAMES:
         lines.append(f"- {name}: {describe_metric(name, llm.get(name), jev.get(name))}")
+    lines.append("")
+    lines.append(
+        "- 上表每一行是**该列自己的测量装置**：普通 LLM 列是整轮的 CC Switch 汇总，"
+        "Jev 辅助列只含 Jev 自己发起的调用。被升级项由普通 LLM 再跑一遍的那部分在下一张表。"
+    )
+    lines.extend(_addon_section(llm, jev))
     for note in jev.get("notes") or ():
         lines.append(f"- Jev 侧记录：{note}")
     declared_only = (report.get("identity_attestation") or {}).get("declared_only") or ()
@@ -262,6 +347,42 @@ def report_to_markdown(report: Mapping[str, Any]) -> str:
             f"{entry.get('current')} → {entry.get('suggestion')}（{entry.get('reason')}）",
         ])
     return "\n".join(lines) + "\n"
+
+
+def _addon_section(llm: Mapping[str, Any], jev: Mapping[str, Any]) -> list[str]:
+    """The plain-LLM half of each path and the path total, as spec §10.3 asks.
+
+    The Jev-assisted column's rows here are the escalated items handed back to
+    the plain LLM — a second batch of calls with its own time and its own bill.
+    Reading the pre-screen's cost as that path's total is the mistake this
+    table exists to make impossible.
+    """
+
+    lines = [
+        "",
+        "### 普通 LLM 用量与本路径总账",
+        "",
+        "| 指标 | 普通 LLM | Jev 辅助 |",
+        "| --- | --- | --- |",
+    ]
+    for name in ADDON_METRIC_NAMES:
+        lines.append(
+            f"| {name}（{ADDON_METRIC_LABELS[name]}）"
+            f" | {_cell(llm.get(name), '普通 LLM')}"
+            f" | {_cell(jev.get(name), 'Jev 辅助')} |"
+        )
+    lines.extend([
+        "",
+        "- Jev 辅助列的这几行只含**升级项回流给普通 LLM** 的那部分"
+        f"（`{UPGRADED_LLM_BLOCK}`）；Jev 自身用量见上表，两者不相加。",
+        "- 普通 LLM 列本身即全量普通 LLM，因此它的普通 LLM 行与总账行等于它自己的用量。",
+    ])
+    for name in ADDON_METRIC_NAMES:
+        lines.append(
+            f"- {ADDON_METRIC_LABELS[name]}: "
+            f"{describe_metric(name, llm.get(name), jev.get(name))}"
+        )
+    return lines
 
 
 TRACE_GLOB = "jev/*/trace/*.json"
@@ -517,16 +638,35 @@ _LLM_USAGE_FIELDS = (
 )
 
 
-def load_llm_usage(path: Any) -> tuple[dict, CaseMetrics]:
-    """Read the user-supplied plain-LLM usage entry.
+def _cost_string(value: Any, field: str) -> str | None:
+    """A cost must be a quoted decimal string, never a JSON number.
 
-    The plugin never reads CC Switch's own store: its schema is not a stable
-    public contract and reading it would hard-code a personal environment path.
+    A hand-copied cost is the one number in this report a person types, so it is
+    also the one most likely to arrive as a binary float and disagree with the
+    invoice by the time it is summed.
     """
 
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field} must be a quoted decimal string, for example "
+            '"1.234500000000": a JSON number is parsed as a binary float, and '
+            "this report is not allowed to disagree with the invoice"
+        )
+    return value
+
+
+def _usage_payload(path: Any) -> Mapping:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
         raise ValueError("llm usage entry must be a JSON object")
+    return payload
+
+
+def _plain_llm_metrics(payload: Mapping) -> CaseMetrics:
+    """The plain-LLM column: the whole run, read out of CC Switch by hand."""
+
     validate_identity(payload.get("identity"))
     source = str(payload.get("source", ""))
     if not source.startswith("cc-switch-manual-entry") and source != "manual":
@@ -534,19 +674,123 @@ def load_llm_usage(path: Any) -> tuple[dict, CaseMetrics]:
             "llm usage source must be a manual entry; this plugin does not read "
             "the CC Switch database"
         )
-    cost = payload.get("estimated_cost_usd")
-    if cost is not None and not isinstance(cost, str):
-        raise ValueError(
-            "estimated_cost_usd must be a quoted decimal string, for example "
-            '"1.234500000000": a JSON number is parsed as a binary float, and '
-            "this report is not allowed to disagree with the invoice"
-        )
     values = {name: payload.get(name) for name in _LLM_USAGE_FIELDS}
-    return dict(payload["identity"]), CaseMetrics(
+    values["estimated_cost_usd"] = _cost_string(
+        values["estimated_cost_usd"], "estimated_cost_usd"
+    )
+    return CaseMetrics(
         path="llm",
         notes=(f"model={payload.get('model_label')}", f"source={source}"),
         **values,
     )
+
+
+def upgraded_llm_slots(payload: Mapping) -> dict:
+    """Read the escalated plain-LLM batch the pre-screen handed back.
+
+    The block is optional — a comparison whose escalated batch was never run has
+    nothing to put here — but a key inside it is not: misspelling one would read
+    as "not measured" while the number the user did write never reached the
+    report, which is the one failure this whole contract exists to prevent.
+    """
+
+    block = payload.get(UPGRADED_LLM_BLOCK)
+    if block is None:
+        return {}
+    if not isinstance(block, Mapping):
+        raise ValueError(
+            f"{UPGRADED_LLM_BLOCK} must be a JSON object with any of "
+            f"{', '.join(UPGRADED_LLM_FIELDS)}"
+        )
+    unknown = sorted(str(key) for key in set(block) - set(UPGRADED_LLM_FIELDS))
+    if unknown:
+        raise ValueError(
+            f"{UPGRADED_LLM_BLOCK} has unknown field(s) {', '.join(unknown)}; "
+            f"allowed: {', '.join(UPGRADED_LLM_FIELDS)}"
+        )
+    slots = {}
+    for name in UPGRADED_LLM_FIELDS:
+        value = block.get(name)
+        if name == "estimated_cost_usd":
+            value = _cost_string(value, f"{UPGRADED_LLM_BLOCK}.estimated_cost_usd")
+        slots[f"llm_{name}"] = value
+    return slots
+
+
+def _sum_measured(left: Any, right: Any) -> Any:
+    """Add two measured halves; a half nobody measured leaves the total unknown.
+
+    Reporting one half as the path's total would present a bill that is missing
+    the other half's calls, which is exactly the reading the report must not
+    invite.
+    """
+
+    if left is None or right is None:
+        return None
+    if isinstance(left, str) or isinstance(right, str):
+        return _sum_cost((left, right))
+    return left + right
+
+
+def with_upgraded_llm(metrics: CaseMetrics, slots: Mapping[str, Any]) -> CaseMetrics:
+    """Attach the escalated plain-LLM batch and the path total to the Jev side.
+
+    `slots` is `upgraded_llm_slots`' output for the manual entry, so the block
+    is parsed (and refused) once per report.
+
+    Neither total exists unless every part of the path was measured. The bill
+    for the pre-screen alone is not the path's bill, so an unmeasured half has
+    to leave the slot at `null` and say so rather than let a reader take the
+    smaller number for the whole.
+    """
+
+    if not slots:
+        return replace(metrics, notes=metrics.notes + (
+            f"未提供 {UPGRADED_LLM_BLOCK}：升级项回流普通 LLM 的请求数、token"
+            "与成本都没有测量值，本路径的估算总账保持未知，"
+            "不得把预筛自己的成本当成该路径总账",
+        ))
+    total_elapsed = _sum_measured(metrics.elapsed_ms, slots["llm_elapsed_ms"])
+    total_cost = _sum_measured(
+        metrics.estimated_cost_usd, slots["llm_estimated_cost_usd"]
+    )
+    notes = metrics.notes
+    unmeasured = [
+        label for label, total in (
+            ("估算总耗时", total_elapsed), ("估算总成本", total_cost),
+        )
+        if total is None
+    ]
+    if unmeasured:
+        # A total whose two halves were not both measured is not a smaller
+        # total; it is a number nobody took, and the reader is told which.
+        notes = notes + (
+            f"{UPGRADED_LLM_BLOCK} 与预筛没有同时测得"
+            + "、".join(unmeasured) + "，总账保持未知（不是 0）",
+        )
+    return replace(
+        metrics, **slots, total_elapsed_ms=total_elapsed,
+        total_estimated_cost_usd=total_cost, notes=notes,
+    )
+
+
+def read_usage_entry(path: Any) -> tuple[dict, CaseMetrics, dict]:
+    """Read the manual entry once: identity, plain-LLM column, escalated batch.
+
+    The plugin never reads CC Switch's own store: its schema is not a stable
+    public contract and reading it would hard-code a personal environment path.
+    """
+
+    payload = _usage_payload(path)
+    metrics = _plain_llm_metrics(payload)
+    return dict(payload["identity"]), metrics, upgraded_llm_slots(payload)
+
+
+def load_llm_usage(path: Any) -> tuple[dict, CaseMetrics]:
+    """Read the user-supplied plain-LLM usage entry."""
+
+    identity, metrics, _ = read_usage_entry(path)
+    return identity, metrics
 
 
 # Escalation above this share means the thresholds are clearing too little for
@@ -722,7 +966,7 @@ def build_case_report(
     assumption.
     """
 
-    llm_identity, llm = load_llm_usage(llm_usage_path)
+    llm_identity, llm, upgraded_slots = read_usage_entry(llm_usage_path)
     traces = load_traces(run_dir)
     jev_identity, attested_reasons, verified = _attest_identity(
         llm_identity, traces, policy
@@ -758,7 +1002,7 @@ def build_case_report(
     )
     comparison_holds, comparison_reasons = comparability(llm_identity, jev_identity)
     comparable = comparison_holds and not attested_reasons and not run_reasons
-    jev = jev_metrics(own)
+    jev = with_upgraded_llm(jev_metrics(own), upgraded_slots)
     per_operation = [dict(entry) for entry in operation_metrics(own)]
     report = build_report(
         identity=llm_identity, comparable=comparable,
