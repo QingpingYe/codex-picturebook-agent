@@ -45,7 +45,7 @@ class ResolverTests(unittest.TestCase):
         resolved = resolve_config_path(None, self.workspace, {}, home=self.root)
         self.assertEqual(resolved.path, workspace.resolve())
         self.assertEqual(resolved.origin, "workspace")
-        self.assertNotIn(user.resolve(), resolved.searched)
+        self.assertNotIn(user, resolved.searched)
 
     def test_workspace_success_lists_only_checked_candidates(self):
         workspace = self.write(self.workspace / "feishu-knowledge-base.json")
@@ -67,7 +67,7 @@ class ResolverTests(unittest.TestCase):
             resolve_config_path(None, self.workspace, {}, home=self.root / "home")
         self.assertIn((self.workspace / "feishu-knowledge-base.json").resolve(),
                       caught.exception.searched)
-        self.assertIn(user.resolve(), caught.exception.searched)
+        self.assertIn(user, caught.exception.searched)
 
     def test_nearest_ancestor_config_wins(self):
         root_config = self.write(self.root / "feishu-knowledge-base.json")
