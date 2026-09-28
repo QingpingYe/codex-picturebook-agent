@@ -19,14 +19,14 @@ description: pre_output 槽位的全产物类型兜底技能，先做廉价代�
 
 判定结果只对 `project_proxy` 生效：`apply_judgments()` **不会**改变 `project_authority` 的 severity，因为权威触犯是草稿的既成事实，不是可以复核掉的看法。`FAIL` 会把代理候选经 `promote_confirmed_redlines()` 提升为 `project_authority`，这是唯一能产生阻断判定的路径。
 
-项目权威 FAIL 阻断，工艺基准 FAIL 不阻断但必须向用户说明。
+项目权威触犯阻断：`project_authority` 来源的 finding 一律阻断，不看它记录了什么严重度（`apply_judgments()` 不会降级权威 finding）。工艺基准 FAIL 不阻断但必须向用户说明。
 
 ## Jev 辅助预筛（仅在用户选择 Jev 辅助路径时）
 
 用户选择 Jev 辅助时，`scripts/screening_runner.py` 会：
 
-1. 用红线词表为**每一条活动红线**对每个页面窗口生成原子 Noul 问题——不是只审正则已命中的 FLAG。
-2. 用 `scripts/page_quality.py` 为每页最多五个质量维度生成原子 Noul 问题；末页豁免翻页动力。字数、句长、重复次数由代码算好放进 state，不让 Jev 计数。
+1. 用红线词表为**每一条活动红线**对每个**有文字的**页面窗口生成原子 Noul 问题——不是只审正则已命中的 FLAG。无文字页不生成项，也不会计入 clear。
+2. 用 `scripts/page_quality.py` 为每页最多五个质量维度生成原子 Noul 问题；末页豁免翻页动力。字数、句数与单行最大重复次数（`char_count` / `sentence_count` / `max_line_repeat`）由代码算好放进 state，不让 Jev 计数。
 3. 调用共享运行器，按 `decision-policies.json` 的路由规则把每项判成 `screened_clear`、`escalate_llm` 或 `runtime_failure`。
 4. 只把高风险、灰区、异常项与代理冲突组装成升级包交给普通 LLM。
 
@@ -45,3 +45,4 @@ description: pre_output 槽位的全产物类型兜底技能，先做廉价代�
 - 本技能不生成图片，不写入文件，不跳过权威 FAIL。
 - 本技能不替代 quality-baseline 的读者视角和跨产物一致性检查。
 - 本技能不覆盖"禁忌词、称呼一致性和插画描述"的零假阴性扫描——**尚未实现**，只有项目红线的字面扫描存在。不要把它当作已完成的能力。
+- 句长与标点模式事实尚未提供：`scripts/page_quality.py` 的 `page_facts()` 目前只产出 `char_count`、`sentence_count`、`max_line_repeat` 三项。

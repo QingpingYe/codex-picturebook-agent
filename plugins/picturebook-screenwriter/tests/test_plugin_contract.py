@@ -327,10 +327,20 @@ class JevPhase3DocumentationTests(unittest.TestCase):
         self.assertNotIn("称呼一致性和插画描述做零假阴性扫描", text)
         self.assertIn("尚未实现", text)
 
+    def test_pre_output_skill_names_the_facts_the_code_provides(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("字数、句长、重复次数由代码算好放进 state", text)
+        for fact in ("char_count", "sentence_count", "max_line_repeat"):
+            with self.subTest(fact=fact):
+                self.assertIn(fact, text)
+
     def test_enforcement_matrix_documents_the_screening_gates(self):
         text = ENFORCEMENT.read_text(encoding="utf-8")
         for required in ("screening.py", "redline_catalog.py", "screening_runner.py",
-                         "promoted", "screened_clear"):
+                         "promoted", "screened_clear", "may_skip_llm_review",
+                         "blocked_records"):
             with self.subTest(required=required):
                 self.assertIn(required, text)
 

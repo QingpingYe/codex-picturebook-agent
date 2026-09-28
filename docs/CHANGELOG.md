@@ -13,7 +13,7 @@
 - Portable Feishu config discovery for project subdirectories, user directories, and shared plugin distribution.
 - Jev-assisted decision layer infrastructure: an explicit execution choice gate, `pb-decision-context-v1` propagation, credential waiting and recovery points, a single-holder execution lease, atomic terminal results, decimal cost estimation, and benchmark case alignment.
 - `knowledge_relevance`: authority pages are chunked, hard-constraint chunks are marked unfilterable, soft candidates are recalled, and Jev screens those candidates; the reduced evidence bundle feeds the ordinary model context while the unfiltered revision vector stays available to the dependency lock.
-- `text_quality_prefilter`：覆盖全部活动红线与五个逐页文本质量维度的 Jev 预筛，含中文标注样本与阈值校准工具。
+- `text_quality_prefilter`: every active red line and the five per-page text-quality dimensions are pre-screened by Jev, with Chinese calibration samples and a threshold calibration tool.
 
 ### Changed
 
@@ -30,4 +30,4 @@
 - `knowledge_relevance` now reuses a stored terminal result only when it records the request it answered, so an edited authority page is never routed on the previous edit's verdicts; the record that keeps a batch out of the screen is reported as `blocked_records`, and a failed batch's pending record is dropped under the operation lease instead of after it.
 - A screening batch keeps its record instead of paying again when the file on disk exists but cannot be read as one: a `result.json` that fails to parse or parses to a non-object is now reported as `unreadable_result` rather than treated as no record, and a pending record whose `attempt_status` is neither a waiting call nor a settled failure is reported as `unreadable_pending`. A result that names no request at all is reported as unreadable rather than stale.
 - A settled operation clears the run-level `pending_call` in `decision-context.json` only when no other operation is still waiting, so a second batch's ambiguous call stays named for every reader of the context.
-- 语义判定不再能把项目红线字面命中降为 PASS：代理命中与权威触犯已拆分，阻断判定只由终审确认产生。
+- A semantic judgment can no longer downgrade a literal project red-line hit to PASS: proxy hits and confirmed violations are now separate sources, and only a confirmed final review produces a blocking finding.

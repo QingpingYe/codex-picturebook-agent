@@ -61,7 +61,8 @@ class SkillContractTests(unittest.TestCase):
 
     def test_entry_blocks_project_failures(self):
         text = ENTRY_SKILL.read_text(encoding="utf-8")
-        self.assertIn("项目权威 FAIL", text)
+        self.assertIn("项目权威触犯", text)
+        self.assertIn("project_authority", text)
         self.assertIn("阻断", text)
 
     def test_entry_distinguishes_craft_warnings(self):
