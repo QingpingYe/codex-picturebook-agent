@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -434,13 +435,28 @@ def trace_for(
     elapsed_ms,
     started_at,
     finished_at,
+    screened_clear_count: int = 0,
+    escalated_count: int = 0,
 ) -> dict | None:
+    """The trace of one settled attempt.
+
+    `screened_clear_count` and `escalated_count` are the operation's own verdict
+    counts for the request this attempt answered, supplied through the
+    `verdicts=` hook `execute` accepts. They default to zero, which is the
+    honest reading for every settlement that never produced a verdict — a
+    failure, an ambiguous attempt, or a caller that has no routing to report.
+    A trace that always recorded zeros made the comparison report's escalation
+    rate structurally zero, so nothing downstream could tell "the pre-screen
+    cleared everything" apart from "nobody ever wrote the number".
+    """
+
     if status not in RESULT_STATUSES_WITH_TRACE:
         return None
     snapshot = config.policy["price_snapshot"]
     input_tokens, output_tokens, cost = estimate_usage(
         usage, snapshot["price_usd_per_million_input_tokens"]
     )
+    clear, escalated = _count_pair(screened_clear_count, escalated_count)
     trace = DecisionTrace(
         run_id=request["run_id"],
         benchmark_case_id=request["benchmark_case_id"],
@@ -452,8 +468,8 @@ def trace_for(
         input_sha256=sha256_hex(canonical_json(request)),
         item_count=len(request["context_refs"]),
         question_count=len(request["questions"]),
-        screened_clear_count=0,
-        escalated_count=0,
+        screened_clear_count=clear,
+        escalated_count=escalated,
         request_count=attempts,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -468,7 +484,72 @@ def trace_for(
     return trace.to_dict()
 
 
-def execute(request, config, client, clock=None) -> dict:
+def _is_verdict_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _count_pair(screened_clear_count: Any, escalated_count: Any) -> tuple[int, int]:
+    """Read a pair of verdict counts, or the zero pair when either is unusable."""
+
+    if _is_verdict_count(screened_clear_count) and _is_verdict_count(escalated_count):
+        return screened_clear_count, escalated_count
+    return 0, 0
+
+
+def verdict_counts(verdicts, request, payload) -> tuple[int, int]:
+    """Ask the operation for the verdict counts this attempt produced.
+
+    The runner owns the trace but not the routing: what "clear" means for a
+    chunk of knowledge is the relevance policy's business, and what "clear"
+    means for a page dimension is the quality policy's. So the caller hands
+    `execute` a `verdicts` hook and the counts it answers with are what the
+    trace records.
+
+    A hook that raises, or that answers with anything other than two
+    non-negative integers, is read as "no verdicts to record" rather than as a
+    reason to abandon a call that has already been paid for. Zero counts are
+    the fail-closed reading: no cleared and no escalated verdicts means no
+    ratio, so no threshold can be recommended from this run — as opposed to a
+    zero *escalation* count, which would recommend promoting the operation.
+    """
+
+    if verdicts is None:
+        return 0, 0
+    try:
+        counts = verdicts(request, payload)
+    except Exception:
+        return 0, 0
+    if not isinstance(counts, Mapping):
+        return 0, 0
+    return _count_pair(
+        counts.get("screened_clear_count"), counts.get("escalated_count")
+    )
+
+
+class VerdictHook:
+    """A `verdicts` hook that routes a batch once and keeps what it computed.
+
+    The runner calls the hook while it settles a paid-for call, so the
+    operation's routing has to run there for its counts to reach the trace.
+    Handing the same result back to the caller is what keeps the trace's counts
+    and the operation's own decisions from being two independent computations
+    of one thing: the caller reads `value` instead of routing the same response
+    a second time. `value` stays `None` for every settlement the hook never
+    saw — a record reused from an earlier run, a batch that did not succeed —
+    and the caller then routes the record it has through the same function.
+    """
+
+    def __init__(self, compute) -> None:
+        self._compute = compute
+        self.value = None
+
+    def __call__(self, request, payload):
+        counts, value = self._compute(request, payload)
+        self.value = value
+        return counts
+
+
+def execute(request, config, client, clock=None, verdicts=None) -> dict:
     validate_request(request)
     if config.execution_mode != "jev_assisted":
         raise ContractError(
@@ -522,6 +603,9 @@ def execute(request, config, client, clock=None) -> dict:
                 error_class="model_version_mismatch", attempts=outcome.attempts,
                 elapsed_ms=elapsed_ms, started_at=started_at, finished_at=finished_at,
             )
+        screened_clear_count, escalated_count = verdict_counts(
+            verdicts, request, outcome.payload
+        )
         trace = trace_for(
             request, config,
             status="succeeded",
@@ -532,6 +616,8 @@ def execute(request, config, client, clock=None) -> dict:
             elapsed_ms=elapsed_ms,
             started_at=started_at,
             finished_at=finished_at,
+            screened_clear_count=screened_clear_count,
+            escalated_count=escalated_count,
         )
         try:
             result = build_result(
@@ -619,14 +705,21 @@ def _settle(
     return result
 
 
-def run_operation(request, config, client, clock=None, now=None) -> dict:
+def run_operation(request, config, client, clock=None, now=None, verdicts=None) -> dict:
+    """Dispatch one operation under its lease.
+
+    `verdicts` is the operation's own routing, handed to `execute` so the trace
+    can record how much of the batch was cleared and how much was escalated;
+    see `verdict_counts` for what the runner does with a hook that misbehaves.
+    """
+
     # Validate all caller-controlled path components before acquiring a lease
     # or creating any operation directory.
     validate_request(request)
     operation_id = operation_id_from_request(request)
     lease = acquire_lease(config, operation_id, now=now)
     try:
-        return execute(request, config, client, clock=clock)
+        return execute(request, config, client, clock=clock, verdicts=verdicts)
     finally:
         release_lease(config, operation_id, lease.holder)
 
@@ -726,6 +819,7 @@ def resume_operation(
     *,
     allow_new_attempt: bool = False,
     clock=None,
+    verdicts=None,
 ) -> dict:
     operation_ids = pending_operation_ids(config.run_dir)
     if not operation_ids:
@@ -788,7 +882,7 @@ def resume_operation(
         )
     lease = acquire_lease(config, operation_id)
     try:
-        return execute(request, config, client, clock=clock)
+        return execute(request, config, client, clock=clock, verdicts=verdicts)
     finally:
         release_lease(config, operation_id, lease.holder)
 
@@ -813,43 +907,216 @@ def _superseded(request, config, operation_id, reason) -> dict:
     return result
 
 
-CREDENTIAL_ARGUMENT_PREFIXES = (
-    "--api-key",
-    "--apikey",
-    "--api_key",
-    "--token",
-    "--secret",
-    "--authorization",
-    "--bearer",
+# The vocabulary of credential words, not an enumeration of today's providers.
+# `--openai-api-key=…`, `--my-secret=…` and `--api-key=…` are the same mistake:
+# argparse echoes the value back to the terminal before any of these CLIs can
+# refuse the request, so the check has to catch the shape of the flag rather
+# than the handful of names someone happened to be using when it was written.
+# Each marker is read as whole `-`/`_`-separated words, so that a count such as
+# `--max-tokens` is not the secret `--token`.
+#
+# No vocabulary of spellings is complete, so this gate is not the guarantee: it
+# is the polite refusal for the shapes below. What keeps a value off the
+# terminal for every other spelling is `parse_known_options`, which refuses the
+# arguments the parser cannot place and reports them by name — including the
+# bare positional a pasted secret is as likely to arrive as.
+CREDENTIAL_ARGUMENT_MARKERS = (
+    "api-key",
+    "apikey",
+    "api_key",
+    "api-token",
+    "access-key",
+    "access_key",
+    "secret-key",
+    "secret_key",
+    "client-secret",
+    "token",
+    "secret",
+    "passwd",
+    "password",
+    "credential",
+    "authorization",
+    "bearer",
 )
+
+# The words those markers are named with, matched as whole `-`/`_`-separated
+# segments: `--token`, `--my-token`, `--db-password`, and the glued spellings
+# providers use for the same secrets (`--apikey`). A count is not a secret, so
+# `--max-tokens` is deliberately not one of them. Every marker above is caught
+# by one of these words or by the trailing-`key` rule below; the test that walks
+# `CREDENTIAL_ARGUMENT_MARKERS` is what keeps the two lists from drifting apart.
+CREDENTIAL_ARGUMENT_WORDS = (
+    "apikey",
+    "apitoken",
+    "accesskey",
+    "secretkey",
+    "clientsecret",
+    "token",
+    "secret",
+    "passwd",
+    "password",
+    "credential",
+    "authorization",
+    "bearer",
+)
+
+# The qualifiers that make a trailing `key` name an identifier rather than a
+# secret: how to order, key, or cache a row, not what opens an account. A flag
+# built from one of these is passed through, so the gate does not refuse the
+# ordinary arguments of unrelated tools that share this command line.
+NON_CREDENTIAL_KEY_QUALIFIERS = (
+    "sort",
+    "order",
+    "primary",
+    "foreign",
+    "partition",
+    "shard",
+    "group",
+    "cache",
+    "hot",
+    "shortcut",
+    "dedupe",
+)
+
+# The words that merely end in the letters `key`: `--monkey` names an animal and
+# `--hotkey` a keystroke, so neither is a flag that names a key at all.
+NON_CREDENTIAL_KEY_WORDS = (
+    "monkey",
+    "hotkey",
+)
+
+
+def credential_flag(argument: Any) -> str | None:
+    """The credential-shaped flag name in one argument, if it carries one.
+
+    Only the flag itself is judged: a value that happens to contain the word
+    "key" is not a credential flag, and a positional argument never is.
+    """
+
+    text = str(argument)
+    if not text.startswith("-"):
+        return None
+    name = text.split("=", 1)[0].lower().lstrip("-")
+    if not name:
+        return None
+    # Whole words rather than substrings: `--max-tokens` counts tokens, it does
+    # not carry one, and refusing it would refuse the ordinary arguments of any
+    # tool that shares this command line.
+    words = [word for word in name.replace("_", "-").split("-") if word]
+    if any(word in CREDENTIAL_ARGUMENT_WORDS for word in words):
+        return name
+    # A trailing `key` is the shape every provider-prefixed spelling shares, and
+    # the qualifier is glued on as often as it is separated (`--openai-key` and
+    # `--mykey` are the same mistake), so both spellings are refused unless what
+    # stands in front of the `key` names an ordering, a relation, or a cache key.
+    if name.endswith("key"):
+        if name in NON_CREDENTIAL_KEY_WORDS:
+            return None
+        qualifier = words[-1][:-3] if len(words) == 1 else words[-2]
+        return None if qualifier in NON_CREDENTIAL_KEY_QUALIFIERS else name
+    return None
 
 
 def reject_credential_arguments(arguments) -> str | None:
     """Refuse credential flags before argparse can echo their values."""
 
     for argument in arguments:
-        lowered = str(argument).lower()
-        for prefix in CREDENTIAL_ARGUMENT_PREFIXES:
-            if lowered.startswith(prefix):
-                return (
-                    f"credentials are not accepted on the command line: {prefix}. "
-                    f"Set {API_KEY_ENV} in the environment instead."
-                )
+        flag = credential_flag(argument)
+        if flag is not None:
+            return (
+                f"credentials are not accepted on the command line: --{flag}. "
+                f"Set {API_KEY_ENV} in the environment instead."
+            )
     return None
+
+
+# What stands in for a positional argument in a refusal: the caller's text is
+# the thing that must not be repeated, so the message names the kind instead.
+POSITIONAL_PLACEHOLDER = "<positional argument>"
+
+
+def unrecognized_argument_names(arguments) -> list[str]:
+    """Name the arguments a parser refused, without quoting what they carried.
+
+    A flag is reported by its `--name` alone, so a value glued on with `=` never
+    reaches the message; a bare positional is reported as a placeholder rather
+    than as its own text, because a pasted secret arrives that way too.
+    """
+
+    names: list[str] = []
+    for argument in arguments:
+        text = str(argument)
+        if text.startswith("-"):
+            name = text.split("=", 1)[0]
+        else:
+            name = POSITIONAL_PLACEHOLDER
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def unknown_command(argv, commands) -> bool:
+    """Whether `argv` names a command this CLI does not declare.
+
+    argparse reports an unknown subcommand by quoting it (`invalid choice:
+    'SUPER-SECRET-VALUE'`), and a pasted credential lands in exactly that
+    position. The command is the first token that is not a flag: the top-level
+    parser declares no option that takes a value before the command, so nothing
+    ahead of it consumes the next token — an unknown flag's value is therefore
+    read as the command and refused by placeholder instead of being echoed.
+    """
+
+    for token in argv:
+        text = str(token)
+        if text.startswith("-"):
+            continue
+        return text not in commands
+    return False
+
+
+def parse_known_options(parser, argv, *, stderr=None):
+    """Parse `argv`, refusing unknown arguments without echoing their values.
+
+    argparse's own `parse_args` reports an unknown argument by printing it —
+    value included. For a parser built without a stream of its own it prints on
+    the process's standard error, where the stream `main` was handed never sees
+    it; for one built with a stream it prints the value into that stream. Either
+    way the value of an argument this CLI does not declare reaches a terminal,
+    and no vocabulary of credential spellings can cover every such argument
+    (`--tokens=…`, `--api-keys=…` and a bare positional all reach it).
+    `parse_known_args` returns those leftovers instead of reporting them, so the
+    refusal can name them without repeating them.
+    """
+
+    args, unrecognized = parser.parse_known_args(argv)
+    if not unrecognized:
+        return args
+    sink = sys.stderr if stderr is None else stderr
+    parser.print_usage(sink)
+    names = ", ".join(unrecognized_argument_names(unrecognized))
+    print(f"{parser.prog}: error: unrecognized arguments: {names}", file=sink)
+    raise SystemExit(2)
 
 
 def _build_parser():
     import argparse
 
-    parser = argparse.ArgumentParser(prog="jev_runner.py")
+    # `allow_abbrev=False` matters for the credential promise: with abbreviations
+    # on, `--r=SUPER-SECRET` is reported as "ambiguous option … could match
+    # --request, --run-dir", which quotes the value back at the terminal.
+    parser = argparse.ArgumentParser(prog="jev_runner.py", allow_abbrev=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run", help="execute one decision operation")
+    run = subparsers.add_parser(
+        "run", help="execute one decision operation", allow_abbrev=False
+    )
     run.add_argument("--request", required=True)
     run.add_argument("--run-dir", required=True)
     run.add_argument("--policy")
 
-    resume = subparsers.add_parser("resume", help="resume a pending decision operation")
+    resume = subparsers.add_parser(
+        "resume", help="resume a pending decision operation", allow_abbrev=False
+    )
     resume.add_argument("--run-dir", required=True)
     resume.add_argument("--input-refs", required=True)
     resume.add_argument("--policy")
@@ -863,8 +1130,6 @@ def main(
     stdout=None,
     stderr=None,
 ) -> int:
-    import sys
-
     arguments = list(sys.argv[1:] if argv is None else argv)
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
@@ -878,8 +1143,17 @@ def main(
     if not arguments:
         parser.print_usage(err)
         return 2
+    if unknown_command(arguments, ("run", "resume")):
+        # Reported here rather than by argparse, which would quote the token it
+        # did not recognise — the position a pasted credential arrives in.
+        print(
+            f"{parser.prog}: error: unknown command: {POSITIONAL_PLACEHOLDER}; "
+            "expected run or resume",
+            file=err,
+        )
+        return 2
     try:
-        args = parser.parse_args(arguments)
+        args = parse_known_options(parser, arguments, stderr=err)
     except SystemExit as exit_error:
         return 2 if exit_error.code else 0
 

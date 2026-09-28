@@ -31,6 +31,7 @@ from jev_runner import (  # noqa: E402
     LeaseHeld,
     NoPendingCall,
     RunnerConfig,
+    parse_known_options,
     reject_credential_arguments,
     write_atomic,
 )
@@ -43,7 +44,7 @@ from relevance import (  # noqa: E402
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="relevance_cli.py")
+    parser = argparse.ArgumentParser(prog="relevance_cli.py", allow_abbrev=False)
     parser.add_argument("--bundle", required=True, help="authority evidence bundle JSON")
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--artifact-type", required=True)
@@ -104,7 +105,7 @@ def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=No
         parser.print_usage(err)
         return 2
     try:
-        args = parser.parse_args(arguments)
+        args = parse_known_options(parser, arguments, stderr=err)
     except SystemExit as exit_error:
         return 2 if exit_error.code else 0
 
