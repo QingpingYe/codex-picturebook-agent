@@ -442,6 +442,15 @@ class ScreeningCliTests(unittest.TestCase):
         self.assertTrue(payload["summary"]["proxy_conflicts"])
         self.assertEqual(payload["proxy_conflicts"][0]["reason"],
                          "proxy_hit_not_escalated")
+        # spec §9.4 sends the disagreement to the plain LLM, so the conflict has
+        # to reach the package and no clear verdict may stand in for the review.
+        conflicts = [entry for entry in payload["escalation_package"]
+                     if entry["reason"] == "proxy_conflict"]
+        self.assertTrue(conflicts)
+        self.assertEqual(payload["summary"]["escalated_by_proxy_conflict"],
+                         len(conflicts))
+        self.assertEqual(payload["may_skip_llm_review_count"], 0)
+        self.assertTrue(any("代理冲突" in note for note in payload["warnings"]))
 
     def test_an_escalated_red_line_is_not_reported_as_a_conflict(self):
         self.script_path.write_text(LITERAL_SCRIPT, encoding="utf-8")

@@ -481,6 +481,59 @@ def detect_proxy_conflicts(proxy_findings, decisions) -> tuple[dict, ...]:
     )
 
 
+def _conflict_escalations(
+    conflicts, decisions, text_by_item, facts_by_item, sources_by_item
+) -> list[dict]:
+    """One escalation entry per literal hit the pre-screen cleared.
+
+    spec §9.4 sends a disagreement between the literal scan and the model to the
+    plain LLM rather than letting the two signals pass each other, so a hit may
+    not stay a clear verdict somebody could skip once the operation is
+    calibrated. The scan reads the whole draft, so it cannot say which page
+    holds the literal: every window that was asked about that rule and answered
+    clear is part of the disagreement.
+    """
+
+    entries: list[dict] = []
+    for conflict in conflicts:
+        dimension = f"{REDLINE_DIMENSION_PREFIX}{conflict['finding_id']}"
+        cleared = [
+            decision for decision in decisions
+            if decision.dimension == dimension and decision.outcome == "screened_clear"
+        ]
+        if not cleared:
+            # The rule was never asked about, so there is no window to name; the
+            # hit still has to reach the LLM, as a draft-scoped entry.
+            entries.append({
+                "item_id": dimension,
+                "dimension": dimension,
+                "scope": "draft",
+                "outcome": "escalate_llm",
+                "reason": "proxy_conflict",
+                "evidence": conflict["evidence"],
+                "facts": {},
+                "probabilities": {},
+                "source_keys": [],
+                "proxy_finding": dict(conflict),
+            })
+            continue
+        for decision in cleared:
+            item_id = decision.item_id.partition("::")[0]
+            entries.append({
+                "item_id": decision.item_id,
+                "dimension": dimension,
+                "scope": "window",
+                "outcome": "escalate_llm",
+                "reason": "proxy_conflict",
+                "evidence": text_by_item.get(item_id, ""),
+                "facts": facts_by_item.get(item_id, {}),
+                "probabilities": dict(decision.probabilities),
+                "source_keys": sources_by_item.get(item_id, []),
+                "proxy_finding": dict(conflict),
+            })
+    return entries
+
+
 def run_screening(
     *,
     run_id: str,
@@ -617,6 +670,10 @@ def run_screening(
         decisions.extend(batch_decisions)
         routes.extend(batch_routes)
 
+    conflicts = detect_proxy_conflicts(proxy_findings, decisions)
+    conflict_entries = _conflict_escalations(
+        conflicts, decisions, text_by_item, facts_by_item, sources_by_item
+    )
     escalation_package = [
         {
             "item_id": decision.item_id,
@@ -630,12 +687,12 @@ def run_screening(
         }
         for decision in decisions
         if decision.outcome != "screened_clear"
-    ]
+    ] + conflict_entries
 
-    conflicts = detect_proxy_conflicts(proxy_findings, decisions)
     summary = summarise(decisions)
     summary["catalog_gap"] = len(rules) == 0
     summary["proxy_conflicts"] = len(conflicts)
+    summary["escalated_by_proxy_conflict"] = len(conflict_entries)
 
     return ScreeningOutcome(
         decisions=tuple(decisions),

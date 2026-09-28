@@ -190,6 +190,12 @@ def _warnings(*, outcome, rules, calibration_status, item_count, age_band) -> li
             "运行目录里有无法读作本次请求的记录（见 blocked_records）："
             "相关批次按 runtime_failure 处理，不会被重新发送，需人工处理后重跑。"
         )
+    if outcome.proxy_conflicts:
+        notes.append(
+            f"有 {len(outcome.proxy_conflicts)} 条代理冲突（字面扫描命中、"
+            "Jev 却判为 clear，见 proxy_conflicts）：spec §9.4 要求把这类分歧交给"
+            "普通 LLM，因此本 run 的 screened_clear 不缩减复核范围。"
+        )
     if not age_band:
         notes.append("未提供 --age-band：年龄理解风险维度缺少目标年龄上下文。")
     return notes
@@ -214,6 +220,11 @@ def _build_report(
         for decision in outcome.decisions
         if may_skip_llm_review(decision, calibration_status)
     ]
+    if outcome.proxy_conflicts:
+        # spec §9.4 sends a literal hit the model cleared to the plain LLM, so
+        # while one is outstanding no clear verdict in this run may reduce the
+        # review — the disagreement is exactly what a skip would hide.
+        skip_items = []
     return {
         "schema_version": REPORT_SCHEMA,
         "operation": OPERATION,

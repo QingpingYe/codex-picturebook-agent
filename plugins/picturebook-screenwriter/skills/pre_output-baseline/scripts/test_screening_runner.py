@@ -331,6 +331,31 @@ class RunScreeningTests(unittest.TestCase):
         self.assertIn("screened_clear_ratio", outcome.summary)
 
 
+    def test_a_proxy_conflict_reaches_the_escalation_package(self):
+        # spec §9.4 sends the disagreement to the plain LLM, so it has to reach
+        # the package rather than only the report's counter — otherwise a
+        # calibrated run could skip the very item the two signals disagree on.
+        findings = (Finding("redline-aaa", PROXY_SOURCE, "FAIL", "候选命中", "变勇敢了"),)
+        outcome = self._run(self._clear_client(), proxy_findings=findings)
+        self.assertTrue(outcome.proxy_conflicts)
+        entries = [
+            entry for entry in outcome.escalation_package
+            if entry["reason"] == "proxy_conflict"
+        ]
+        self.assertTrue(entries)
+        self.assertEqual(
+            outcome.summary["escalated_by_proxy_conflict"], len(entries)
+        )
+        for entry in entries:
+            with self.subTest(item=entry["item_id"]):
+                self.assertEqual(entry["outcome"], "escalate_llm")
+                self.assertEqual(entry["dimension"], "redline:redline-aaa")
+                self.assertEqual(entry["proxy_finding"]["finding_id"], "redline-aaa")
+                # Every window asked about that rule is part of the
+                # disagreement, so each entry carries its own window's text.
+                self.assertTrue(entry["evidence"].strip())
+
+
 class ProxyConflictTests(unittest.TestCase):
     def test_a_proxy_hit_that_was_not_escalated_is_a_conflict(self):
         from screening import ScreeningDecision
