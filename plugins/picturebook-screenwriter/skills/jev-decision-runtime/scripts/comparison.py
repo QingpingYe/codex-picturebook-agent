@@ -68,9 +68,24 @@ def validate_identity(payload: Any) -> None:
 
 
 def identity_digest(identity: Mapping[str, Any]) -> str:
-    """A stable digest of the shared case identity."""
+    """A stable digest of the shared case identity.
 
-    return "sha256:" + sha256_hex(canonical_json(dict(identity)))
+    Only the gate fields are digested. The digest names the shared case, so a
+    key the comparability gate never reads must not change that name — and a
+    missing gate field is refused here rather than digested into a name that
+    looks like a case.
+    """
+
+    if not isinstance(identity, Mapping):
+        raise ValueError("identity must be an object of gate fields")
+    missing = [name for name in IDENTITY_FIELDS if name not in identity]
+    if missing:
+        raise ValueError(
+            "identity is missing the gate field(s) " + ", ".join(missing)
+        )
+    return "sha256:" + sha256_hex(
+        canonical_json({name: identity[name] for name in IDENTITY_FIELDS})
+    )
 
 
 def comparability(
@@ -176,6 +191,12 @@ def describe_metric(name: str, llm_value: Any, jev_value: Any) -> str:
     return f"{llm_value} → {jev_value} ({jev_number / llm_number:.2f}×)"
 
 
+def _cell(value: Any, side: str) -> str:
+    """One table cell, naming the side when nothing was measured there."""
+
+    return f"未测得（{side}）" if value is None else str(value)
+
+
 def report_to_markdown(report: Mapping[str, Any]) -> str:
     lines = ["## 路径对比", ""]
     if not report.get("comparable"):
@@ -191,7 +212,12 @@ def report_to_markdown(report: Mapping[str, Any]) -> str:
     llm = report.get("llm", {})
     jev = report.get("jev_assisted", {})
     for name in METRIC_NAMES:
-        lines.append(f"| {name} | {llm.get(name)} | {jev.get(name)} |")
+        # A missing measurement has to say which side is missing it, or a row
+        # reading `100 | None` leaves the reader to guess what was measured.
+        lines.append(
+            f"| {name} | {_cell(llm.get(name), '普通 LLM')} "
+            f"| {_cell(jev.get(name), 'Jev 辅助')} |"
+        )
     lines.append("")
     for name in METRIC_NAMES:
         lines.append(f"- {name}: {describe_metric(name, llm.get(name), jev.get(name))}")

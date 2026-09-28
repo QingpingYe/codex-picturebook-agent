@@ -96,6 +96,23 @@ class IdentityTests(unittest.TestCase):
         )
 
 
+    def test_the_identity_digest_ignores_a_key_outside_the_gate(self):
+        # The digest names the shared case, and the gate never reads a key
+        # outside IDENTITY_FIELDS: letting one move the digest would give the
+        # same case two names while `comparability` still calls it comparable.
+        self.assertEqual(
+            identity_digest(identity()),
+            identity_digest(identity(model_label="jev-1.13.0")),
+        )
+
+    def test_the_identity_digest_refuses_an_incomplete_identity(self):
+        incomplete = identity()
+        del incomplete["draft_sha256"]
+        with self.assertRaises(ValueError) as raised:
+            identity_digest(incomplete)
+        self.assertIn("draft_sha256", str(raised.exception))
+
+
 class ComparabilityTests(unittest.TestCase):
     def test_matching_identities_are_comparable(self):
         comparable, reasons = comparability(identity(), identity())
@@ -194,6 +211,18 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## 路径对比", text)
         self.assertIn("input_tokens", text)
         self.assertIn("estimated_cost_usd", text)
+
+    def test_markdown_says_which_side_a_missing_measurement_belongs_to(self):
+        # A row reading `100 | None` makes the reader guess whether the plain-LLM
+        # side or the Jev side never measured it.
+        report = self.report()
+        report["jev_assisted"] = dict(report["jev_assisted"], cache_tokens=None)
+        row = next(
+            line for line in report_to_markdown(report).splitlines()
+            if line.startswith("| cache_tokens ")
+        )
+        self.assertIn("未测得（Jev 辅助）", row)
+        self.assertNotIn("None", row)
 
     def test_markdown_states_when_the_runs_are_not_comparable(self):
         text = report_to_markdown(build_report(
