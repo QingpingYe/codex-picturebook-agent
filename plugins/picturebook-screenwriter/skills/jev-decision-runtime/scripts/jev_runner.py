@@ -1055,6 +1055,28 @@ def unrecognized_argument_names(arguments) -> list[str]:
     return names
 
 
+def unknown_command(argv, commands) -> bool:
+    """Whether `argv` names a command this CLI does not declare.
+
+    argparse reports an unknown subcommand by quoting it (`invalid choice:
+    'SUPER-SECRET-VALUE'`), and a pasted credential lands in exactly that
+    position. Every option this CLI declares takes a value, so the command is
+    the first token that is neither an option nor an option's value.
+    """
+
+    expecting_value = False
+    for token in argv:
+        text = str(token)
+        if expecting_value:
+            expecting_value = False
+            continue
+        if text.startswith("-"):
+            expecting_value = "=" not in text
+            continue
+        return text not in commands
+    return False
+
+
 def parse_known_options(parser, argv, *, stderr=None):
     """Parse `argv`, refusing unknown arguments without echoing their values.
 
@@ -1082,15 +1104,22 @@ def parse_known_options(parser, argv, *, stderr=None):
 def _build_parser():
     import argparse
 
-    parser = argparse.ArgumentParser(prog="jev_runner.py")
+    # `allow_abbrev=False` matters for the credential promise: with abbreviations
+    # on, `--r=SUPER-SECRET` is reported as "ambiguous option … could match
+    # --request, --run-dir", which quotes the value back at the terminal.
+    parser = argparse.ArgumentParser(prog="jev_runner.py", allow_abbrev=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run", help="execute one decision operation")
+    run = subparsers.add_parser(
+        "run", help="execute one decision operation", allow_abbrev=False
+    )
     run.add_argument("--request", required=True)
     run.add_argument("--run-dir", required=True)
     run.add_argument("--policy")
 
-    resume = subparsers.add_parser("resume", help="resume a pending decision operation")
+    resume = subparsers.add_parser(
+        "resume", help="resume a pending decision operation", allow_abbrev=False
+    )
     resume.add_argument("--run-dir", required=True)
     resume.add_argument("--input-refs", required=True)
     resume.add_argument("--policy")
@@ -1116,6 +1145,15 @@ def main(
     parser = _build_parser()
     if not arguments:
         parser.print_usage(err)
+        return 2
+    if unknown_command(arguments, ("run", "resume")):
+        # Reported here rather than by argparse, which would quote the token it
+        # did not recognise — the position a pasted credential arrives in.
+        print(
+            f"{parser.prog}: error: unknown command: {POSITIONAL_PLACEHOLDER}; "
+            "expected run or resume",
+            file=err,
+        )
         return 2
     try:
         args = parse_known_options(parser, arguments, stderr=err)

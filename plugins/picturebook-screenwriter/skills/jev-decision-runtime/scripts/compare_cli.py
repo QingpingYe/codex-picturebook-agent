@@ -73,7 +73,7 @@ class _StreamArgumentParser(argparse.ArgumentParser):
 
 
 def _build_parser(stderr=None) -> argparse.ArgumentParser:
-    parser = _StreamArgumentParser(prog="compare_cli.py", stream=stderr)
+    parser = _StreamArgumentParser(prog="compare_cli.py", stream=stderr, allow_abbrev=False)
     parser.add_argument("--run-dir", required=True,
                         help="the jev_assisted run directory holding the traces")
     parser.add_argument("--llm-usage", required=True,

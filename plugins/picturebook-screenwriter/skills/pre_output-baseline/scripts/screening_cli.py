@@ -84,7 +84,9 @@ class _StreamParser(argparse.ArgumentParser):
 
 
 def _build_parser(stdout=None, stderr=None) -> argparse.ArgumentParser:
-    parser = _StreamParser(prog="screening_cli.py", stdout=stdout, stderr=stderr)
+    parser = _StreamParser(
+        prog="screening_cli.py", stdout=stdout, stderr=stderr, allow_abbrev=False
+    )
     parser.add_argument(
         "--script", required=True, help="the storyboard draft markdown to screen"
     )

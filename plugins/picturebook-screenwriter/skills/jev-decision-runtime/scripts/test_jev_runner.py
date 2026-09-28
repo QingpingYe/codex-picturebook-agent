@@ -933,6 +933,26 @@ class CliTests(RunnerCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["status"], "succeeded")
 
+    def test_an_abbreviated_flag_is_refused_without_quoting_its_value(self):
+        # Abbreviations are off, so `--r=…` is an unknown argument rather than
+        # an ambiguity that names the value it could not resolve.
+        path = self._write("request.json", make_request())
+        code, out, err = self._main(
+            ["run", "--request", str(path), "--run-dir", str(self.run_dir),
+             "--r=SUPER-SECRET-VALUE"]
+        )
+        self.assertEqual(code, 2)
+        self.assertNotIn("SUPER-SECRET-VALUE", err)
+        self.assertNotIn("SUPER-SECRET-VALUE", out)
+        self.assertIn("--r", err)
+
+    def test_an_unknown_command_is_refused_without_quoting_it(self):
+        code, out, err = self._main(["SUPER-SECRET-VALUE"])
+        self.assertEqual(code, 2)
+        self.assertNotIn("SUPER-SECRET-VALUE", err)
+        self.assertNotIn("SUPER-SECRET-VALUE", out)
+        self.assertIn("unknown command", err)
+
     def test_credential_arguments_are_refused_without_echoing_the_value(self):
         for marker in CREDENTIAL_ARGUMENT_MARKERS:
             with self.subTest(marker=marker):
