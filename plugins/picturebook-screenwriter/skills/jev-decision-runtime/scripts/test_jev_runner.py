@@ -21,7 +21,7 @@ from jev_client import (
 )
 from jev_runner import (
     AmbiguousAttempt,
-    CREDENTIAL_ARGUMENT_PREFIXES,
+    CREDENTIAL_ARGUMENT_MARKERS,
     HARMLESS_ATTEMPT_STATUSES,
     LeaseHeld,
     NoPendingCall,
@@ -30,6 +30,7 @@ from jev_runner import (
     acquire_lease,
     build_pending_call,
     context_path,
+    credential_flag,
     discard_failed_pending_call,
     execute,
     lease_path,
@@ -40,6 +41,7 @@ from jev_runner import (
     pending_operation_ids,
     read_decision_context,
     read_json,
+    reject_credential_arguments,
     remaining_pending_call,
     release_lease,
     request_path,
@@ -47,6 +49,7 @@ from jev_runner import (
     result_path,
     run_operation,
     trace_path,
+    verdict_counts,
     write_atomic,
 )
 
@@ -243,6 +246,90 @@ class SuccessfulRunTests(RunnerCase):
         self.assertEqual(result["error_class"], "model_version_mismatch")
         self.assertFalse(result_path(self.run_dir, self.operation_id).exists())
         self.assertTrue(pending_path(self.run_dir, self.operation_id).is_file())
+
+
+class VerdictCountTests(RunnerCase):
+    """The trace carries the operation's own verdict counts, not a pair of zeros.
+
+    The comparison report's escalation rate and every calibration suggestion
+    built on it read these two fields, so a runner that always wrote zero made
+    the whole Phase 4 report structurally empty.
+    """
+
+    def _trace(self):
+        return read_json(trace_path(self.run_dir, self.operation_id, 1))
+
+    def test_the_trace_records_the_counts_the_hook_answers_with(self):
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        run_operation(
+            make_request(), self.config, client,
+            verdicts=lambda request, payload: {
+                "screened_clear_count": 3, "escalated_count": 1,
+            },
+        )
+        trace = self._trace()
+        self.assertEqual(trace["screened_clear_count"], 3)
+        self.assertEqual(trace["escalated_count"], 1)
+
+    def test_a_run_without_a_hook_records_the_zero_pair(self):
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+        run_operation(make_request(), self.config, client)
+        trace = self._trace()
+        self.assertEqual(trace["screened_clear_count"], 0)
+        self.assertEqual(trace["escalated_count"], 0)
+
+    def test_a_hook_that_raises_never_loses_the_paid_call(self):
+        # Routing an answer the provider has already billed for may not cost
+        # the run its terminal result. The counts fall back to the zero pair,
+        # which reads downstream as "nothing here to calibrate from" rather
+        # than as "this batch was clear".
+        client, _ = self.client([TransportResponse(200, success_body(), {})])
+
+        def broken(request, payload):
+            raise RuntimeError("routing exploded")
+
+        result = run_operation(make_request(), self.config, client, verdicts=broken)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(self._trace()["escalated_count"], 0)
+        self.assertEqual(self._trace()["screened_clear_count"], 0)
+        self.assertFalse(pending_path(self.run_dir, self.operation_id).exists())
+
+    def test_a_failed_attempt_records_no_verdicts_and_calls_no_hook(self):
+        # A batch that did not settle decided nothing, so it may not claim a
+        # single cleared or escalated verdict.
+        body = json.dumps({"model": "jev-1.13.0", "answers": {}, "usage": {}})
+        client, _ = self.client([TransportResponse(200, body, {})])
+        asked = []
+        result = run_operation(
+            make_request(), self.config, client,
+            verdicts=lambda request, payload: asked.append(1) or {
+                "screened_clear_count": 9, "escalated_count": 9,
+            },
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(asked, [])
+        self.assertEqual(self._trace()["screened_clear_count"], 0)
+        self.assertEqual(self._trace()["escalated_count"], 0)
+
+    def test_a_hook_that_answers_with_nonsense_records_the_zero_pair(self):
+        for counts in (
+            None, "3", 7, {"escalated_count": 1},
+            {"screened_clear_count": -1, "escalated_count": 0},
+            {"screened_clear_count": True, "escalated_count": 2},
+        ):
+            with self.subTest(counts=counts):
+                self.assertEqual(
+                    verdict_counts(lambda *_: counts, {}, {}), (0, 0)
+                )
+
+    def test_a_hook_that_answers_with_a_pair_is_read_as_a_pair(self):
+        self.assertEqual(
+            verdict_counts(
+                lambda *_: {"screened_clear_count": 0, "escalated_count": 4},
+                {}, {},
+            ),
+            (0, 4),
+        )
 
 
 class IncompleteResponseTests(RunnerCase):
@@ -846,17 +933,42 @@ class CliTests(RunnerCase):
         self.assertEqual(json.loads(out)["status"], "succeeded")
 
     def test_credential_arguments_are_refused_without_echoing_the_value(self):
-        for prefix in CREDENTIAL_ARGUMENT_PREFIXES:
-            with self.subTest(prefix=prefix):
+        for marker in CREDENTIAL_ARGUMENT_MARKERS:
+            with self.subTest(marker=marker):
                 stdout = io.StringIO()
                 stderr = io.StringIO()
                 code = main(
-                    ["run", f"{prefix}=SUPER-SECRET-VALUE", "--run-dir", str(self.run_dir)],
+                    ["run", f"--{marker}=SUPER-SECRET-VALUE",
+                     "--run-dir", str(self.run_dir)],
                     environ={}, stdout=stdout, stderr=stderr,
                 )
                 self.assertEqual(code, 2)
                 self.assertNotIn("SUPER-SECRET-VALUE", stderr.getvalue())
                 self.assertNotIn("SUPER-SECRET-VALUE", stdout.getvalue())
+
+    def test_a_provider_prefixed_credential_flag_is_refused_too(self):
+        # `--openai-api-key=…` is the same mistake as `--api-key=…`. argparse
+        # prints the value it was handed to the process's own stderr before any
+        # of these CLIs can refuse the request, so the gate has to catch the
+        # shape of the flag rather than a fixed list of spellings.
+        for flag in ("--openai-api-key", "--OPENAI_API_KEY", "--anthropic-api-key",
+                     "--access-key", "--secret_key", "--client-secret",
+                     "--my-token", "--password", "--db-credential"):
+            with self.subTest(flag=flag):
+                refusal = reject_credential_arguments([f"{flag}=SUPER-SECRET-VALUE"])
+                self.assertIsNotNone(refusal)
+                self.assertNotIn("SUPER-SECRET-VALUE", refusal)
+
+    def test_an_ordinary_flag_or_value_is_not_read_as_a_credential(self):
+        # The gate may not refuse these CLIs' own arguments, and it judges the
+        # flag name only: a path that happens to contain the word "key" is data
+        # the caller is allowed to pass.
+        for argument in ("--run-dir", "--input-refs", "--request", "--policy",
+                         "--script", "--window-width", "--escalation-out",
+                         "--run-dir=C:/tmp/keys", "scripts/keys.json"):
+            with self.subTest(argument=argument):
+                self.assertIsNone(credential_flag(argument))
+                self.assertIsNone(reject_credential_arguments([argument]))
 
     def test_a_missing_policy_file_is_reported_as_a_contract_failure(self):
         path = self._write("request.json", make_request())

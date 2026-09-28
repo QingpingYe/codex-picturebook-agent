@@ -426,8 +426,43 @@ class TraceLoadingTests(unittest.TestCase):
             trace("text_quality_prefilter", attempt=2, escalated_count=7,
                   screened_clear_count=3, item_count=10),
         ))
-        self.assertEqual(metrics.quality_items_entered, 10)
-        self.assertEqual(metrics.notes and True, True)
+        # The row is "how much of this operation went to the plain LLM", so it
+        # reads the operation's own escalation count: 4 escalated in the first
+        # trace plus 7 in the second. `item_count` (10) is the number of
+        # authority pages those requests cited, which is a different quantity.
+        self.assertEqual(metrics.quality_items_entered, 11)
+        self.assertIn("escalated=11", metrics.notes)
+
+    def test_the_two_items_entered_rows_read_their_own_operation(self):
+        # The rows count different units — chunks of knowledge and page
+        # dimensions — so one number cannot stand in for both, and a run that
+        # only screened pages must not report the knowledge row at all.
+        both = jev_metrics((
+            trace("knowledge_relevance", escalated_count=3, screened_clear_count=7,
+                  item_count=10),
+            trace("text_quality_prefilter", escalated_count=11,
+                  screened_clear_count=21, item_count=32),
+        ))
+        self.assertEqual(both.knowledge_items_entered, 3)
+        self.assertEqual(both.quality_items_entered, 11)
+        pages_only = jev_metrics((trace("text_quality_prefilter"),))
+        self.assertIsNone(pages_only.knowledge_items_entered)
+        self.assertEqual(pages_only.quality_items_entered, 4)
+
+    def test_two_runs_in_one_directory_are_named_not_summed_silently(self):
+        # Two run ids of one operation are two measurements. Their sum may not
+        # read as a single run, so it is named where the number is.
+        metrics = jev_metrics((
+            trace("text_quality_prefilter"),
+            trace("text_quality_prefilter", run_id="20260923-example-0002",
+                  input_tokens=1000, elapsed_ms=100),
+        ))
+        self.assertIn("runs=2", metrics.notes)
+        self.assertEqual(metrics.input_tokens, 3000)
+
+    def test_one_run_gets_no_run_count_note(self):
+        metrics = jev_metrics((trace("text_quality_prefilter"),))
+        self.assertFalse([note for note in metrics.notes if note.startswith("runs=")])
 
 
 class LlmUsageTests(unittest.TestCase):
@@ -474,54 +509,102 @@ class LlmUsageTests(unittest.TestCase):
 
 
 class CalibrationSuggestionTests(unittest.TestCase):
-    def _report(self, escalated, screened_clear, failed=0):
-        return {
-            "comparable": True,
-            "jev_assisted": {
-                "path": "jev_assisted",
-                "quality_items_entered": escalated + screened_clear,
-                "notes": [f"escalated={escalated}", f"screened_clear={screened_clear}",
-                          f"runtime_failure={failed}"],
-            },
-        }
+    """The advice is per operation, from that operation's own numbers."""
+
+    def _report(self, *, comparable=True, **operations):
+        """The part of a comparison report `calibration_suggestions` reads.
+
+        Each keyword is one measured operation and its `(escalated,
+        screened_clear, runtime_failure)` counts. Run-level notes are absent on
+        purpose: a blended rate across operations is what the per-operation
+        advice exists to stop using.
+        """
+
+        entries = []
+        for operation, counts in operations.items():
+            escalated, screened_clear = counts[0], counts[1]
+            failed = counts[2] if len(counts) > 2 else 0
+            entries.append({
+                "run_id": "20260923-example-0001",
+                "operation": operation,
+                "screened_clear_count": screened_clear,
+                "escalated_count": escalated,
+                "runtime_failure": failed,
+            })
+        return {"comparable": comparable, "jev_operations": entries}
+
+    def _entry(self, report, operation="text_quality_prefilter"):
+        suggestions = calibration_suggestions(
+            load_policy(default_policy_path()), report
+        )
+        return next(s for s in suggestions if s["operation"] == operation)
 
     def test_an_experimental_operation_with_any_failure_stays_experimental(self):
-        suggestions = calibration_suggestions(
-            load_policy(default_policy_path()),
-            self._report(escalated=1, screened_clear=9, failed=1),
-        )
-        entry = next(s for s in suggestions if s["operation"] == "text_quality_prefilter")
+        entry = self._entry(self._report(text_quality_prefilter=(1, 9, 1)))
         self.assertEqual(entry["suggestion"], "keep_experimental")
 
     def test_a_very_high_escalation_rate_suggests_reviewing_thresholds(self):
-        suggestions = calibration_suggestions(
-            load_policy(default_policy_path()),
-            self._report(escalated=10, screened_clear=0),
-        )
-        entry = next(s for s in suggestions if s["operation"] == "text_quality_prefilter")
+        entry = self._entry(self._report(text_quality_prefilter=(10, 0)))
         self.assertEqual(entry["suggestion"], "review_thresholds")
 
     def test_an_experimental_operation_is_never_auto_promoted(self):
-        suggestions = calibration_suggestions(
-            load_policy(default_policy_path()),
-            self._report(escalated=1, screened_clear=99),
-        )
-        entry = next(s for s in suggestions if s["operation"] == "text_quality_prefilter")
+        entry = self._entry(self._report(text_quality_prefilter=(1, 99)))
         self.assertEqual(entry["current"], "experimental")
-        self.assertIn(entry["suggestion"], ("eligible_for_calibrated", "keep_experimental"))
+        self.assertIn(entry["suggestion"],
+                      ("eligible_for_calibrated", "keep_experimental"))
         self.assertNotEqual(entry["current"], entry["suggestion"])
 
-    def test_every_operation_gets_a_suggestion(self):
+    def test_every_measured_operation_gets_a_suggestion(self):
         suggestions = calibration_suggestions(
-            load_policy(default_policy_path()), self._report(1, 9)
+            load_policy(default_policy_path()),
+            self._report(knowledge_relevance=(1, 9), text_quality_prefilter=(1, 9)),
         )
-        self.assertEqual(len(suggestions), 2)
+        self.assertEqual(
+            [entry["operation"] for entry in suggestions],
+            ["knowledge_relevance", "text_quality_prefilter"],
+        )
+
+    def test_an_operation_this_run_never_measured_gets_no_suggestion(self):
+        # "No measurement" is not evidence in either direction, so the report
+        # says nothing about the operation instead of suggesting a status for
+        # numbers it never saw.
+        suggestions = calibration_suggestions(
+            load_policy(default_policy_path()),
+            self._report(text_quality_prefilter=(1, 9)),
+        )
+        self.assertEqual([entry["operation"] for entry in suggestions],
+                         ["text_quality_prefilter"])
+
+    def test_each_operation_is_judged_by_its_own_numbers(self):
+        # The measured case: knowledge escalated nothing while the page
+        # pre-screen escalated almost everything. Blended into one rate the
+        # pair looked acceptable and both operations were told they could be
+        # promoted, including the one whose thresholds are too tight.
+        report = self._report(knowledge_relevance=(0, 40),
+                              text_quality_prefilter=(47, 3))
+        self.assertEqual(self._entry(report, "knowledge_relevance")["suggestion"],
+                         "eligible_for_calibrated")
+        entry = self._entry(report, "text_quality_prefilter")
+        self.assertEqual(entry["suggestion"], "review_thresholds")
+        self.assertIn("94%", entry["reason"])
 
     def test_an_incomparable_report_still_produces_suggestions(self):
-        report = self._report(1, 9)
-        report["comparable"] = False
-        suggestions = calibration_suggestions(load_policy(default_policy_path()), report)
-        self.assertTrue(suggestions)
+        report = self._report(comparable=False, text_quality_prefilter=(1, 9))
+        entry = self._entry(report)
+        self.assertEqual(entry["suggestion"], "keep_experimental")
+        self.assertIn("不可比较", entry["reason"])
+
+    def test_a_trace_naming_an_unknown_operation_produces_no_advice(self):
+        # A hand-written trace cannot be priced against a policy, so it gives
+        # no advice — the entry is still listed in `jev_operations` for the
+        # reader, and the report does not raise.
+        report = self._report(not_an_operation=(1, 9))
+        self.assertEqual(calibration_suggestions(
+            load_policy(default_policy_path()), report), ())
+
+    def test_a_report_without_jev_operations_produces_no_advice(self):
+        self.assertEqual(calibration_suggestions(
+            load_policy(default_policy_path()), {"comparable": True}), ())
 
 
 class BuildCaseReportTests(unittest.TestCase):
@@ -636,7 +719,90 @@ class BuildCaseReportTests(unittest.TestCase):
             run_dir=self.run_dir, llm_usage_path=self.usage_path,
             policy=load_policy(default_policy_path()),
         )
-        self.assertEqual(len(report["calibration"]), 2)
+        # Only the operation this run measured is advised on, and the advice
+        # comes from that operation's own counts.
+        self.assertEqual(
+            [entry["operation"] for entry in report["calibration"]],
+            ["text_quality_prefilter"],
+        )
+        measured = report["jev_operations"][0]
+        self.assertEqual(measured["screened_clear_count"], 6)
+        self.assertEqual(measured["escalated_count"], 4)
+
+    def test_a_directory_holding_two_runs_is_not_comparable(self):
+        # The same draft screened twice under two run ids is two measurements,
+        # and the run directory cannot say which of them the hand-copied
+        # plain-LLM usage describes. Summing them silently would double every
+        # number in the Jev column.
+        write_atomic(
+            self.run_dir / "jev" / "20260923-example-0002-text_quality_prefilter"
+            / "trace" / "0001.json",
+            trace("text_quality_prefilter", run_id="20260923-example-0002"),
+        )
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        self.assertFalse(report["comparable"])
+        self.assertTrue(any("runs" in reason
+                            for reason in report["comparability_reasons"]))
+        self.assertEqual(
+            report["runs"], ["20260923-example-0001", "20260923-example-0002"]
+        )
+        # The sum is still labelled where the number is, and each run's own
+        # numbers stay readable beside it.
+        self.assertIn("runs=2", report["jev_assisted"]["notes"])
+        self.assertEqual([entry["run_id"] for entry in report["jev_operations"]],
+                         ["20260923-example-0001", "20260923-example-0002"])
+
+    def test_one_run_is_not_reported_as_a_multi_run_directory(self):
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        self.assertEqual(report["runs"], ["20260923-example-0001"])
+        self.assertFalse([reason for reason in report["comparability_reasons"]
+                          if "runs" in reason])
+
+    def test_a_trace_that_names_no_case_id_never_reads_as_comparable(self):
+        # Nothing on disk then attests the case the entry declares, and the two
+        # sides would be "the same case" only because both were copied from the
+        # same hand-written line.
+        write_atomic(
+            self.run_dir / "jev" / "text_quality_prefilter" / "trace" / "0001.json",
+            trace("text_quality_prefilter", benchmark_case_id=None),
+        )
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        self.assertFalse(report["comparable"])
+        self.assertTrue(any("benchmark_case_id" in reason
+                            for reason in report["comparability_reasons"]))
+        self.assertNotIn("benchmark_case_id", report["identity_attestation"]["verified"])
+
+    def test_a_directory_with_no_trace_is_not_a_comparison(self):
+        empty = self.run_dir / "empty"
+        empty.mkdir()
+        report = build_case_report(
+            run_dir=empty, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        self.assertFalse(report["comparable"])
+        self.assertTrue(any("benchmark_case_id" in reason
+                            for reason in report["comparability_reasons"]))
+
+    def test_the_markdown_reports_the_traces_it_left_out(self):
+        write_atomic(
+            self.run_dir / "jev" / "knowledge_relevance" / "trace" / "0001.json",
+            trace("knowledge_relevance", benchmark_case_id="sha256:" + "f" * 64),
+        )
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        text = report_to_markdown(report)
+        self.assertIn("trace 数：1（属于其它 case：1）", text)
 
 
 if __name__ == "__main__":

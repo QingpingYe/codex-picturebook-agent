@@ -12,11 +12,29 @@ for _relative in ("jev-decision-runtime", "knowledge-loader", "pre_output-baseli
     sys.path.insert(0, str(ROOT / "skills" / _relative / "scripts"))
 
 from compare_cli import main as compare_main  # noqa: E402
-from comparison import COMPARISON_SCHEMA, build_case_report, report_to_markdown  # noqa: E402
+from comparison import (  # noqa: E402
+    COMPARISON_SCHEMA,
+    build_case_report,
+    load_traces,
+    report_to_markdown,
+)
 from decision_contract import default_policy_path, load_policy  # noqa: E402
-from jev_runner import write_atomic  # noqa: E402
+from jev_client import (  # noqa: E402
+    API_KEY_ENV,
+    FakeTransport,
+    JevClient,
+    TransportResponse,
+)
+from jev_runner import RunnerConfig, write_atomic  # noqa: E402
+from page_quality import parse_script_pages  # noqa: E402
+from recall import partition  # noqa: E402
+from redline_catalog import RedlineRule, catalog_from_bundle  # noqa: E402
+from relevance import screen_candidates  # noqa: E402
+from required_marking import mark_bundle  # noqa: E402
+from screening_runner import run_screening, screening_items  # noqa: E402
 
 CASE_ID = "sha256:" + "0" * 64
+RUN_ID = "20260923-integration-0001"
 
 
 def identity():
@@ -246,6 +264,301 @@ def _run_cli(argv):
     stdout, stderr = io.StringIO(), io.StringIO()
     code = compare_main(argv, stdout=stdout, stderr=stderr)
     return code, stdout.getvalue(), stderr.getvalue()
+
+
+# --- what the report reads out of a run that really happened ----------------
+
+SCRIPT = """# 学会分享
+
+| # | 页码 | Text | 插图 |
+| --- | --- | --- | --- |
+| 1 | 1 | Miles found a red ball. / He held it tight. | 男孩抱着红球 |
+| 2 | 2 | "Mine!" he said. | 男孩转身 |
+| 3 | 3 | Miles rolled the ball to her. / "Let's play!" | 两人一起玩 |
+"""
+
+CORRECTIONS_BODY = """# 纠正台账
+
+## 强制性禁止条目
+
+绝不可把解决问题的方式写成"变勇敢了"。
+
+## 红线机器可读块
+
+<!-- machine-data: redline_terms -->
+```yaml
+redline_terms:
+  - "变勇敢了"
+  - "魔法解决一切"
+```
+"""
+
+WORLDVIEW_BODY = """# 世界观总纲
+
+## 核心价值主张
+
+勇气不是不害怕，而是害怕时仍然向前。
+
+## 创作红线不变量
+
+- 迈尔斯不能飞行。
+
+## 场景清单
+
+| 场景 | 说明 |
+| --- | --- |
+| 森林 | 迈尔斯家附近 |
+"""
+
+REFERENCES_BODY = """# 参考资料
+
+## 参考书目
+
+- 《森林的故事》
+
+## 备选素材
+
+- 树屋草图
+"""
+
+PAGES = parse_script_pages(SCRIPT)
+RELEVANCE_QUESTIONS = ("relevant", "usable_evidence",
+                       "contradicts_task_assumption", "instruction_like_content")
+REDLINE_RULES = (
+    RedlineRule("redline-aaa", "变勇敢了", "禁止直接写成变勇敢了",
+                "海外绘本/小老鼠迈尔斯/corrections", 17),
+    RedlineRule("redline-bbb", "魔法解决一切", "禁止用魔法解决冲突",
+                "海外绘本/小老鼠迈尔斯/corrections", 17),
+)
+
+
+def noul(value):
+    return {"type": "noul", "noul": value}
+
+
+def authority_bundle():
+    return {
+        "items": ({"key": "海外绘本/小老鼠迈尔斯/corrections",
+                   "doc_token": "doxcnExample", "revision_id": 17,
+                   "title": "海外绘本/小老鼠迈尔斯/corrections",
+                   "content": CORRECTIONS_BODY, "source_revisions": {"node-a": "17"},
+                   "status": "published", "index_synced": True},),
+        "warnings": (), "offline": False, "fetched_at": "2026-09-23T10:30:00+08:00",
+    }
+
+
+KNOWLEDGE_BUNDLE = {
+    "items": tuple(
+        {
+            "key": key, "doc_token": f"doxcn{index}", "revision_id": 17,
+            "title": key, "content": body, "source_revisions": {"node-a": "17"},
+            "status": "published", "index_synced": True,
+        }
+        for index, (key, body) in enumerate((
+            ("海外绘本/小老鼠迈尔斯/worldview", WORLDVIEW_BODY),
+            ("海外绘本/小老鼠迈尔斯/references", REFERENCES_BODY),
+        ))
+    ),
+    "warnings": (), "offline": False, "fetched_at": "2026-09-23T10:30:00+08:00",
+}
+
+
+def all_clear_answers():
+    """Exactly the question set the pre-screen asks, every answer in the clear band.
+
+    Supplying an answer for a question that was not asked is rejected as an
+    unknown answer id, so this mirrors `screening_items` rather than guessing.
+    """
+
+    return {
+        f"{item['item_id']}::{dimension}": noul(0.05)
+        for item in screening_items(PAGES, REDLINE_RULES)
+        for dimension in item["dimensions"]
+    }
+
+
+def knowledge_candidates():
+    """The soft chunks the relevance operation will really ask about."""
+
+    _always_kept, candidates = partition(
+        mark_bundle(KNOWLEDGE_BUNDLE), artifact_type="script"
+    )
+    return candidates
+
+
+class RealRunComparisonTests(unittest.TestCase):
+    """The report reads counts from a run that really happened.
+
+    `trace_for` used to write a zero pair for every attempt, so the comparison
+    report's escalation rate was structurally 0% and its calibration advice
+    could never say anything but "promote". The repair is the `verdicts=` hook
+    the two operations hand the shared runner; these tests drive the shipped
+    screening paths against a scripted transport and hold the trace, the
+    operation's own summary and the report to one another.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.policy = load_policy(default_policy_path())
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _client(answers):
+        body = json.dumps({"model": "jev-1.13.0", "answers": answers,
+                           "usage": {"input_tokens": 400, "output_tokens": 40}})
+        return JevClient(
+            FakeTransport(responses=[TransportResponse(200, body, {})]),
+            environ={API_KEY_ENV: "sk-abc"}, sleep=lambda _: None,
+        )
+
+    @staticmethod
+    def _summed(run_dir, key):
+        return sum(trace.get(key) or 0 for trace in load_traces(run_dir))
+
+    def _usage_path(self, trace, operation):
+        """A usage entry for the run the trace belongs to, as a user would copy it."""
+
+        payload = {
+            "identity": {
+                "benchmark_case_id": trace["benchmark_case_id"],
+                "input_revision_vector_sha256": "a" * 64,
+                "draft_sha256": "b" * 64,
+                "policy_version": self.policy["operations"][operation]["policy_version"],
+                "rule_version": "text-quality-prefilter-rules-v1",
+                "artifact_params": {"age_band": "3-6", "genre": "温情",
+                                    "page_count": 3},
+            },
+            "model_label": "plain-llm", "source": "cc-switch-manual-entry",
+            "elapsed_ms": 180000, "request_count": 12, "input_tokens": 54000,
+            "output_tokens": 9000, "estimated_cost_usd": "1.234500000000",
+        }
+        path = self.root / "llm-usage.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def _screen_pages(self, answers):
+        run_dir = self.root / "quality-run"
+        outcome = run_screening(
+            run_id=RUN_ID, policy=self.policy, pages=PAGES, rules=REDLINE_RULES,
+            bundle=authority_bundle(),
+            config=RunnerConfig(run_dir=run_dir, policy=self.policy),
+            client=self._client(answers), age_band="3-6",
+        )
+        return run_dir, outcome
+
+    def _screen_knowledge(self, overrides=None):
+        run_dir = self.root / "knowledge-run"
+        answers = {
+            f"{chunk.chunk_id}::{question_id}": noul(0.02)
+            for chunk in knowledge_candidates()
+            for question_id in RELEVANCE_QUESTIONS
+        }
+        answers.update(overrides or {})
+        outcome = screen_candidates(
+            run_id=RUN_ID, policy=self.policy, artifact_type="script",
+            task_description="起草第 5 页", brief="分享主题，3-6 岁",
+            bundle=KNOWLEDGE_BUNDLE,
+            config=RunnerConfig(run_dir=run_dir, policy=self.policy),
+            client=self._client(answers),
+        )
+        return run_dir, outcome
+
+    def test_the_traces_carry_the_counts_the_screen_decided(self):
+        rules = tuple(rule.as_triple() for rule in REDLINE_RULES)
+        answers = all_clear_answers()
+        risky = f"page-2::redline:{REDLINE_RULES[0].rule_id}"
+        # The runner has to ask exactly this id, so answering it is also a
+        # check that the catalog's id and the policy's pattern still agree.
+        self.assertIn(risky, answers)
+        answers[risky] = noul(0.93)
+        run_dir, outcome = self._screen_pages(answers)
+        self.assertTrue(load_traces(run_dir))
+        self.assertEqual(self._summed(run_dir, "screened_clear_count"),
+                         outcome.summary["screened_clear"])
+        self.assertEqual(
+            self._summed(run_dir, "escalated_count"),
+            outcome.summary["escalated"] + outcome.summary["runtime_failure"],
+        )
+        self.assertEqual(
+            self._summed(run_dir, "screened_clear_count")
+            + self._summed(run_dir, "escalated_count"),
+            outcome.summary["total"],
+        )
+        self.assertEqual(self._summed(run_dir, "escalated_count"), 1)
+
+    def test_the_report_shows_the_escalation_rate_the_run_decided(self):
+        # Every dimension risky. The report has to read "review the thresholds";
+        # with the zero pair this used to record, the same run read as 0%
+        # escalation and an operation ready to be promoted.
+        run_dir, outcome = self._screen_pages(
+            {key: noul(0.93) for key in all_clear_answers()}
+        )
+        trace = load_traces(run_dir)[0]
+        self.assertEqual(self._summed(run_dir, "escalated_count"),
+                         outcome.summary["total"])
+        report = build_case_report(
+            run_dir=run_dir, policy=self.policy,
+            llm_usage_path=self._usage_path(trace, "text_quality_prefilter"),
+        )
+        self.assertTrue(report["comparable"])
+        self.assertEqual(report["jev_assisted"]["quality_items_entered"],
+                         outcome.summary["total"])
+        self.assertEqual(report["jev_assisted"]["issues_found"],
+                         outcome.summary["total"])
+        self.assertIsNone(report["jev_assisted"]["knowledge_items_entered"])
+        advice = next(entry for entry in report["calibration"]
+                      if entry["operation"] == "text_quality_prefilter")
+        self.assertEqual(advice["suggestion"], "review_thresholds")
+
+    def test_a_screen_that_cleared_everything_reports_no_issue(self):
+        run_dir, outcome = self._screen_pages(all_clear_answers())
+        trace = load_traces(run_dir)[0]
+        self.assertEqual(self._summed(run_dir, "screened_clear_count"),
+                         outcome.summary["total"])
+        self.assertEqual(self._summed(run_dir, "escalated_count"), 0)
+        report = build_case_report(
+            run_dir=run_dir, policy=self.policy,
+            llm_usage_path=self._usage_path(trace, "text_quality_prefilter"),
+        )
+        self.assertEqual(report["jev_assisted"]["issues_found"], 0)
+        self.assertEqual(report["jev_assisted"]["quality_items_entered"], 0)
+        advice = next(entry for entry in report["calibration"]
+                      if entry["operation"] == "text_quality_prefilter")
+        self.assertEqual(advice["suggestion"], "eligible_for_calibrated")
+
+    def test_a_clean_relevance_screen_hands_nothing_over(self):
+        run_dir, outcome = self._screen_knowledge()
+        trace = load_traces(run_dir)[0]
+        self.assertEqual(trace["operation"], "knowledge_relevance")
+        self.assertEqual(self._summed(run_dir, "escalated_count"), 0)
+        self.assertEqual(self._summed(run_dir, "screened_clear_count"),
+                         len(outcome.routes))
+        report = build_case_report(
+            run_dir=run_dir, policy=self.policy,
+            llm_usage_path=self._usage_path(trace, "knowledge_relevance"),
+        )
+        self.assertEqual(report["jev_assisted"]["knowledge_items_entered"], 0)
+        self.assertIsNone(report["jev_assisted"]["quality_items_entered"])
+
+    def test_a_conflicting_chunk_lands_on_the_knowledge_row(self):
+        conflict = knowledge_candidates()[0]
+        run_dir, outcome = self._screen_knowledge({
+            f"{conflict.chunk_id}::contradicts_task_assumption": noul(0.9),
+        })
+        trace = load_traces(run_dir)[0]
+        self.assertEqual([chunk.chunk_id for chunk in outcome.conflicts],
+                         [conflict.chunk_id])
+        self.assertEqual(self._summed(run_dir, "escalated_count"), 1)
+        report = build_case_report(
+            run_dir=run_dir, policy=self.policy,
+            llm_usage_path=self._usage_path(trace, "knowledge_relevance"),
+        )
+        self.assertEqual(report["jev_assisted"]["knowledge_items_entered"], 1)
+        self.assertIsNone(report["jev_assisted"]["quality_items_entered"])
+        self.assertEqual(report["jev_assisted"]["issues_found"], 1)
 
 
 if __name__ == "__main__":

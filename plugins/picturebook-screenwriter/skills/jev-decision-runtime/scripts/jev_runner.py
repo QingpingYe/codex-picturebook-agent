@@ -434,13 +434,28 @@ def trace_for(
     elapsed_ms,
     started_at,
     finished_at,
+    screened_clear_count: int = 0,
+    escalated_count: int = 0,
 ) -> dict | None:
+    """The trace of one settled attempt.
+
+    `screened_clear_count` and `escalated_count` are the operation's own verdict
+    counts for the request this attempt answered, supplied through the
+    `verdicts=` hook `execute` accepts. They default to zero, which is the
+    honest reading for every settlement that never produced a verdict — a
+    failure, an ambiguous attempt, or a caller that has no routing to report.
+    A trace that always recorded zeros made the comparison report's escalation
+    rate structurally zero, so nothing downstream could tell "the pre-screen
+    cleared everything" apart from "nobody ever wrote the number".
+    """
+
     if status not in RESULT_STATUSES_WITH_TRACE:
         return None
     snapshot = config.policy["price_snapshot"]
     input_tokens, output_tokens, cost = estimate_usage(
         usage, snapshot["price_usd_per_million_input_tokens"]
     )
+    clear, escalated = _count_pair(screened_clear_count, escalated_count)
     trace = DecisionTrace(
         run_id=request["run_id"],
         benchmark_case_id=request["benchmark_case_id"],
@@ -452,8 +467,8 @@ def trace_for(
         input_sha256=sha256_hex(canonical_json(request)),
         item_count=len(request["context_refs"]),
         question_count=len(request["questions"]),
-        screened_clear_count=0,
-        escalated_count=0,
+        screened_clear_count=clear,
+        escalated_count=escalated,
         request_count=attempts,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -468,7 +483,72 @@ def trace_for(
     return trace.to_dict()
 
 
-def execute(request, config, client, clock=None) -> dict:
+def _is_verdict_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _count_pair(screened_clear_count: Any, escalated_count: Any) -> tuple[int, int]:
+    """Read a pair of verdict counts, or the zero pair when either is unusable."""
+
+    if _is_verdict_count(screened_clear_count) and _is_verdict_count(escalated_count):
+        return screened_clear_count, escalated_count
+    return 0, 0
+
+
+def verdict_counts(verdicts, request, payload) -> tuple[int, int]:
+    """Ask the operation for the verdict counts this attempt produced.
+
+    The runner owns the trace but not the routing: what "clear" means for a
+    chunk of knowledge is the relevance policy's business, and what "clear"
+    means for a page dimension is the quality policy's. So the caller hands
+    `execute` a `verdicts` hook and the counts it answers with are what the
+    trace records.
+
+    A hook that raises, or that answers with anything other than two
+    non-negative integers, is read as "no verdicts to record" rather than as a
+    reason to abandon a call that has already been paid for. Zero counts are
+    the fail-closed reading: no cleared and no escalated verdicts means no
+    ratio, so no threshold can be recommended from this run — as opposed to a
+    zero *escalation* count, which would recommend promoting the operation.
+    """
+
+    if verdicts is None:
+        return 0, 0
+    try:
+        counts = verdicts(request, payload)
+    except Exception:
+        return 0, 0
+    if not isinstance(counts, Mapping):
+        return 0, 0
+    return _count_pair(
+        counts.get("screened_clear_count"), counts.get("escalated_count")
+    )
+
+
+class VerdictHook:
+    """A `verdicts` hook that routes a batch once and keeps what it computed.
+
+    The runner calls the hook while it settles a paid-for call, so the
+    operation's routing has to run there for its counts to reach the trace.
+    Handing the same result back to the caller is what keeps the trace's counts
+    and the operation's own decisions from being two independent computations
+    of one thing: the caller reads `value` instead of routing the same response
+    a second time. `value` stays `None` for every settlement the hook never
+    saw — a record reused from an earlier run, a batch that did not succeed —
+    and the caller then routes the record it has through the same function.
+    """
+
+    def __init__(self, compute) -> None:
+        self._compute = compute
+        self.value = None
+
+    def __call__(self, request, payload):
+        counts, value = self._compute(request, payload)
+        self.value = value
+        return counts
+
+
+def execute(request, config, client, clock=None, verdicts=None) -> dict:
     validate_request(request)
     if config.execution_mode != "jev_assisted":
         raise ContractError(
@@ -522,6 +602,9 @@ def execute(request, config, client, clock=None) -> dict:
                 error_class="model_version_mismatch", attempts=outcome.attempts,
                 elapsed_ms=elapsed_ms, started_at=started_at, finished_at=finished_at,
             )
+        screened_clear_count, escalated_count = verdict_counts(
+            verdicts, request, outcome.payload
+        )
         trace = trace_for(
             request, config,
             status="succeeded",
@@ -532,6 +615,8 @@ def execute(request, config, client, clock=None) -> dict:
             elapsed_ms=elapsed_ms,
             started_at=started_at,
             finished_at=finished_at,
+            screened_clear_count=screened_clear_count,
+            escalated_count=escalated_count,
         )
         try:
             result = build_result(
@@ -619,14 +704,21 @@ def _settle(
     return result
 
 
-def run_operation(request, config, client, clock=None, now=None) -> dict:
+def run_operation(request, config, client, clock=None, now=None, verdicts=None) -> dict:
+    """Dispatch one operation under its lease.
+
+    `verdicts` is the operation's own routing, handed to `execute` so the trace
+    can record how much of the batch was cleared and how much was escalated;
+    see `verdict_counts` for what the runner does with a hook that misbehaves.
+    """
+
     # Validate all caller-controlled path components before acquiring a lease
     # or creating any operation directory.
     validate_request(request)
     operation_id = operation_id_from_request(request)
     lease = acquire_lease(config, operation_id, now=now)
     try:
-        return execute(request, config, client, clock=clock)
+        return execute(request, config, client, clock=clock, verdicts=verdicts)
     finally:
         release_lease(config, operation_id, lease.holder)
 
@@ -726,6 +818,7 @@ def resume_operation(
     *,
     allow_new_attempt: bool = False,
     clock=None,
+    verdicts=None,
 ) -> dict:
     operation_ids = pending_operation_ids(config.run_dir)
     if not operation_ids:
@@ -788,7 +881,7 @@ def resume_operation(
         )
     lease = acquire_lease(config, operation_id)
     try:
-        return execute(request, config, client, clock=clock)
+        return execute(request, config, client, clock=clock, verdicts=verdicts)
     finally:
         release_lease(config, operation_id, lease.holder)
 
@@ -813,28 +906,61 @@ def _superseded(request, config, operation_id, reason) -> dict:
     return result
 
 
-CREDENTIAL_ARGUMENT_PREFIXES = (
-    "--api-key",
-    "--apikey",
-    "--api_key",
-    "--token",
-    "--secret",
-    "--authorization",
-    "--bearer",
+# The vocabulary of credential words, not an enumeration of today's providers.
+# `--openai-api-key=…`, `--my-secret=…` and `--api-key=…` are the same mistake:
+# argparse echoes the value back to the terminal before any of these CLIs can
+# refuse the request, so the check has to catch the shape of the flag rather
+# than the handful of names someone happened to be using when it was written.
+# A flag whose name ends in `key` is refused with them, which is what catches
+# the provider-prefixed spellings.
+CREDENTIAL_ARGUMENT_MARKERS = (
+    "api-key",
+    "apikey",
+    "api_key",
+    "api-token",
+    "access-key",
+    "access_key",
+    "secret-key",
+    "secret_key",
+    "client-secret",
+    "token",
+    "secret",
+    "passwd",
+    "password",
+    "credential",
+    "authorization",
+    "bearer",
 )
+
+
+def credential_flag(argument: Any) -> str | None:
+    """The credential-shaped flag name in one argument, if it carries one.
+
+    Only the flag itself is judged: a value that happens to contain the word
+    "key" is not a credential flag, and a positional argument never is.
+    """
+
+    text = str(argument)
+    if not text.startswith("-"):
+        return None
+    name = text.split("=", 1)[0].lower().lstrip("-")
+    if not name:
+        return None
+    if any(marker in name for marker in CREDENTIAL_ARGUMENT_MARKERS):
+        return name
+    return name if name.endswith("key") else None
 
 
 def reject_credential_arguments(arguments) -> str | None:
     """Refuse credential flags before argparse can echo their values."""
 
     for argument in arguments:
-        lowered = str(argument).lower()
-        for prefix in CREDENTIAL_ARGUMENT_PREFIXES:
-            if lowered.startswith(prefix):
-                return (
-                    f"credentials are not accepted on the command line: {prefix}. "
-                    f"Set {API_KEY_ENV} in the environment instead."
-                )
+        flag = credential_flag(argument)
+        if flag is not None:
+            return (
+                f"credentials are not accepted on the command line: --{flag}. "
+                f"Set {API_KEY_ENV} in the environment instead."
+            )
     return None
 
 

@@ -47,6 +47,15 @@ METRIC_NAMES = (
     "misses_or_disagreements",
 )
 
+# The two rows that ask how much of an operation still goes to the plain LLM.
+# They are not interchangeable units — a chunk of knowledge and a page
+# dimension are different things — so each row reads its own operation's own
+# number instead of the largest item count of whatever happened to run.
+ITEMS_ENTERED_BY_OPERATION = (
+    ("knowledge_relevance", "knowledge_items_entered"),
+    ("text_quality_prefilter", "quality_items_entered"),
+)
+
 
 def validate_identity(payload: Any) -> None:
     """Refuse an identity that cannot answer "was this the same work?"."""
@@ -207,6 +216,19 @@ def report_to_markdown(report: Mapping[str, Any]) -> str:
         lines.append("")
     lines.append(f"case digest: {report.get('identity_digest', '')}")
     lines.append("")
+    traces = report.get("traces")
+    foreign = report.get("foreign_traces")
+    if traces is not None or foreign is not None:
+        # A run directory reused for another case keeps the earlier traces. The
+        # numbers come from the traces that belong to this case, so the count
+        # left out has to be readable next to them rather than remembered.
+        lines.append(
+            f"trace 数：{traces if traces is not None else '未统计'}"
+            f"（属于其它 case：{foreign if foreign is not None else '未统计'}）"
+        )
+    run_ids = report.get("runs") or ()
+    if len(run_ids) > 1:
+        lines.append("运行目录包含的 run_id：" + "、".join(str(value) for value in run_ids))
     lines.append("| 指标 | 普通 LLM | Jev 辅助 |")
     lines.append("| --- | --- | --- |")
     llm = report.get("llm", {})
@@ -260,12 +282,19 @@ def load_traces(run_dir: Any) -> tuple[dict, ...]:
     because the wait a user spent supplying a key must not displace the
     measurement an attempt that really ran produced. The failure paths carry
     null usage anyway, so nothing billable is lost.
+
+    The terminal attempt is chosen per run, not per operation name. A directory
+    that holds two runs of one operation is two measurements of the same task,
+    and collapsing them onto one key would drop one of the two from the report
+    — while summing them would double it. Both are wrong in the same way: the
+    report is about one run, so the two stay separate and `build_case_report`
+    refuses to compare a directory whose traces name more than one run.
     """
 
     root = Path(run_dir)
     if not root.is_dir():
         return ()
-    terminal: dict[str, tuple[int, dict]] = {}
+    terminal: dict[tuple[str, str], tuple[int, dict]] = {}
     for path in sorted(root.glob(TRACE_GLOB)):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -276,9 +305,9 @@ def load_traces(run_dir: Any) -> tuple[dict, ...]:
         if payload.get("status") in UNMEASURED_STATUSES:
             continue
         attempt = int(path.stem) if path.stem.isdigit() else 0
-        operation = path.parent.parent.name
-        if operation not in terminal or attempt > terminal[operation][0]:
-            terminal[operation] = (attempt, payload)
+        key = (str(payload.get("run_id") or ""), path.parent.parent.name)
+        if key not in terminal or attempt > terminal[key][0]:
+            terminal[key] = (attempt, payload)
     return tuple(payload for _, payload in terminal.values())
 
 
@@ -307,6 +336,90 @@ def _sum_cost(values) -> str | None:
     return format(total, "f")
 
 
+def _measured(traces, measurable_only: bool = True) -> tuple:
+    """The traces that are measurements of the Jev-assisted path.
+
+    A run that switched back to the plain LLM mid-way measured a hybrid path,
+    and a run that never got past the credential wait measured the user's own
+    configuration time: neither is a Jev-assisted sample.
+    """
+
+    traces = tuple(traces)
+    if not measurable_only:
+        return traces
+    return tuple(
+        item for item in traces
+        if item.get("status") not in UNMEASURED_STATUSES
+        and item.get("fallback_used") is not True
+    )
+
+
+def operation_metrics(traces, *, measurable_only: bool = True) -> tuple[dict, ...]:
+    """One measurement per run and operation the Jev side really ran.
+
+    Two runs of one operation are two measurements, not one. The report lists
+    them separately so a run directory that holds traces from more than one run
+    shows that in its numbers instead of quietly adding two attempts at the
+    same work together, and so a reader can see which operation produced which
+    number: the two operations count different units and only one of them may
+    have been run.
+    """
+
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for item in _measured(traces, measurable_only):
+        key = (str(item.get("run_id") or ""), str(item.get("operation") or ""))
+        groups.setdefault(key, []).append(item)
+    entries = []
+    for (run_id, operation), items in sorted(groups.items()):
+        entries.append({
+            "run_id": run_id,
+            "operation": operation,
+            "traces": len(items),
+            "item_count": _sum_optional(item.get("item_count") for item in items),
+            "screened_clear_count": _sum_optional(
+                item.get("screened_clear_count") for item in items
+            ),
+            "escalated_count": _sum_optional(
+                item.get("escalated_count") for item in items
+            ),
+            # A batch that did not succeed decided nothing, so its verdict
+            # counts stay zero and it is reported as a failure of its own.
+            "runtime_failure": len(
+                [item for item in items if item.get("status") != "succeeded"]
+            ),
+            "elapsed_ms": _sum_optional(item.get("elapsed_ms") for item in items),
+            "request_count": _sum_optional(
+                item.get("request_count") for item in items
+            ),
+            "input_tokens": _sum_optional(item.get("input_tokens") for item in items),
+            "output_tokens": _sum_optional(
+                item.get("output_tokens") for item in items
+            ),
+            "estimated_cost_usd": _sum_cost(
+                item.get("estimated_cost_usd") for item in items
+            ),
+        })
+    return tuple(entries)
+
+
+def _items_entered(per_operation, operation: str) -> int | None:
+    """How many items one operation handed to the plain LLM in this run.
+
+    The number is the operation's own escalated count: the items the screen
+    could not settle by itself and passed on, which is what the spec's "进入
+    LLM 的项数" row asks for. `item_count` is not that number — it counts the
+    authority pages a request cited — so it is reported per operation beside
+    this one instead of standing in for it.
+    """
+
+    values = [
+        entry.get("escalated_count") for entry in per_operation
+        if entry.get("operation") == operation
+        and isinstance(entry.get("escalated_count"), int)
+    ]
+    return sum(values) if values else None
+
+
 def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
     """Fold the traces into one measurement of the Jev-assisted path.
 
@@ -315,23 +428,10 @@ def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
     credential wait or an explicit path switch into the speed sample.
     """
 
-    traces = tuple(traces)
-    if measurable_only:
-        measured = tuple(
-            item for item in traces
-            if item.get("status") not in UNMEASURED_STATUSES
-            # A run that switched back to the plain LLM mid-way measured a
-            # hybrid path, so it is not a Jev-assisted sample either.
-            and item.get("fallback_used") is not True
-        )
-    else:
-        measured = traces
+    measured = _measured(traces, measurable_only)
     if not measured:
         return CaseMetrics(path="jev_assisted")
-    item_counts = [
-        item.get("item_count") for item in measured
-        if isinstance(item.get("item_count"), int)
-    ]
+    per_operation = operation_metrics(measured, measurable_only=False)
     screened = _sum_optional(item.get("screened_clear_count") for item in measured)
     escalated = _sum_optional(item.get("escalated_count") for item in measured)
     failed = len([item for item in measured if item.get("status") != "succeeded"])
@@ -349,6 +449,13 @@ def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
         # only ran the red-line prefilter cannot be compared on cost with a
         # side that also screened the knowledge base.
         notes.append("operations=" + ",".join(operations))
+    run_ids = sorted({
+        str(item.get("run_id")) for item in measured if item.get("run_id")
+    })
+    if len(run_ids) > 1:
+        # Two runs of one task in one directory are two measurements, so the
+        # sum is named for what it is instead of reading as a single run.
+        notes.append(f"runs={len(run_ids)}")
     return CaseMetrics(
         path="jev_assisted",
         elapsed_ms=_sum_optional(item.get("elapsed_ms") for item in measured),
@@ -359,8 +466,8 @@ def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
         estimated_cost_usd=_sum_cost(
             item.get("estimated_cost_usd") for item in measured
         ),
-        knowledge_items_entered=max(item_counts) if item_counts else None,
-        quality_items_entered=max(item_counts) if item_counts else None,
+        knowledge_items_entered=_items_entered(per_operation, "knowledge_relevance"),
+        quality_items_entered=_items_entered(per_operation, "text_quality_prefilter"),
         issues_found=(escalated + failed) if escalated is not None else None,
         misses_or_disagreements=None,
         notes=tuple(notes),
@@ -412,37 +519,41 @@ def load_llm_usage(path: Any) -> tuple[dict, CaseMetrics]:
 HIGH_ESCALATION_RATIO = 0.8
 
 
-def _note_value(notes, name: str) -> int | None:
-    for note in notes or ():
-        key, separator, value = str(note).partition("=")
-        if separator and key == name:
-            try:
-                return int(value)
-            except ValueError:
-                return None
-    return None
-
-
 def calibration_suggestions(
     policy: Mapping[str, Any], report: Mapping[str, Any]
 ) -> tuple[dict, ...]:
-    """Suggest a calibration action per operation.
+    """Suggest a calibration action for every operation this run measured.
+
+    The advice is per operation and from that operation's own numbers. A run
+    that escalated nearly every knowledge chunk and almost nothing in the page
+    pre-screen must not lend one blended rate to both: read as a single rate it
+    would tell the operation whose thresholds are too tight that it may be
+    promoted, which is the opposite of what its own numbers say. An operation
+    this run never measured gets no suggestion at all, because "no
+    measurement" is not evidence in either direction — the report names the
+    operations it ran separately.
 
     The suggestion is advisory only. Flipping `calibration_status` changes how
     much the plain LLM re-checks, so it stays a human decision recorded in the
     policy file.
     """
 
-    jev = report.get("jev_assisted") or {}
-    notes = jev.get("notes") or ()
-    escalated = _note_value(notes, "escalated")
-    screened_clear = _note_value(notes, "screened_clear")
-    failed = _note_value(notes, "runtime_failure") or 0
-    total = None
-    if escalated is not None and screened_clear is not None:
-        total = escalated + screened_clear
     suggestions = []
-    for operation in OPERATIONS:
+    for measured in report.get("jev_operations") or ():
+        operation = str(measured.get("operation"))
+        if operation not in OPERATIONS:
+            # A trace naming an operation this build does not know cannot be
+            # priced against a policy, so it produces no advice. It is still
+            # listed in `jev_operations`, where the reader can see it.
+            continue
+        screened_clear = measured.get("screened_clear_count")
+        escalated = measured.get("escalated_count")
+        failed = measured.get("runtime_failure") or 0
+        total = (
+            screened_clear + escalated
+            if isinstance(screened_clear, int) and isinstance(escalated, int)
+            else 0
+        )
         entry = operation_policy(policy, operation)
         current = entry["calibration_status"]
         suggestion = "keep_experimental"
@@ -450,17 +561,19 @@ def calibration_suggestions(
         if not report.get("comparable"):
             reason = "两次运行不可比较，本次数据不能用于校准"
         elif failed:
-            reason = f"本次有 {failed} 项运行失败，失败项不得计入校准"
+            reason = f"该 operation 本次有 {failed} 项运行失败，失败项不得计入校准"
         elif total:
             ratio = escalated / total
             if ratio > HIGH_ESCALATION_RATIO:
                 suggestion = "review_thresholds"
-                reason = f"升级率 {ratio:.0%} 过高，先复核阈值"
+                reason = f"该 operation 本次升级率 {ratio:.0%} 过高，先复核阈值"
             elif current == "experimental":
                 suggestion = "eligible_for_calibrated"
-                reason = "本次无失败且升级率可接受，可提交人工复核后转为 calibrated"
+                reason = "该 operation 本次无失败且升级率可接受，可提交人工复核后转为 calibrated"
         suggestions.append({
             "operation": operation,
+            "run_id": measured.get("run_id"),
+            "measured_items": total,
             "current": current,
             "suggestion": suggestion,
             "reason": reason,
@@ -493,6 +606,17 @@ def _attest_identity(
     if len(case_ids) == 1:
         attested["benchmark_case_id"] = case_ids[0]
         verified.append("benchmark_case_id")
+    elif not case_ids:
+        # The directory holds no trace at all, or only traces that name no case
+        # id. Either way nothing on disk attests the case the entry declares,
+        # and a report that called that comparable would be comparing a
+        # measurement with a declaration it never checked — one of the two
+        # shapes the fail-closed identity gate exists to catch.
+        reasons.append(
+            "no trace in the run directory carries the declared "
+            f"benchmark_case_id ({declared.get('benchmark_case_id')}), so the "
+            "declared case id is unverified"
+        )
     versions = {
         operation_policy(policy, str(trace.get("operation")))["policy_version"]
         for trace in traces
@@ -533,19 +657,39 @@ def build_case_report(
         trace for trace in traces
         if trace.get("benchmark_case_id") in (None, case_id)
     )
+    # One report describes one run. A directory that holds two runs of the same
+    # case — the same draft screened twice under two run ids — cannot say which
+    # of them the hand-copied plain-LLM usage describes, so the pair is refused
+    # rather than compared against a sum of both. The run ids are reported and
+    # each run's own numbers stay visible in `jev_operations`.
+    run_ids = sorted({
+        str(trace.get("run_id")) for trace in own if trace.get("run_id")
+    })
+    run_reasons = (
+        (
+            "the run directory holds traces from "
+            f"{len(run_ids)} runs ({', '.join(run_ids)}), so it cannot say "
+            "which run the plain-LLM usage entry describes",
+        )
+        if len(run_ids) > 1
+        else ()
+    )
     comparison_holds, comparison_reasons = comparability(llm_identity, jev_identity)
-    comparable = comparison_holds and not attested_reasons
+    comparable = comparison_holds and not attested_reasons and not run_reasons
     jev = jev_metrics(own)
+    per_operation = [dict(entry) for entry in operation_metrics(own)]
     report = build_report(
         identity=llm_identity, comparable=comparable,
-        reasons=attested_reasons + comparison_reasons,
+        reasons=attested_reasons + run_reasons + comparison_reasons,
         llm=llm, jev_assisted=jev,
         calibration=calibration_suggestions(
-            policy, {"comparable": comparable, "jev_assisted": _metrics_dict(jev)}
+            policy, {"comparable": comparable, "jev_operations": per_operation}
         ),
     )
+    report["jev_operations"] = per_operation
     report["traces"] = len(own)
     report["foreign_traces"] = len(traces) - len(own)
+    report["runs"] = run_ids
     report["identity_attestation"] = {
         "verified": list(verified),
         "declared_only": [

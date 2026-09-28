@@ -76,13 +76,26 @@ python scripts/compare_cli.py \
 | `input_tokens`、`output_tokens` | 上一步手工汇总 | trace 的 `usage` |
 | `cache_tokens` | 上一步手工汇总 | 当前恒为 `0`（trace 尚未记录缓存 token），不是"Jev 省了缓存" |
 | `estimated_cost_usd` | 上一步手工汇总 | trace 的 `estimated_cost_usd` 求和 |
-| `knowledge_items_entered`、`quality_items_entered` | 上一步手工汇总 | trace 的 `item_count` |
-| `issues_found` | 上一步手工汇总 | `escalated + runtime_failure`，即需要普通 LLM 再看一遍的项 |
+| `knowledge_items_entered` | 上一步手工汇总：本次全量进入的知识块 | **只**取 `knowledge_relevance` 自己的 `escalated_count` 之和，即该 operation 交给普通 LLM 继续处理的块数 |
+| `quality_items_entered` | 上一步手工汇总：本次全量复核的页面维度 | **只**取 `text_quality_prefilter` 自己的 `escalated_count` 之和，即升级项 |
+| `issues_found` | 上一步手工汇总 | 升级项 + 整批失败数，即需要普通 LLM 再看一遍的项 |
 | `misses_or_disagreements` | 上一步手工汇总 | 预筛本身给不出，恒为 `null` |
+
+两行的口径不同，所以它们各自取自己 operation 的数字：知识块和页面维度不是同一种
+单位，一个 operation 没跑就留空，不会拿另一个的数字顶上。
 
 由此：
 
 - `screened_clear` 与 `escalated` 来自 Jev 侧 trace；`runtime_failure` 是未能完成的项数。
+- trace 里的 `screened_clear_count` / `escalated_count` 由该 operation 在派发时通过共享
+  runner 的 `verdicts=` 钩子写入：两个数相加等于本次真正判定过的项数，`escalated` 等于
+  升级包的大小（升级项与无法判定的项都算，因为两者都要普通 LLM 再看一遍）。
+- 报告会逐 operation 列出 `jev_operations`（`item_count`、`screened_clear_count`、
+  `escalated_count`、`runtime_failure`、耗时与成本）。这里的 `item_count` 是请求引用到的
+  权威页数，**不是**进入 LLM 的项数，别拿它当上面那两行。
+- 报告开头会写 `trace 数` 与其中属于其它 case 的条数；运行目录里出现多次运行
+  （trace 的 `run_id` 不止一个）时直接判 `comparable: false` 并列出 run_id，不把两次
+  运行的数字相加后当成一次。
 - **升级率过高说明阈值太严**（`review_thresholds`），而不是"Jev 不行"。
 - **`fallback_used: true` 的那次运行不得计入性能比较**——它是用户显式切换路径，不是同一条路径的样本。
 - 缺 `usage` 的 trace 其 token 与成本为 `null`，报告不会用字符数替它编一个数。
@@ -99,6 +112,10 @@ python scripts/compare_cli.py \
 4. 人工复核升级项与漏检，确认可接受。
 
 改的是 `decision-policies.json` 里该 operation 的 `calibration_status` 与 band。不同 operation 不共享阈值。
+
+报告里的校准建议是**逐 operation**的，用的是该 operation 自己的升级率：本次没有测量的
+operation 不会给出建议（"没测到"不是任何方向的证据），所以一次只跑了页面预筛的运行
+不会替知识筛选下结论。
 
 第 3 步的输入 `outcomes.json`（逐样本的 `sample_id` 与 `probability`）**目前仍要人工产出**：
 本阶段没有提供生成它的命令。可行的做法是按 `calibration-samples.md` 逐样本跑一次该

@@ -29,6 +29,7 @@ from jev_runner import (  # noqa: E402
     HARMLESS_ATTEMPT_STATUSES,
     OPEN_ATTEMPT_STATUSES,
     RunnerConfig,
+    VerdictHook,
     discard_failed_pending_call,
     operation_id_from_request,
     pending_path,
@@ -293,6 +294,69 @@ def _route_chunk(
         return route_item(chunk.chunk_id, answers, entry)
     except UNREADABLE_ANSWER_ERRORS:
         return None
+
+
+def _route_batch(batch, result, entry) -> tuple:
+    """Route every chunk of one settled batch into a per-chunk verdict.
+
+    A verdict is `clear` when the screen settled the chunk itself — an
+    inclusion or an exclusion both end the screen's work on it — and
+    `escalate` when the chunk still needs the plain LLM: a routed conflict or
+    uncertainty, a chunk whose answers cannot be read, and a chunk the response
+    never addressed all land there, because none of them may be dropped on
+    evidence that was not collected.
+
+    The same list supplies the trace's verdict counts and the operation's own
+    report, so the escalation rate the comparison report shows is the one this
+    run actually decided rather than a second computation of the same routing.
+    """
+
+    grouped = _answers_by_item(result)
+    routed: list[tuple] = []
+    for chunk in batch:
+        answers = grouped.get(chunk.chunk_id)
+        route = _route_chunk(chunk, answers, entry)
+        if route is None:
+            routed.append((chunk, answers, None, "escalate"))
+            continue
+        settled = (
+            route["route"] != "escalate_llm"
+            and route["route"] != "needs_user_choice"
+            and route.get("label") != "uncertain"
+        )
+        routed.append((chunk, answers, route, "clear" if settled else "escalate"))
+    return tuple(routed)
+
+
+def _verdict_counts(routed) -> dict:
+    """The counts the shared runner records in this batch's trace."""
+
+    return {
+        "screened_clear_count": sum(1 for entry in routed if entry[3] == "clear"),
+        "escalated_count": sum(1 for entry in routed if entry[3] != "clear"),
+    }
+
+
+def _record_batch(routed, kept, routes, excluded, conflicts, uncertain) -> None:
+    """Fold one routed batch into the outcome lists the caller returns."""
+
+    for chunk, answers, route, _verdict in routed:
+        if route is None:
+            # No verdict at all, or one that cannot be read as a verdict: the
+            # chunk is kept and flagged, never dropped.
+            kept.append(chunk)
+            uncertain.append(chunk)
+            continue
+        routes.append(route)
+        if route["route"] == "exclude_soft":
+            excluded.append(_excluded_entry(chunk, answers, route))
+            continue
+        kept.append(chunk)
+        if route["route"] == "escalate_llm":
+            conflicts.append(chunk)
+            continue
+        if route.get("label") == "uncertain" or route["route"] == "needs_user_choice":
+            uncertain.append(chunk)
 
 
 def _answers_by_item(result: Mapping[str, Any]) -> dict[str, dict]:
@@ -560,6 +624,7 @@ def screen_candidates(
             brief=brief, batch=batch, batch_index=batch_index,
             benchmark_case_id=case_id,
         )
+        hook = None
         stored = _stored_batch(config, request)
         if stored.result is not None:
             # Paid for in an earlier run: reuse it rather than dispatch again.
@@ -585,7 +650,17 @@ def screen_candidates(
             # Dispatch through the shared runner's leased entry point, the same
             # one the single-operation path uses: another runner holding this
             # operation's lease must stop this batch from being sent at all.
-            result = run_operation(request, config, client, clock=clock)
+            # The routing runs inside the runner through `VerdictHook`, so the
+            # trace records this batch's real clear and escalation counts and
+            # the caller reuses that same routing instead of repeating it.
+            def compute(_request, payload, batch=batch):
+                routed = _route_batch(batch, payload, entry)
+                return _verdict_counts(routed), routed
+
+            hook = VerdictHook(compute)
+            result = run_operation(
+                request, config, client, clock=clock, verdicts=hook
+            )
             if result["status"] == "failed":
                 # A settled failure is not a call to continue. The runner keeps
                 # the pending record so one failed operation stays resumable,
@@ -599,29 +674,18 @@ def screen_candidates(
                 # never deleted under it.
                 discard_failed_pending_call(request, config)
         results.append(result)
-        answers_by_item = (
-            _answers_by_item(result) if result["status"] == "succeeded" else {}
-        )
-
-        for chunk in batch:
-            answers = answers_by_item.get(chunk.chunk_id)
-            route = _route_chunk(chunk, answers, entry)
-            if route is None:
-                # No verdict at all, or one that cannot be read as a verdict:
-                # the chunk is kept and flagged, never dropped.
-                kept.append(chunk)
-                uncertain.append(chunk)
-                continue
-            routes.append(route)
-            if route["route"] == "exclude_soft":
-                excluded.append(_excluded_entry(chunk, answers, route))
-                continue
-            kept.append(chunk)
-            if route["route"] == "escalate_llm":
-                conflicts.append(chunk)
-                continue
-            if route.get("label") == "uncertain" or route["route"] == "needs_user_choice":
-                uncertain.append(chunk)
+        if result["status"] != "succeeded":
+            # A batch that did not succeed has no verdicts at all, so the hook
+            # never ran and every chunk of it stays kept and uncertain.
+            routed = tuple((chunk, None, None, "escalate") for chunk in batch)
+        else:
+            routed = hook.value if hook is not None else None
+            if routed is None:
+                # Reused from an earlier run: this batch's trace was written by
+                # the dispatch that paid for it, so the routing here is the
+                # caller's own. It is the same function the hook uses.
+                routed = _route_batch(batch, result, entry)
+        _record_batch(routed, kept, routes, excluded, conflicts, uncertain)
 
         if result["status"] in BATCH_STOP_OUTCOMES:
             # This batch's call is still open, so no further batch is opened in

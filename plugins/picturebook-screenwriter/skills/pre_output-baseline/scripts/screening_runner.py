@@ -33,6 +33,7 @@ from jev_runner import (  # noqa: E402
     HARMLESS_ATTEMPT_STATUSES,
     OPEN_ATTEMPT_STATUSES,
     LeaseHeld,
+    VerdictHook,
     discard_failed_pending_call,
     operation_id_from_request,
     pending_path,
@@ -556,6 +557,7 @@ def run_screening(
             run_id=run_id, policy=policy, age_band=age_band, batch=batch,
             batch_index=batch_index, benchmark_case_id=cases, bundle=bundle,
         )
+        hook = None
         stored = _stored_batch(config, request)
         if stored.result is not None:
             # Paid for by an earlier run of this exact batch: route the stored
@@ -578,8 +580,18 @@ def run_screening(
             _record_batch_failure(decisions, batch, stopped_reason)
             continue
         else:
+            # The routing runs inside the runner through `VerdictHook`, so this
+            # batch's trace records the counts the screen actually decided and
+            # the caller reuses that same routing instead of repeating it.
+            def compute(_request, payload, batch=batch):
+                routed = _route_batch(batch, payload, entry)
+                return _verdict_counts(routed[0]), routed
+
+            hook = VerdictHook(compute)
             try:
-                result = run_operation(request, config, client, clock=clock)
+                result = run_operation(
+                    request, config, client, clock=clock, verdicts=hook
+                )
             except LeaseHeld:
                 stopped_reason = "lease_held"
                 _record_batch_failure(decisions, batch, stopped_reason)
@@ -595,37 +607,15 @@ def run_screening(
             stopped_reason = _settled_reason(result)
             _record_batch_failure(decisions, batch, stopped_reason)
             continue
-        grouped = _answers_by_item(result)
-        for item in batch:
-            answers_by_dimension = grouped.get(item["item_id"]) or {}
-            for dimension in item["dimensions"]:
-                qualified = f"{item['item_id']}::{dimension}"
-                answer = answers_by_dimension.get(dimension)
-                # One answer per call: the router reads this dimension's answer
-                # against the questions this item asked, so a red-line answer
-                # can never be banded by the page-quality rule or the reverse.
-                answers = {dimension: answer} if answer is not None else {}
-                if not answers:
-                    decisions.append(failure_decision(qualified, dimension, "no_answers"))
-                    continue
-                try:
-                    decision = screening_decision(
-                        item_id=qualified, dimension=dimension, answers=answers,
-                        operation_policy=entry,
-                    )
-                    route = route_item(qualified, answers, entry)
-                except UNREADABLE_ANSWER_ERRORS as error:
-                    # The call behind this answer has already been paid for, so
-                    # an answer the router cannot read costs this dimension its
-                    # route and nothing more: it becomes a recorded runtime
-                    # failure instead of an exception out of the screen.
-                    decisions.append(
-                        failure_decision(qualified, dimension, f"routing_error:{error}")
-                    )
-                    continue
-                decisions.append(decision)
-                if decision.outcome != "runtime_failure":
-                    routes.append(route)
+        routed = hook.value if hook is not None else None
+        if routed is None:
+            # Reused from an earlier run: this batch's trace was written by the
+            # dispatch that paid for it, so the routing here is the caller's
+            # own. It is the same function the hook uses.
+            routed = _route_batch(batch, result, entry)
+        batch_decisions, batch_routes = routed
+        decisions.extend(batch_decisions)
+        routes.extend(batch_routes)
 
     escalation_package = [
         {
@@ -667,3 +657,67 @@ def _record_batch_failure(decisions, batch, reason: str) -> None:
             decisions.append(
                 failure_decision(f"{item['item_id']}::{dimension}", dimension, reason)
             )
+
+
+def _route_batch(batch, result, entry) -> tuple:
+    """Route one settled batch into per-dimension decisions and routes.
+
+    One answer per call: the router reads a dimension's answer against the
+    questions that item asked, so a red-line answer can never be banded by the
+    page-quality rule or the reverse. A dimension left unanswered, and one the
+    router cannot read, becomes a recorded runtime failure instead of an
+    exception out of the screen — the call behind those answers has already
+    been paid for, so a malformed answer may cost its own dimension a route and
+    nothing more.
+
+    The same lists supply the trace's verdict counts and the operation's own
+    report, so the escalation rate the comparison report shows is the one this
+    run actually decided rather than a second computation of the same routing.
+    """
+
+    grouped = _answers_by_item(result)
+    decisions: list[ScreeningDecision] = []
+    routes: list[dict] = []
+    for item in batch:
+        answers_by_dimension = grouped.get(item["item_id"]) or {}
+        for dimension in item["dimensions"]:
+            qualified = f"{item['item_id']}::{dimension}"
+            answer = answers_by_dimension.get(dimension)
+            answers = {dimension: answer} if answer is not None else {}
+            if not answers:
+                decisions.append(failure_decision(qualified, dimension, "no_answers"))
+                continue
+            try:
+                decision = screening_decision(
+                    item_id=qualified, dimension=dimension, answers=answers,
+                    operation_policy=entry,
+                )
+                route = route_item(qualified, answers, entry)
+            except UNREADABLE_ANSWER_ERRORS as error:
+                decisions.append(
+                    failure_decision(qualified, dimension, f"routing_error:{error}")
+                )
+                continue
+            decisions.append(decision)
+            if decision.outcome != "runtime_failure":
+                routes.append(route)
+    return tuple(decisions), tuple(routes)
+
+
+def _verdict_counts(decisions) -> dict:
+    """The counts the shared runner records in this batch's trace.
+
+    `screened_clear_count` is what the pre-screen settled by itself, and
+    `escalated_count` is everything it hands to the plain LLM instead — which
+    is exactly the escalation package's size. A dimension the screen could not
+    decide is as much a review item as a risky one, and the summary's
+    escalation ratio counts the two the same way.
+    """
+
+    cleared = sum(
+        1 for decision in decisions if decision.outcome == "screened_clear"
+    )
+    return {
+        "screened_clear_count": cleared,
+        "escalated_count": len(decisions) - cleared,
+    }

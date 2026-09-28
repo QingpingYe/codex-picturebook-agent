@@ -28,6 +28,8 @@
 ### Fixed
 
 - The machine-readable contract now states that a `project_authority` finding blocks the confirmation gate at any severity (`any_finding_blocks_confirmation`), matching the runtime, where promotion forces `severity="FAIL"` and a later judgment can no longer soften it.
+- 对比报告的 Jev 列不再恒为 0：共享 runner 的 `verdicts=` 钩子把两个 operation 真正判定的 `screened_clear_count` / `escalated_count` 写进 trace（此前 `trace_for` 写死 0，升级率与校准建议因此结构性失效）。校准建议改为逐 operation 读取该 operation 自己的计数，本次没有测量的 operation 不再给出建议；`knowledge_items_entered` / `quality_items_entered` 各自取自本 operation 的升级项；运行目录里出现多次运行（trace 的 `run_id` 不止一个）时判 `comparable: false` 并列出 run_id，而不是把两次运行静默相加；声明 case id 无法从运行目录核验时补记原因并把 trace 数写进报告。
+- 命令行凭据闸改为按旗标形状匹配：`--openai-api-key`、`--access-key`、`--password` 等与 `--api-key` 同样被拒，因为它们都会被 argparse 原样回显到终端；同时只判旗标名，路径里出现 `key` 不受影响。
 - Knowledge loading now rejects page revisions behind the remote index, marks page-ahead evidence as `index_synced=false`, and prevents unsynced reads from replacing the last confirmed cache.
 - Terminal stage-run validation now evaluates run-level status and outcome without shadowing by stage fields.
 - `knowledge_relevance` now reuses a stored terminal result only when it records the request it answered, so an edited authority page is never routed on the previous edit's verdicts; the record that keeps a batch out of the screen is reported as `blocked_records`, and a failed batch's pending record is dropped under the operation lease instead of after it.
