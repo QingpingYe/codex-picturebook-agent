@@ -122,12 +122,28 @@ def _block_lines(lines, block_name: str) -> list[str]:
     fence further down belongs to another section and must not be read here.
     Otherwise the block is the bare key line and list items the templates print
     under the anchor, which end at the first line that is none of those.
+
+    Blank lines between the anchor and its fence are ordinary spacing, so a
+    fence below them is still read -- but only when it carries this block's own
+    key line. A fence without one belongs to whatever section comes next, and
+    reading it here would strand this block's own list on the way to the prose
+    fallback.
     """
 
     if lines:
         opener = _FENCE_LINE.match(lines[0])
         if opener is not None:
             return _fenced_body(lines[1:], opener.group(1))
+        rest = lines
+        while rest and not rest[0].strip():
+            rest = rest[1:]
+        if rest:
+            opener = _FENCE_LINE.match(rest[0])
+            if opener is not None:
+                body = _fenced_body(rest[1:], opener.group(1))
+                if any(_is_block_key_line(line, block_name) for line in body):
+                    return body
+                return []
     block: list[str] = []
     for line in lines:
         stripped = line.strip()

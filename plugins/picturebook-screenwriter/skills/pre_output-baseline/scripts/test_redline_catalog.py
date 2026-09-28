@@ -86,6 +86,21 @@ props:
 ```
 """
 
+# A blank line between the anchor and its fence is spacing, not a new section:
+# the block's own key line proves the fence belongs to this anchor.
+BLANK_LINE_THEN_FENCE = """# 纠正台账
+
+## 红线机器可读块
+
+<!-- machine-data: redline_terms -->
+
+```yaml
+redline_terms:
+  - 变勇敢了
+  - 魔法解决一切
+```
+"""
+
 # An orphan opener is text, not a block: `chunker` already refuses to open a
 # fence that nothing closes.
 UNTERMINATED_FENCE_BLOCK = """# 纠正台账
@@ -233,6 +248,14 @@ class ParseMachineDataTests(unittest.TestCase):
     def test_an_unclosed_fence_is_not_read_as_the_block(self):
         self.assertEqual(
             parse_machine_data_terms(UNTERMINATED_FENCE_BLOCK, MACHINE_DATA_BLOCK), ()
+        )
+
+    def test_a_fence_after_a_blank_line_still_opens_its_own_block(self):
+        # Without the key-line check the blank-line shape falls through to the
+        # prose fallback and loses every unquoted item the fence carries.
+        self.assertEqual(
+            parse_machine_data_terms(BLANK_LINE_THEN_FENCE, MACHINE_DATA_BLOCK),
+            ("变勇敢了", "魔法解决一切"),
         )
 
     def test_a_differently_cased_or_spaced_anchor_is_read(self):
