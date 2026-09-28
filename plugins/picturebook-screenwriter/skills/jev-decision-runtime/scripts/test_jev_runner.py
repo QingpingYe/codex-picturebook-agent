@@ -953,6 +953,25 @@ class CliTests(RunnerCase):
         self.assertNotIn("SUPER-SECRET-VALUE", out)
         self.assertIn("unknown command", err)
 
+    def test_a_flag_value_ahead_of_the_command_is_never_quoted(self):
+        # The top-level parser declares no option that takes a value, so an
+        # unknown flag's value lands in the command position and is refused by
+        # placeholder rather than reported as an invalid choice.
+        shapes = (
+            ["--tokens", "SUPER-SECRET-VALUE", "run"],
+            ["--tokens", "SUPER-SECRET-VALUE"],
+            ["--request", "SUPER-SECRET-VALUE", "run"],
+            ["--policy", "SUPER-SECRET-VALUE", "run"],
+            ["--", "SUPER-SECRET-VALUE"],
+            ["--", "SUPER-SECRET-VALUE", "run"],
+        )
+        for argv in shapes:
+            with self.subTest(argv=argv):
+                code, out, err = self._main(argv)
+                self.assertEqual(code, 2)
+                self.assertNotIn("SUPER-SECRET-VALUE", err)
+                self.assertNotIn("SUPER-SECRET-VALUE", out)
+
     def test_credential_arguments_are_refused_without_echoing_the_value(self):
         for marker in CREDENTIAL_ARGUMENT_MARKERS:
             with self.subTest(marker=marker):

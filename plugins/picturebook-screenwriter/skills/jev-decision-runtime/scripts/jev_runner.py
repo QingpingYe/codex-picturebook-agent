@@ -1060,18 +1060,15 @@ def unknown_command(argv, commands) -> bool:
 
     argparse reports an unknown subcommand by quoting it (`invalid choice:
     'SUPER-SECRET-VALUE'`), and a pasted credential lands in exactly that
-    position. Every option this CLI declares takes a value, so the command is
-    the first token that is neither an option nor an option's value.
+    position. The command is the first token that is not a flag: the top-level
+    parser declares no option that takes a value before the command, so nothing
+    ahead of it consumes the next token — an unknown flag's value is therefore
+    read as the command and refused by placeholder instead of being echoed.
     """
 
-    expecting_value = False
     for token in argv:
         text = str(token)
-        if expecting_value:
-            expecting_value = False
-            continue
         if text.startswith("-"):
-            expecting_value = "=" not in text
             continue
         return text not in commands
     return False

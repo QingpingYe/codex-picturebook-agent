@@ -264,6 +264,23 @@ class CompareCliTests(unittest.TestCase):
         self.assertNotIn("SUPER-SECRET-VALUE", out.getvalue())
         self.assertEqual(leaked.getvalue(), "")
 
+    def test_an_abbreviated_flag_is_refused_without_quoting_its_value(self):
+        # Abbreviations are off, so a shortened flag is an unrecognised argument
+        # reported by name rather than an ambiguity that names the value it
+        # could not resolve.
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(io.StringIO()) as leaked:
+            code = main(
+                ["--run-dir", str(self.run_dir), "--llm-usage", str(self.usage),
+                 "--run-di=SUPER-SECRET-VALUE"],
+                stdout=out, stderr=err,
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("--run-di", err.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", err.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", out.getvalue())
+        self.assertEqual(leaked.getvalue(), "")
+
     def test_no_written_file_contains_a_credential_field_name(self):
         self._main(self._argv())
         for path in (self.out_dir / "path-comparison-audit").rglob("*"):
