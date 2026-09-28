@@ -9,6 +9,7 @@ from jev_client import (
     ENDPOINT,
     FakeTransport,
     JevClient,
+    JevClientError,
     JevEndpointError,
     JevTransportFailure,
     JevTransportOutcomeUnknown,
@@ -116,6 +117,31 @@ class CredentialGateTests(unittest.TestCase):
         transport = FakeTransport(responses=[TransportResponse(200, success_body(), {})])
         make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(make_request())
         self.assertEqual(transport.calls[0]["headers"]["Authorization"], "Bearer sk-abc")
+
+    def test_only_the_endpoint_fields_travel_on_the_wire(self):
+        # The endpoint validates its top-level fields strictly: our envelope
+        # (`run_id`, `operation`, `policy_version`, `benchmark_case_id`,
+        # `context_refs`, …) comes back as `api_usage_error: Invalid request`,
+        # so it stays on disk and only these three keys are sent.
+        transport = FakeTransport(responses=[TransportResponse(200, success_body(), {})])
+        request = make_request()
+        make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(request)
+        sent = json.loads(transport.calls[0]["body"].decode("utf-8"))
+        self.assertEqual(set(sent), {"model", "state", "questions"})
+        for field in ("run_id", "operation", "schema_version", "policy_version",
+                      "benchmark_case_id", "operation_instance", "context_refs"):
+            self.assertNotIn(field, sent)
+        self.assertEqual(sent["questions"], request["questions"])
+        self.assertEqual(sent["model"], request["model"])
+
+    def test_a_request_the_endpoint_cannot_take_is_refused_before_dispatch(self):
+        transport = FakeTransport(responses=[TransportResponse(200, success_body(), {})])
+        incomplete = make_request()
+        del incomplete["state"]
+        with self.assertRaises(JevClientError) as raised:
+            make_client(transport, environ={API_KEY_ENV: "sk-abc"}).call(incomplete)
+        self.assertIn("state", str(raised.exception))
+        self.assertEqual(transport.calls, [])
 
     def test_the_key_never_appears_in_the_outcome(self):
         transport = FakeTransport(responses=[TransportResponse(200, success_body(), {})])

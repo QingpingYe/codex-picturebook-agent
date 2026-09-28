@@ -19,6 +19,13 @@ ALLOWED_HOST = "api.typesafe.ai"
 ENDPOINT_PATH = "/v1/systemone"
 API_KEY_ENV = "TYPESAFE_API_KEY"
 
+# The endpoint validates its top-level fields strictly: it accepts exactly these
+# three and answers anything else with `api_usage_error: Invalid request`, which
+# is how the first real call failed. The runner's own envelope (`run_id`,
+# `operation`, `policy_version`, `benchmark_case_id`, `context_refs`, …) stays
+# on disk and inside the identity hashes; only these three travel.
+WIRE_FIELDS = ("model", "state", "questions")
+
 DEFAULT_CONNECT_TIMEOUT = 5.0
 DEFAULT_TOTAL_TIMEOUT = 30.0
 
@@ -215,7 +222,14 @@ class JevClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        body = json.dumps(request, ensure_ascii=False).encode("utf-8")
+        try:
+            payload = {field: request[field] for field in WIRE_FIELDS}
+        except KeyError as error:
+            raise JevClientError(
+                f"the request is missing {error.args[0]!r}, "
+                "which the endpoint requires"
+            ) from None
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         if before_dispatch is not None:
             before_dispatch()
         return self._attempt(request, headers, body)
