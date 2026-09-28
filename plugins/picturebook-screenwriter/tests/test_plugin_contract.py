@@ -312,5 +312,32 @@ class JevPhase2DocumentationTests(unittest.TestCase):
                 self.assertIn(required, text)
 
 
+class JevPhase3DocumentationTests(unittest.TestCase):
+    def test_pre_output_skill_names_the_split_finding_sources(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("project_proxy", text)
+        self.assertIn("project_authority", text)
+
+    def test_pre_output_skill_stops_overclaiming_its_scan_coverage(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("称呼一致性和插画描述做零假阴性扫描", text)
+        self.assertIn("尚未实现", text)
+
+    def test_enforcement_matrix_documents_the_screening_gates(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        for required in ("screening.py", "redline_catalog.py", "screening_runner.py",
+                         "promoted", "screened_clear"):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+    def test_contract_declares_the_prefilter_operation(self):
+        runtime = json.loads(CONTRACT.read_text(encoding="utf-8"))["jev_runtime"]
+        self.assertIn("text_quality_prefilter", runtime["operations"])
+
+
 if __name__ == "__main__":
     unittest.main()

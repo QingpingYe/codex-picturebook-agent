@@ -53,6 +53,12 @@ host policy enforces the call.
 | A settled operation clears only its own pending call | `runtime_required` | `skills/jev-decision-runtime/scripts/jev_runner.py` | The run-level `pending_call` in `decision-context.json` is cleared only when no other operation is still waiting; when a second operation's record is on disk the field keeps naming it, so a copied manifest is never told there is no call to continue. |
 | Routing bands and first-match rule order | `script_checked` | `skills/jev-decision-runtime/scripts/routing.py` | Rules and thresholds come from the policy file; the script cannot prove the thresholds were calibrated on Chinese samples. |
 | Relevance question templates and routing rules | `prompt_only` | `references/decision-policies.json` plus the Skill instructions | The policy supplies the template text, and whether screening runs at all still depends on the Skill instructions. |
+| 权威触犯不可被降级 | `runtime_required` | `skills/pre_output-baseline/scripts/quality_gate.py` | `apply_judgments` 不改变 `project_authority` 的 severity；只有 `promote_confirmed_redlines` 能产生阻断判定（代理候选被 promoted 为 `project_authority`）。 |
+| 失败不产生 clear | `runtime_required` | `skills/pre_output-baseline/scripts/screening.py` | 无答案、答案不可 band、路由异常一律成为 `runtime_failure`，其 `probabilities` 为空且永不可跳过复核。 |
+| `experimental` 不缩减复核范围 | `runtime_required` | `skills/pre_output-baseline/scripts/screening.py` | `may_skip_llm_review()` 要求 `screened_clear` 且 `calibration_status == "calibrated"`。 |
+| 全活动红线覆盖 | `script_checked` | `skills/pre_output-baseline/scripts/screening_runner.py` | 每个红线都生成问题；但词表是否完整仍取决于权威知识的内容。 |
+| 红线词表加载 | `script_checked` | `skills/pre_output-baseline/scripts/redline_catalog.py` | 优先 `machine-data: redline_terms`，回退到禁止章节的引用片段；空词表只报告不阻断。 |
+| 阈值校准状态 | `prompt_only` | `references/calibration-samples.md` + 技能指令 | 脚本无法证明阈值真的按中文样本校准过。 |
 
 Use host-level permissions, approval prompts, or hooks when a guarantee must
 hold even if a model ignores the Skill instructions.

@@ -14,6 +14,10 @@ description: quality 槽位的全产物类型兜底技能，补充读者视角�
 
 本技能不重复已完成的确定型指标和语义判定，只补足它们未覆盖的视角。
 
+## 与 Jev 辅助预筛的关系
+
+用户选择 Jev 辅助路径时，本技能只复核 `pre_output-baseline` 升级包里的项目，以及未被 `calibrated` operation 覆盖的项。`experimental` operation 的 `screened_clear` 不缩减本技能的复核范围。
+
 ## Not In Scope
 
 - 本技能不写入文件，不派发子代理，不自动改写权威冲突。
