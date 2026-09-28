@@ -335,6 +335,25 @@ class Phase3IntegrationTests(unittest.TestCase):
                     "screened_clear_ratio", "escalation_ratio"):
             with self.subTest(key=key):
                 self.assertIn(key, outcome.summary)
+        asked = sum(len(item["dimensions"]) for item in screening_items(PAGES, REDLINE_RULES))
+        self.assertEqual(outcome.summary["total"], asked)
+        self.assertEqual(outcome.summary["screened_clear"], asked)
+        self.assertEqual(outcome.summary["escalated"], 0)
+        self.assertEqual(outcome.summary["runtime_failure"], 0)
+        # The two ratios are the numbers Phase 4 hands the user, so a swap has
+        # to be visible here rather than only in a key-presence check.
+        self.assertEqual(outcome.summary["screened_clear_ratio"], 1.0)
+        self.assertEqual(outcome.summary["escalation_ratio"], 0.0)
+
+    def test_the_summary_ratios_move_when_one_dimension_escalates(self):
+        answers = self._all_clear()
+        answers["page-2::direct_moralizing"] = noul(0.97)
+        outcome = self._run(answers)
+        total = outcome.summary["total"]
+        self.assertEqual(outcome.summary["escalated"], 1)
+        self.assertEqual(outcome.summary["screened_clear"], total - 1)
+        self.assertAlmostEqual(outcome.summary["escalation_ratio"], 1 / total)
+        self.assertAlmostEqual(outcome.summary["screened_clear_ratio"], (total - 1) / total)
 
 
 if __name__ == "__main__":
