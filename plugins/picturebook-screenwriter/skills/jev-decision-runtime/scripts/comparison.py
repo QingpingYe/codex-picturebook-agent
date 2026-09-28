@@ -682,9 +682,22 @@ def _attest_identity(
             f"({', '.join(case_ids)}), not the declared benchmark_case_id "
             f"({declared.get('benchmark_case_id')})"
         )
+    else:
+        # More than one case on disk, and the declared one is among them: a
+        # trace of this run does name it, so the case id is attested rather than
+        # merely declared.
+        verified.append("benchmark_case_id")
+    # The version is read off the operations the traces name, and a directory
+    # reused for a second case still holds the earlier traces. Only this case's
+    # traces may attest its policy version: counting the other case's would
+    # present the pair as comparable on a version this run never used.
+    own_traces = [
+        trace for trace in traces
+        if trace.get("benchmark_case_id") in (None, attested.get("benchmark_case_id"))
+    ]
     versions = {
         operation_policy(policy, str(trace.get("operation")))["policy_version"]
-        for trace in traces
+        for trace in own_traces
         if trace.get("operation") in OPERATIONS
     }
     if versions and declared.get("policy_version") in versions:

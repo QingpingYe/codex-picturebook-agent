@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import sys
@@ -85,8 +86,34 @@ class RelevanceCliTests(unittest.TestCase):
              "--api-key=SUPER-SECRET"]
         )
         self.assertEqual(code, 2)
+        # The gate's own sentence, on the stream this CLI was handed: without it
+        # the case also passes with the gate deleted, because the exit code is 2
+        # either way and argparse writes to the process streams instead.
+        self.assertIn("credentials are not accepted on the command line", err)
         self.assertNotIn("SUPER-SECRET", err)
         self.assertNotIn("SUPER-SECRET", out)
+
+    def test_an_unrecognised_option_is_refused_without_its_value(self):
+        # `--tokens` is a count rather than the token, so the credential gate
+        # lets it through; this CLI's parser is a plain one, so argparse's own
+        # message would print the value on the process stderr, where the stream
+        # `main` was handed never sees it.
+        stdout, stderr = io.StringIO(), io.StringIO()
+        transport = FakeTransport(responses=[])
+        with contextlib.redirect_stderr(io.StringIO()) as process_stderr:
+            code = main(
+                ["--bundle", str(self.bundle_path), "--run-dir", str(self.run_dir),
+                 "--artifact-type", "script", "--task", "t", "--brief", "b",
+                 "--tokens=SUPER-SECRET-VALUE"],
+                environ={API_KEY_ENV: "sk-abc"},
+                transport_factory=lambda: transport, stdout=stdout, stderr=stderr,
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("unrecognized arguments: --tokens", stderr.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", stderr.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", stdout.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", process_stderr.getvalue())
+        self.assertEqual(transport.calls, [])
 
     def test_a_missing_key_still_reports_the_kept_context(self):
         code, out, _, transport = self._run(

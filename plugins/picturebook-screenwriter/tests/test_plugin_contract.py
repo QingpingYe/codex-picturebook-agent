@@ -282,11 +282,12 @@ class JevPhase1DocumentationTests(unittest.TestCase):
         self.assertIn("不提供跨主机互斥", text)
 
     def test_enforcement_matrix_does_not_overclaim_the_credential_gate(self):
-        # The gate refuses the credential flags whose shape it can read before
-        # argparse runs; argparse still echoes any *other* argument it is
-        # handed. A row promising that a value is never echoed would describe a
-        # protection the code does not have, so both credential rows have to
-        # name where the echo comes from instead.
+        # No row may promise that a value is never echoed: argparse still prints
+        # the value of a *recognised* option whose value it rejects, so the
+        # unconditional claim would describe a protection the code does not
+        # have. What both rows do have to name is the sharper guarantee that now
+        # sits next to the gate — every argument the parser cannot place is
+        # refused by name — and the residue that makes the warning worth keeping.
         rows = [
             line for line in ENFORCEMENT.read_text(encoding="utf-8").splitlines()
             if line.startswith("|")
@@ -297,6 +298,7 @@ class JevPhase1DocumentationTests(unittest.TestCase):
             with self.subTest(row=row.split("|")[1].strip()):
                 self.assertNotIn("never echoed", row)
                 self.assertIn("argparse", row)
+                self.assertIn("parse_known_options", row)
 
     def test_plugin_readme_documents_the_jev_credential_environment(self):
         text = PLUGIN_README.read_text(encoding="utf-8")

@@ -246,6 +246,24 @@ class CompareCliTests(unittest.TestCase):
         )
         self.assertNotIn("SECRET-VALUE", err.getvalue())
 
+    def test_an_unrecognised_option_is_refused_without_its_value(self):
+        # This CLI turns argparse's own message onto the injected stream, so a
+        # flag the credential vocabulary does not read — `--tokens` is a count,
+        # not the token — would arrive with its value quoted. Refusing the
+        # argument the parser cannot place, by name, is what closes that.
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(io.StringIO()) as leaked:
+            code = main(
+                ["--run-dir", str(self.run_dir), "--llm-usage", str(self.usage),
+                 "--tokens=SUPER-SECRET-VALUE"],
+                stdout=out, stderr=err,
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("unrecognized arguments: --tokens", err.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", err.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", out.getvalue())
+        self.assertEqual(leaked.getvalue(), "")
+
     def test_no_written_file_contains_a_credential_field_name(self):
         self._main(self._argv())
         for path in (self.out_dir / "path-comparison-audit").rglob("*"):

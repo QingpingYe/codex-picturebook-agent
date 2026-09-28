@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import tempfile
@@ -943,8 +944,62 @@ class CliTests(RunnerCase):
                     environ={}, stdout=stdout, stderr=stderr,
                 )
                 self.assertEqual(code, 2)
+                # The gate's own sentence, on the stream this CLI was handed.
+                # Without this the case passes with the gate deleted: the
+                # command line is also missing `--request`, so argparse exits 2
+                # by itself — on the process's stderr, which this CLI was never
+                # given — and the injected stream stays empty either way.
+                self.assertIn(
+                    "credentials are not accepted on the command line",
+                    stderr.getvalue(),
+                )
                 self.assertNotIn("SUPER-SECRET-VALUE", stderr.getvalue())
                 self.assertNotIn("SUPER-SECRET-VALUE", stdout.getvalue())
+
+    def test_an_argument_the_gate_cannot_name_is_refused_without_its_value(self):
+        # The credential vocabulary reads the shape of a flag, and no
+        # vocabulary of spellings is complete: `--tokens` and `--api-keys` are
+        # not among them, so the gate lets them through. What keeps their values
+        # off the terminal is the unknown-argument refusal, which reports the
+        # name the parser could not place and nothing it carried.
+        path = self._write("request.json", make_request())
+        for argument in ("--tokens=SUPER-SECRET-VALUE",
+                         "--api-keys=SUPER-SECRET-VALUE"):
+            with self.subTest(argument=argument):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(io.StringIO()) as process_stderr:
+                    code = main(
+                        ["run", "--request", str(path),
+                         "--run-dir", str(self.run_dir), argument],
+                        environ={}, stdout=stdout, stderr=stderr,
+                    )
+                self.assertEqual(code, 2)
+                self.assertIn(
+                    f"unrecognized arguments: {argument.split('=')[0]}",
+                    stderr.getvalue(),
+                )
+                self.assertNotIn("SUPER-SECRET-VALUE", stderr.getvalue())
+                self.assertNotIn("SUPER-SECRET-VALUE", stdout.getvalue())
+                self.assertNotIn("SUPER-SECRET-VALUE", process_stderr.getvalue())
+
+    def test_a_bare_positional_value_is_refused_without_being_echoed(self):
+        # A pasted secret is as likely to arrive as a stray positional as it is
+        # to arrive glued to a flag, and argparse echoes those too.
+        path = self._write("request.json", make_request())
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(io.StringIO()) as process_stderr:
+            code = main(
+                ["run", "--request", str(path), "--run-dir", str(self.run_dir),
+                 "SUPER-SECRET-VALUE"],
+                environ={}, stdout=stdout, stderr=stderr,
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("<positional argument>", stderr.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", stderr.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", stdout.getvalue())
+        self.assertNotIn("SUPER-SECRET-VALUE", process_stderr.getvalue())
 
     def test_a_provider_prefixed_credential_flag_is_refused_too(self):
         # `--openai-api-key=…` is the same mistake as `--api-key=…`. argparse

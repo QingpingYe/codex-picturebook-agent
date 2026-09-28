@@ -31,6 +31,7 @@ from jev_runner import (  # noqa: E402
     LeaseHeld,
     NoPendingCall,
     RunnerConfig,
+    parse_known_options,
     reject_credential_arguments,
     write_atomic,
 )
@@ -104,7 +105,7 @@ def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=No
         parser.print_usage(err)
         return 2
     try:
-        args = parser.parse_args(arguments)
+        args = parse_known_options(parser, arguments, stderr=err)
     except SystemExit as exit_error:
         return 2 if exit_error.code else 0
 

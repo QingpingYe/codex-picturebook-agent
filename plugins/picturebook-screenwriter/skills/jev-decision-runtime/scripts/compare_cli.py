@@ -10,7 +10,7 @@ from pathlib import Path
 from comparison import build_case_report, report_to_markdown
 from decision_contract import ContractError, default_policy_path, load_policy
 from jev_client import JevClientError
-from jev_runner import reject_credential_arguments
+from jev_runner import parse_known_options, reject_credential_arguments
 from telemetry import now_iso
 
 # The session-export helper owns the audit bundle layout; this CLI composes it
@@ -100,7 +100,7 @@ def main(argv=None, stdout=None, stderr=None) -> int:
         parser.print_usage(err)
         return 2
     try:
-        args = parser.parse_args(arguments)
+        args = parse_known_options(parser, arguments, stderr=err)
     except SystemExit as exit_error:
         return 2 if exit_error.code else 0
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -913,6 +914,12 @@ def _superseded(request, config, operation_id, reason) -> dict:
 # than the handful of names someone happened to be using when it was written.
 # Each marker is read as whole `-`/`_`-separated words, so that a count such as
 # `--max-tokens` is not the secret `--token`.
+#
+# No vocabulary of spellings is complete, so this gate is not the guarantee: it
+# is the polite refusal for the shapes below. What keeps a value off the
+# terminal for every other spelling is `parse_known_options`, which refuses the
+# arguments the parser cannot place and reports them by name — including the
+# bare positional a pasted secret is as likely to arrive as.
 CREDENTIAL_ARGUMENT_MARKERS = (
     "api-key",
     "apikey",
@@ -1023,6 +1030,55 @@ def reject_credential_arguments(arguments) -> str | None:
     return None
 
 
+# What stands in for a positional argument in a refusal: the caller's text is
+# the thing that must not be repeated, so the message names the kind instead.
+POSITIONAL_PLACEHOLDER = "<positional argument>"
+
+
+def unrecognized_argument_names(arguments) -> list[str]:
+    """Name the arguments a parser refused, without quoting what they carried.
+
+    A flag is reported by its `--name` alone, so a value glued on with `=` never
+    reaches the message; a bare positional is reported as a placeholder rather
+    than as its own text, because a pasted secret arrives that way too.
+    """
+
+    names: list[str] = []
+    for argument in arguments:
+        text = str(argument)
+        if text.startswith("-"):
+            name = text.split("=", 1)[0]
+        else:
+            name = POSITIONAL_PLACEHOLDER
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def parse_known_options(parser, argv, *, stderr=None):
+    """Parse `argv`, refusing unknown arguments without echoing their values.
+
+    argparse's own `parse_args` reports an unknown argument by printing it —
+    value included. For a parser built without a stream of its own it prints on
+    the process's standard error, where the stream `main` was handed never sees
+    it; for one built with a stream it prints the value into that stream. Either
+    way the value of an argument this CLI does not declare reaches a terminal,
+    and no vocabulary of credential spellings can cover every such argument
+    (`--tokens=…`, `--api-keys=…` and a bare positional all reach it).
+    `parse_known_args` returns those leftovers instead of reporting them, so the
+    refusal can name them without repeating them.
+    """
+
+    args, unrecognized = parser.parse_known_args(argv)
+    if not unrecognized:
+        return args
+    sink = sys.stderr if stderr is None else stderr
+    parser.print_usage(sink)
+    names = ", ".join(unrecognized_argument_names(unrecognized))
+    print(f"{parser.prog}: error: unrecognized arguments: {names}", file=sink)
+    raise SystemExit(2)
+
+
 def _build_parser():
     import argparse
 
@@ -1048,8 +1104,6 @@ def main(
     stdout=None,
     stderr=None,
 ) -> int:
-    import sys
-
     arguments = list(sys.argv[1:] if argv is None else argv)
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
@@ -1064,7 +1118,7 @@ def main(
         parser.print_usage(err)
         return 2
     try:
-        args = parser.parse_args(arguments)
+        args = parse_known_options(parser, arguments, stderr=err)
     except SystemExit as exit_error:
         return 2 if exit_error.code else 0
 

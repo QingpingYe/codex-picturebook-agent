@@ -734,6 +734,23 @@ class BuildCaseReportTests(unittest.TestCase):
         self.assertTrue(any("policy_version" in reason
                             for reason in report["comparability_reasons"]))
 
+    def test_a_policy_version_is_attested_only_by_this_cases_traces(self):
+        # The version is read off the operations the traces name, and a
+        # directory reused for a second case still holds the earlier traces. A
+        # version only the other case's trace carries is not a policy this case
+        # ran, so attesting it would present the pair as comparable on a version
+        # this run never used.
+        write_atomic(
+            self.run_dir / "jev" / "knowledge_relevance" / "trace" / "0001.json",
+            trace("knowledge_relevance", benchmark_case_id="sha256:" + "b" * 64),
+        )
+        report = self._rewrite_usage(policy_version="knowledge-relevance-v1")
+        self.assertFalse(report["comparable"])
+        self.assertNotIn("policy_version",
+                         report["identity_attestation"]["verified"])
+        self.assertTrue(any("policy_version" in reason
+                            for reason in report["comparability_reasons"]))
+
     def test_the_report_says_which_identity_fields_the_run_attested(self):
         # Five of the six identity fields have no second copy on disk: a trace
         # holds the derived case id, not the draft hash, the revision vector or
@@ -809,6 +826,11 @@ class BuildCaseReportTests(unittest.TestCase):
         self.assertEqual(report["comparability_reasons"], [])
         self.assertEqual(report["traces"], 1)
         self.assertEqual(report["foreign_traces"], 1)
+        # One of the traces on disk does name the declared case, so the case id
+        # is attested rather than merely declared: leaving it out of `verified`
+        # would under-report what the run directory holds.
+        self.assertIn("benchmark_case_id",
+                      report["identity_attestation"]["verified"])
         self.assertEqual(report["jev_assisted"]["input_tokens"], 2000)
 
     def test_a_numeric_cost_is_refused_with_a_quoting_hint(self):
