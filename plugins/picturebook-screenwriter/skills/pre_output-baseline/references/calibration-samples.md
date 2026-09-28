@@ -78,7 +78,7 @@
 
 3. 只有人工确认可接受的结果才能把对应 operation 的 `calibration_status` 从 `experimental` 改成 `calibrated`，并把选定的 band 写进 `decision-policies.json`。不同 operation 不共享阈值。
 
-### 读这份报告时要注意的四件事
+### 读这份报告时要注意的五件事
 
 - **硬约束优先于升级比例。** 标为 `issue` 的样本在任何阈值下都不得落入 clear 侧；这是选阈值的硬约束，优先于升级比例。默认预算 `--max-false-negative-rate 0.0` 就是这条规则，找不到满足它的阈值时工具只报告 `threshold: null`，不给出可用的数。
 - **阈值的方向是 `clear_at_or_below`。** 阈值越高，被放行的项越多、升级比例越低。工具只把这个边界拿出来扫，`risk_at_or_above` 仍由策略固定，因此灰区比例要由运行期的 band 结果统计，工具报告的是升级比例。

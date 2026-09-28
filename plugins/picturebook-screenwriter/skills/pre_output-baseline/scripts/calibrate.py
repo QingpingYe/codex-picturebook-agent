@@ -284,6 +284,11 @@ def recommend(
     which erases the grey band: the grey escalation rule becomes dead code and
     the content-removing `all_of` rules fire more often. A recommendation that
     could not be pasted into the policy is not a recommendation.
+
+    Every caller has to pass `ceiling`; the CLI reads it from the operation's
+    policy with `operation_ceiling`. The `None` default only exists so a test
+    can sweep a grid without a policy in hand, and a new caller that forgets it
+    gets the unguarded grid.
     """
 
     entries = tuple(outcomes)
@@ -330,6 +335,7 @@ def recommend(
         "max_false_negative_rate": max_false_negative_rate,
         "samples": len(entries),
         "ceiling": None if ceiling is None else str(ceiling),
+        "excluded_thresholds": excluded,
         "screened_clear": best["screened_clear"],
         "escalated": best["escalated"],
         "failed": best["failed"],
@@ -344,7 +350,6 @@ def recommend(
             "candidate thresholds at or above the operation's risk_at_or_above "
             f"were excluded because they would erase the grey band: {excluded}"
         )
-        recommendation["excluded_thresholds"] = excluded
     return recommendation
 
 
