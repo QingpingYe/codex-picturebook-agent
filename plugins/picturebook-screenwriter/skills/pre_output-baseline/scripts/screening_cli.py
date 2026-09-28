@@ -47,8 +47,43 @@ REPORT_SCHEMA = "pb-quality-prefilter-report-v1"
 ESCALATION_SCHEMA = "pb-quality-escalation-package-v1"
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="screening_cli.py")
+class _StreamParser(argparse.ArgumentParser):
+    """An `ArgumentParser` that reports through the streams `main` was handed.
+
+    argparse writes usage and errors to the process streams. That would leave an
+    injected-stderr test asserting on a buffer nothing ever writes to — and,
+    worse, it would echo onto the terminal the very argument the credential
+    refusal exists to keep off it.
+    """
+
+    def __init__(self, *args, stdout=None, stderr=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._stdout = stdout
+        self._stderr = stderr
+
+    def _print_message(self, message, file=None):
+        if file is sys.stderr:
+            file = self._stderr
+        elif file is sys.stdout or file is None:
+            file = self._stdout
+        super()._print_message(message, file)
+
+    def print_usage(self, file=None):
+        super().print_usage(self._stderr if file is None else file)
+
+    def error(self, message):
+        self.print_usage()
+        self._print_message(f"{self.prog}: error: {message}\n", sys.stderr)
+        raise SystemExit(2)
+
+    def exit(self, status=0, message=None):
+        if message:
+            self._print_message(message, sys.stdout if status == 0 else sys.stderr)
+        raise SystemExit(status)
+
+
+def _build_parser(stdout=None, stderr=None) -> argparse.ArgumentParser:
+    parser = _StreamParser(prog="screening_cli.py", stdout=stdout, stderr=stderr)
     parser.add_argument(
         "--script", required=True, help="the storyboard draft markdown to screen"
     )
@@ -171,6 +206,11 @@ def _build_report(
 ) -> dict:
     """The operator-facing report: verdicts, ratios, and what stopped the run."""
 
+    skip_items = [
+        decision.item_id
+        for decision in outcome.decisions
+        if may_skip_llm_review(decision, calibration_status)
+    ]
     return {
         "schema_version": REPORT_SCHEMA,
         "operation": OPERATION,
@@ -182,13 +222,12 @@ def _build_report(
         "catalog_size": outcome.catalog_size,
         "catalog_gap": outcome.catalog_size == 0,
         "calibration_status": calibration_status,
-        # True only when a clear verdict in this report may actually reduce the
-        # plain-LLM review; while the operation is experimental this is False
-        # however many dimensions cleared.
-        "may_skip_llm_review": any(
-            may_skip_llm_review(decision, calibration_status)
-            for decision in outcome.decisions
-        ),
+        # The reduction is per item, so the report counts the items whose clear
+        # verdict may actually skip the review rather than claiming the whole
+        # review may be skipped. While the operation is experimental both are
+        # empty however many dimensions cleared.
+        "may_skip_llm_review_items": skip_items,
+        "may_skip_llm_review_count": len(skip_items),
         "proxy_hit_count": proxy_hit_count,
         "summary": dict(outcome.summary),
         "routes": [dict(route) for route in outcome.routes],
@@ -210,7 +249,10 @@ def _escalation_payload(report: dict, items) -> dict:
         "operation": report["operation"],
         "run_id": report["run_id"],
         "calibration_status": report["calibration_status"],
-        "may_skip_llm_review": report["may_skip_llm_review"],
+        # Deliberately no report-wide "the review may be skipped" flag here: the
+        # package is what the plain LLM reviews, and the reduction spec §7.4
+        # allows is per item, not per report.
+        "may_skip_llm_review_count": report["may_skip_llm_review_count"],
         "catalog_gap": report["catalog_gap"],
         "summary": report["summary"],
         "warnings": report["warnings"],
@@ -228,7 +270,7 @@ def main(argv=None, environ=None, transport_factory=None, stdout=None, stderr=No
         print(refusal, file=err)
         return 2
 
-    parser = _build_parser()
+    parser = _build_parser(stdout=out, stderr=err)
     if not arguments:
         parser.print_usage(err)
         return 2

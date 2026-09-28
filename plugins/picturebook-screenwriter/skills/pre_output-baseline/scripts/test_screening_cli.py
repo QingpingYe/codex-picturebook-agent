@@ -16,6 +16,7 @@ if str(RUNTIME_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(RUNTIME_SCRIPTS))
 
 from jev_client import API_KEY_ENV, FakeTransport, TransportResponse  # noqa: E402
+from decision_contract import default_policy_path  # noqa: E402
 from redline_catalog import catalog_from_bundle  # noqa: E402
 from screening_runner import screening_items  # noqa: E402
 from screening_cli import main  # noqa: E402
@@ -356,10 +357,39 @@ class ScreeningCliTests(unittest.TestCase):
         payload = json.loads(out)
         self.assertEqual(payload["calibration_status"], "experimental")
         self.assertTrue(payload["summary"]["screened_clear"])
-        self.assertFalse(payload["may_skip_llm_review"])
+        self.assertEqual(payload["may_skip_llm_review_count"], 0)
+        self.assertEqual(payload["may_skip_llm_review_items"], [])
         self.assertTrue(
             any("不缩减普通 LLM 复核范围" in note for note in payload["warnings"])
         )
+
+    def test_a_calibrated_operation_counts_the_items_it_may_skip(self):
+        """The reduction is per item, so the report counts items, not a verdict.
+
+        A report-wide "the review may be skipped" flag would read as permission
+        to drop the whole review, and it would travel inside the very package
+        the plain LLM is asked to check.
+        """
+
+        policy = json.loads(Path(default_policy_path()).read_text(encoding="utf-8"))
+        policy["operations"]["text_quality_prefilter"]["calibration_status"] = "calibrated"
+        policy_path = self.run_dir / "calibrated-policy.json"
+        policy_path.write_text(json.dumps(policy, ensure_ascii=False), encoding="utf-8")
+        escalation_path = self.run_dir / "escalation.json"
+        code, out, err, _ = self._clear_screen(
+            policy=str(policy_path), escalation_out=str(escalation_path)
+        )
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertEqual(payload["calibration_status"], "calibrated")
+        self.assertEqual(
+            payload["may_skip_llm_review_count"], payload["summary"]["screened_clear"]
+        )
+        self.assertTrue(payload["may_skip_llm_review_items"])
+        package = json.loads(escalation_path.read_text(encoding="utf-8"))
+        self.assertNotIn("may_skip_llm_review", package)
+        self.assertEqual(package["may_skip_llm_review_count"],
+                         payload["may_skip_llm_review_count"])
 
     def test_a_failed_call_never_reads_as_a_pass(self):
         code, out, err, transport = self._run(
