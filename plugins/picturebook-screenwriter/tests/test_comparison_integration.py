@@ -143,6 +143,15 @@ class Phase4IntegrationTests(unittest.TestCase):
         self.assertEqual(report["llm"]["input_tokens"], 54000)
         self.assertEqual(report["llm"]["cache_tokens"], 12000)
 
+    def test_the_jev_column_does_not_invent_a_cache_measurement(self):
+        # The trace contract carries no cache-token field, so the Jev column has
+        # nothing to report for it: a hard-coded 0 in the product reads as "this
+        # run was measured and used no cache", which nobody measured.
+        report = build_case_report(run_dir=self.run_dir, llm_usage_path=self.usage,
+                                   policy=self.policy)
+        self.assertIsNone(report["jev_assisted"]["cache_tokens"])
+        self.assertEqual(report["llm"]["cache_tokens"], 12000)
+
     def test_a_shared_case_id_makes_the_runs_comparable(self):
         report = build_case_report(run_dir=self.run_dir, llm_usage_path=self.usage,
                                    policy=self.policy)
@@ -641,9 +650,9 @@ class RealRunComparisonTests(unittest.TestCase):
         # The documented recovery from a credential wait is `jev_runner
         # resume`, which has no operation routing to hand the runner: the batch
         # it settles writes the zero pair. The report may not read that as
-        # "this operation cleared everything" — the visible escalation share is
-        # a lower bound — so the advice has to withhold the promotion and say
-        # why.
+        # "this operation cleared everything" — the two counts cover only the
+        # batches that recorded theirs, so the share may be off either way — so
+        # the advice has to withhold the promotion and say why.
         policy = copy.deepcopy(self.policy)
         policy["operations"]["text_quality_prefilter"]["max_items_per_request"] = 1
         batches = plan_batches(screening_items(PAGES, REDLINE_RULES), 1)

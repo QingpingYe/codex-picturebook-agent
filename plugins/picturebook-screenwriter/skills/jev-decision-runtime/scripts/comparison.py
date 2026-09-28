@@ -390,8 +390,9 @@ def operation_metrics(traces, *, measurable_only: bool = True) -> tuple[dict, ..
             # A succeeded batch decided at least one item, so both counts being
             # zero on a succeeded trace means they were never recorded — the
             # shape the `resume` path leaves, because that entry point has no
-            # operation routing to hand the runner. The numbers beside it are a
-            # lower bound then, and the advice has to know that.
+            # operation routing to hand the runner. Both counts then cover only
+            # the batches that did record theirs, so the share beside them may
+            # be off in either direction, and the advice has to know that.
             "traces_without_verdicts": len([
                 item for item in items
                 if item.get("status") == "succeeded"
@@ -485,8 +486,9 @@ def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
     )
     if without_verdicts:
         # Name the hole where the numbers are: those traces carry a zero pair
-        # that was never decided, so the escalation rows beside them are lower
-        # bounds rather than measurements.
+        # that was never decided, so the escalation rows beside them count only
+        # the batches that recorded theirs, and the share may be off in either
+        # direction rather than measured.
         notes.append(f"traces_without_verdicts={without_verdicts}")
     return CaseMetrics(
         path="jev_assisted",
@@ -494,7 +496,10 @@ def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
         request_count=_sum_optional(item.get("request_count") for item in measured),
         input_tokens=_sum_optional(item.get("input_tokens") for item in measured),
         output_tokens=_sum_optional(item.get("output_tokens") for item in measured),
-        cache_tokens=0,
+        # The trace contract has no cache-token field, so this is a measurement
+        # nobody took rather than a measured zero: `null` says "not reported",
+        # the way a trace with no usage reports its tokens and its cost.
+        cache_tokens=None,
         estimated_cost_usd=_sum_cost(
             item.get("estimated_cost_usd") for item in measured
         ),
@@ -566,8 +571,9 @@ def calibration_suggestions(
 
     An operation that holds a succeeded trace whose counts were never recorded
     gets no promotion either: a batch settled that way always decided at least
-    one item, so the visible escalation share is a lower bound, and a bound may
-    not be read as "cleared enough to stop re-checking".
+    one item, so the counts beside it cover only the batches that recorded
+    theirs — the share may be off in either direction, which is not a reading of
+    "cleared enough to stop re-checking".
 
     The suggestion is advisory only. Flipping `calibration_status` changes how
     much the plain LLM re-checks, so it stays a human decision recorded in the
@@ -603,7 +609,8 @@ def calibration_suggestions(
             # "review the thresholds" either — is read out of this run.
             reason = (
                 f"该 operation 有 {without_verdicts} 条已成功的 trace 没有记下判定计数"
-                "（例如由 resume 继续的批次），升级率只是下界，不能用于校准"
+                "（例如由 resume 继续的批次），两个计数都只统计了记下来的批次，"
+                "比率可能偏高也可能偏低，不能用于校准"
             )
         elif failed:
             reason = f"该 operation 本次有 {failed} 项运行失败，失败项不得计入校准"
@@ -662,6 +669,19 @@ def _attest_identity(
             f"benchmark_case_id ({declared.get('benchmark_case_id')}), so the "
             "declared case id is unverified"
         )
+    elif declared.get("benchmark_case_id") not in case_ids:
+        # Traces are there, but every one of them names another case. That is
+        # the same hole as an empty directory seen from the other side: nothing
+        # on disk attests the case the entry declares, and a report that called
+        # it comparable would price a declaration no run produced. A directory
+        # that holds this case beside another one still compares — the foreign
+        # traces stay out of the numbers — so the reason means exactly "none of
+        # these traces is this case".
+        reasons.append(
+            "the run directory's traces name other cases "
+            f"({', '.join(case_ids)}), not the declared benchmark_case_id "
+            f"({declared.get('benchmark_case_id')})"
+        )
     versions = {
         operation_policy(policy, str(trace.get("operation")))["policy_version"]
         for trace in traces
@@ -698,6 +718,10 @@ def build_case_report(
     # A run directory reused for a second case still holds the earlier traces.
     # They are excluded from the numbers (a stale trace must not inflate this
     # case's tokens or cost) but counted, so the mismatch stays visible.
+    # A trace that names no case id is read as this case's: the trace contract
+    # makes `benchmark_case_id` required, so only a hand-edited file can carry
+    # null, and `_attest_identity` has already refused the run when nothing on
+    # disk names the declared case at all.
     own = tuple(
         trace for trace in traces
         if trace.get("benchmark_case_id") in (None, case_id)

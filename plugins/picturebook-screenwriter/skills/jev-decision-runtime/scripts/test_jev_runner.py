@@ -976,7 +976,29 @@ class CliTests(RunnerCase):
         # the ordinary arguments of unrelated tools that share a command line.
         for argument in ("--sort-key=2", "--SORT_KEY=2", "--primary-key=id",
                          "--foreign-key=user_id", "--cache-key=page-1",
-                         "--monkey=1", "--hotkey=ctrl+k", "--shortcut-key=x"):
+                    "--monkey=1", "--hotkey=ctrl+k", "--shortcut-key=x"):
+            with self.subTest(argument=argument):
+                self.assertIsNone(credential_flag(argument))
+                self.assertIsNone(reject_credential_arguments([argument]))
+
+    def test_a_key_with_its_qualifier_glued_on_is_refused_too(self):
+        # Providers write the same argument both ways, and a rule that only
+        # reads the last `-`/`_` segment lets the glued spelling through to
+        # argparse, which echoes whatever it is handed — the leak this gate
+        # exists to close.
+        for flag in ("--mykey", "--userkey", "--authkey", "--typesafekey",
+                     "--nameKey", "--apikey", "--OPENAI_KEY"):
+            with self.subTest(flag=flag):
+                refusal = reject_credential_arguments([f"{flag}=SUPER-SECRET-VALUE"])
+                self.assertIsNotNone(refusal)
+                self.assertNotIn("SUPER-SECRET-VALUE", refusal)
+
+    def test_a_flag_that_counts_tokens_is_not_a_credential(self):
+        # A count of tokens is not the token itself: the gate judges whole
+        # `-`/`_`-separated segments, so `--max-tokens` is an ordinary argument
+        # rather than a credential to refuse.
+        for argument in ("--max-tokens=5", "--input-tokens=5",
+                         "--tokens-per-page=5", "--max-tokens"):
             with self.subTest(argument=argument):
                 self.assertIsNone(credential_flag(argument))
                 self.assertIsNone(reject_credential_arguments([argument]))

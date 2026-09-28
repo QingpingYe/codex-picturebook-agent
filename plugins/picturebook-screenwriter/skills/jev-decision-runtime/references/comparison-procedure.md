@@ -74,7 +74,7 @@ python scripts/compare_cli.py \
 | --- | --- | --- |
 | `elapsed_ms`、`request_count` | 上一步手工汇总 | 运行目录里的 trace |
 | `input_tokens`、`output_tokens` | 上一步手工汇总 | trace 的 `usage` |
-| `cache_tokens` | 上一步手工汇总 | 当前恒为 `0`（trace 尚未记录缓存 token），不是"Jev 省了缓存"；本次没有任何可测 trace 时是 `null`，不是 `0` |
+| `cache_tokens` | 上一步手工汇总 | 恒为 `null`：trace 尚未记录缓存 token，这一格读作"没有测过"，不是"Jev 省了缓存" |
 | `estimated_cost_usd` | 上一步手工汇总 | trace 的 `estimated_cost_usd` 求和 |
 | `knowledge_items_entered` | 上一步手工汇总：本次全量进入的知识块 | **只**取 `knowledge_relevance` 自己的 `escalated_count` 之和，即该 operation 交给普通 LLM 继续处理的块数 |
 | `quality_items_entered` | 上一步手工汇总：本次全量复核的页面维度 | **只**取 `text_quality_prefilter` 自己的 `escalated_count` 之和，即升级项 |
@@ -96,7 +96,8 @@ python scripts/compare_cli.py \
   `item_count` 是请求引用到的权威页数，**不是**进入 LLM 的项数，别拿它当上面那两行。
 - **用 `jev_runner resume` 从凭据等待继续的批次不带判定计数**：CLI 的 `resume` 没有该
   operation 的路由可以交给 runner，于是那条已经成功、却把两个计数都写成 0 的 trace 会被
-  记成 `traces_without_verdicts`（`notes` 里也会出现同名条目）。它旁边的升级率只是**下界**，
+  记成 `traces_without_verdicts`（`notes` 里也会出现同名条目）。它旁边的两个计数都只统计了记下来的批次，
+  升级率**可能偏高也可能偏低**，
   所以只要存在这类 trace，该 operation 的建议一律是 `keep_experimental` 并写明原因，不会给出
   `eligible_for_calibrated`，也不会借它条的数字给出 `review_thresholds`。要拿可比较的升级率，
   请整条 run 重跑一次，而不是靠 `resume` 补记。

@@ -911,10 +911,8 @@ def _superseded(request, config, operation_id, reason) -> dict:
 # argparse echoes the value back to the terminal before any of these CLIs can
 # refuse the request, so the check has to catch the shape of the flag rather
 # than the handful of names someone happened to be using when it was written.
-# A flag whose last `-`/`_`-separated segment is `key` is refused with them,
-# which is what catches the provider-prefixed spellings; `--sort-key` and
-# `--primary-key` name an ordering or a relation rather than a secret, so they
-# stay allowed, and a bare word like `--monkey` was never a flag for a key.
+# Each marker is read as whole `-`/`_`-separated words, so that a count such as
+# `--max-tokens` is not the secret `--token`.
 CREDENTIAL_ARGUMENT_MARKERS = (
     "api-key",
     "apikey",
@@ -925,6 +923,27 @@ CREDENTIAL_ARGUMENT_MARKERS = (
     "secret-key",
     "secret_key",
     "client-secret",
+    "token",
+    "secret",
+    "passwd",
+    "password",
+    "credential",
+    "authorization",
+    "bearer",
+)
+
+# The words those markers are named with, matched as whole `-`/`_`-separated
+# segments: `--token`, `--my-token`, `--db-password`, and the glued spellings
+# providers use for the same secrets (`--apikey`). A count is not a secret, so
+# `--max-tokens` is deliberately not one of them. Every marker above is caught
+# by one of these words or by the trailing-`key` rule below; the test that walks
+# `CREDENTIAL_ARGUMENT_MARKERS` is what keeps the two lists from drifting apart.
+CREDENTIAL_ARGUMENT_WORDS = (
+    "apikey",
+    "apitoken",
+    "accesskey",
+    "secretkey",
+    "clientsecret",
     "token",
     "secret",
     "passwd",
@@ -952,6 +971,13 @@ NON_CREDENTIAL_KEY_QUALIFIERS = (
     "dedupe",
 )
 
+# The words that merely end in the letters `key`: `--monkey` names an animal and
+# `--hotkey` a keystroke, so neither is a flag that names a key at all.
+NON_CREDENTIAL_KEY_WORDS = (
+    "monkey",
+    "hotkey",
+)
+
 
 def credential_flag(argument: Any) -> str | None:
     """The credential-shaped flag name in one argument, if it carries one.
@@ -966,16 +992,21 @@ def credential_flag(argument: Any) -> str | None:
     name = text.split("=", 1)[0].lower().lstrip("-")
     if not name:
         return None
-    if any(marker in name for marker in CREDENTIAL_ARGUMENT_MARKERS):
+    # Whole words rather than substrings: `--max-tokens` counts tokens, it does
+    # not carry one, and refusing it would refuse the ordinary arguments of any
+    # tool that shares this command line.
+    words = [word for word in name.replace("_", "-").split("-") if word]
+    if any(word in CREDENTIAL_ARGUMENT_WORDS for word in words):
         return name
-    if name == "key":
-        return name
-    for separator in ("-", "_"):
-        suffix = separator + "key"
-        if name.endswith(suffix):
-            qualifier = name[: -len(suffix)].rsplit(separator, 1)[-1]
-            return None if qualifier in NON_CREDENTIAL_KEY_QUALIFIERS else name
-    # `--monkey` and `--hotkey` are words, not flags that name one of these.
+    # A trailing `key` is the shape every provider-prefixed spelling shares, and
+    # the qualifier is glued on as often as it is separated (`--openai-key` and
+    # `--mykey` are the same mistake), so both spellings are refused unless what
+    # stands in front of the `key` names an ordering, a relation, or a cache key.
+    if name.endswith("key"):
+        if name in NON_CREDENTIAL_KEY_WORDS:
+            return None
+        qualifier = words[-1][:-3] if len(words) == 1 else words[-2]
+        return None if qualifier in NON_CREDENTIAL_KEY_QUALIFIERS else name
     return None
 
 

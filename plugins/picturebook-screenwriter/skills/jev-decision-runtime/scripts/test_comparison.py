@@ -411,6 +411,14 @@ class TraceLoadingTests(unittest.TestCase):
         self.assertEqual(metrics.input_tokens, 2000)
         self.assertEqual(metrics.elapsed_ms, 412)
 
+    def test_the_jev_side_reports_no_cache_measurement_rather_than_zero(self):
+        # The trace contract has no cache-token field, so the Jev column has
+        # nothing to report. A hard-coded zero reads as "this run was measured
+        # and used no cache" — a measurement nobody took — where `null` is the
+        # same "not reported" the contract uses for a trace with no usage.
+        metrics = jev_metrics((trace("text_quality_prefilter"),))
+        self.assertIsNone(metrics.cache_tokens)
+
     def test_an_ambiguous_outcome_is_counted_but_not_as_cost(self):
         # An attempt whose outcome is unknown did reach the service and may
         # have been billed, so its cost is unknown rather than zero: a total
@@ -468,8 +476,8 @@ class TraceLoadingTests(unittest.TestCase):
         # A batch settles as `succeeded` only after deciding something, so a
         # zero pair on a succeeded trace is a hole rather than a clean run: the
         # `resume` entry point has no operation routing to hand the runner.
-        # The escalation rows beside it are lower bounds then, and the note
-        # says so where the reader looks.
+        # The counts beside it then cover only the batches that recorded theirs,
+        # and the note says so where the reader looks.
         metrics = jev_metrics((
             trace("text_quality_prefilter", screened_clear_count=0,
                   escalated_count=0),
@@ -644,8 +652,8 @@ class CalibrationSuggestionTests(unittest.TestCase):
     def test_an_operation_that_lost_its_verdict_counts_is_never_promoted(self):
         # The counts look perfect — nothing escalated out of 14 items — but one
         # of the succeeded traces never recorded what it decided, so the ratio
-        # is a lower bound. A lower bound may not be read as "cleared enough to
-        # stop re-checking", and the reason has to name why.
+        # covers only the batches that recorded theirs. That may not be read as
+        # "cleared enough to stop re-checking", and the reason has to name why.
         report = self._report(text_quality_prefilter=(0, 14))
         report["jev_operations"][0]["traces_without_verdicts"] = 1
         entry = self._entry(report)
@@ -752,6 +760,53 @@ class BuildCaseReportTests(unittest.TestCase):
             policy=load_policy(default_policy_path()),
         )
         self.assertTrue(report["comparable"])
+        self.assertEqual(report["traces"], 1)
+        self.assertEqual(report["foreign_traces"], 1)
+        self.assertEqual(report["jev_assisted"]["input_tokens"], 2000)
+
+    def test_a_directory_that_names_only_other_cases_is_not_comparable(self):
+        # A directory reused twice leaves two earlier cases' traces behind, and
+        # an entry declaring a third has nothing on disk to hold its case id
+        # against: the pair would be "the same case" only because the entry says
+        # so, while the Jev column is empty of traces for it.
+        other_a = "sha256:" + "a" * 64
+        other_b = "sha256:" + "b" * 64
+        write_atomic(
+            self.run_dir / "jev" / "text_quality_prefilter" / "trace" / "0001.json",
+            trace("text_quality_prefilter", benchmark_case_id=other_a),
+        )
+        write_atomic(
+            self.run_dir / "jev" / "knowledge_relevance" / "trace" / "0001.json",
+            trace("knowledge_relevance", benchmark_case_id=other_b),
+        )
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        self.assertFalse(report["comparable"])
+        reasons = [reason for reason in report["comparability_reasons"]
+                   if "benchmark_case_id" in reason]
+        self.assertTrue(reasons)
+        self.assertIn(other_a, reasons[0])
+        self.assertIn(other_b, reasons[0])
+        self.assertNotIn("benchmark_case_id",
+                         report["identity_attestation"]["verified"])
+
+    def test_declaring_one_of_the_cases_in_the_directory_still_compares(self):
+        # The flip side of the reason above: it means "none of these traces is
+        # this case", not "this directory holds more than one case". A directory
+        # that holds this case beside another one still compares, with the
+        # foreign traces left out of the numbers.
+        write_atomic(
+            self.run_dir / "jev" / "knowledge_relevance" / "trace" / "0001.json",
+            trace("knowledge_relevance", benchmark_case_id="sha256:" + "b" * 64),
+        )
+        report = build_case_report(
+            run_dir=self.run_dir, llm_usage_path=self.usage_path,
+            policy=load_policy(default_policy_path()),
+        )
+        self.assertTrue(report["comparable"])
+        self.assertEqual(report["comparability_reasons"], [])
         self.assertEqual(report["traces"], 1)
         self.assertEqual(report["foreign_traces"], 1)
         self.assertEqual(report["jev_assisted"]["input_tokens"], 2000)
