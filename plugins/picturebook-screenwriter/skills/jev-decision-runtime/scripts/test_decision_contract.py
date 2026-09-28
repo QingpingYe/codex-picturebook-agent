@@ -279,14 +279,39 @@ def make_policy(**overrides):
                 "calibration_status": "experimental",
                 "fallback_route": "escalate_llm",
                 "fallback_label": "uncertain",
+                "max_items_per_request": 4,
                 "question_templates": {
-                    "direct_moralizing": {"type": "noul", "instructions": "是否存在直接训诫式说教？"},
+                    name: {"type": "noul", "instructions": f"{name}? 是否成立"}
+                    for name in (
+                        "direct_moralizing", "age_comprehension_risk",
+                        "read_aloud_friction", "weak_page_turn_motivation",
+                        "emotion_told_not_shown",
+                    )
                 },
                 "routing": {
                     "bands": {"clear_at_or_below": "0.25", "risk_at_or_above": "0.70"},
                     "rules": [
                         {"route": "escalate_llm", "label": "risk",
-                         "any_of": [{"question_id": "direct_moralizing", "bands": ["risk"]}]},
+                         "any_of": [
+                             {"question_id": name, "bands": ["risk"]}
+                             for name in ("direct_moralizing", "age_comprehension_risk",
+                                          "read_aloud_friction", "weak_page_turn_motivation",
+                                          "emotion_told_not_shown")
+                         ]},
+                        {"route": "escalate_llm", "label": "grey",
+                         "any_of": [
+                             {"question_id": name, "bands": ["grey"]}
+                             for name in ("direct_moralizing", "age_comprehension_risk",
+                                          "read_aloud_friction", "weak_page_turn_motivation",
+                                          "emotion_told_not_shown")
+                         ]},
+                        {"route": "screened_clear", "label": "clear",
+                         "all_of": [
+                             {"question_id": name, "bands": ["clear"]}
+                             for name in ("direct_moralizing", "age_comprehension_risk",
+                                          "read_aloud_friction", "weak_page_turn_motivation",
+                                          "emotion_told_not_shown")
+                         ]},
                     ],
                 },
             },
@@ -478,6 +503,81 @@ class PolicyContractTests(unittest.TestCase):
         self.assertEqual(
             policy["operations"]["knowledge_relevance"]["max_items_per_request"], 10
         )
+
+    def test_shipped_policy_declares_the_five_text_quality_dimensions(self):
+        policy = load_policy(default_policy_path())
+        templates = policy["operations"]["text_quality_prefilter"]["question_templates"]
+        self.assertEqual(sorted(templates), [
+            "age_comprehension_risk", "direct_moralizing", "emotion_told_not_shown",
+            "read_aloud_friction", "weak_page_turn_motivation",
+        ])
+        for name, template in templates.items():
+            with self.subTest(dimension=name):
+                self.assertEqual(template["type"], "noul")
+
+    def test_every_text_quality_dimension_states_both_outcomes(self):
+        # The template *is* the instruction the model sees. Without an explicit
+        # false case the model has to invent the boundary of the dimension, and
+        # the probability it returns stops being comparable between runs.
+        templates = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["question_templates"]
+        for name, template in templates.items():
+            with self.subTest(dimension=name):
+                criteria = template.get("criteria")
+                self.assertEqual(sorted(criteria or {}), ["false", "true"])
+                for outcome, description in criteria.items():
+                    self.assertTrue(str(description).strip())
+
+    def test_shipped_policy_escalates_on_risk_and_on_grey(self):
+        routing = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["routing"]
+        labels = [rule.get("label") for rule in routing["rules"]]
+        self.assertEqual(labels, ["risk", "grey", "clear"])
+        self.assertEqual(routing["rules"][0]["route"], "escalate_llm")
+        self.assertEqual(routing["rules"][1]["route"], "escalate_llm")
+        self.assertEqual(routing["rules"][2]["route"], "screened_clear")
+
+    def test_the_clear_rule_covers_every_dimension(self):
+        # Set equality, not a count: a rule that names one dimension five times
+        # would satisfy a length check while leaving four dimensions unrouted.
+        templates = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["question_templates"]
+        routing = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["routing"]
+        covered = {condition["question_id"]
+                   for condition in routing["rules"][2]["all_of"]}
+        self.assertEqual(covered, set(templates))
+
+    def test_every_escalation_rule_covers_every_dimension(self):
+        templates = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["question_templates"]
+        routing = load_policy(default_policy_path())[
+            "operations"]["text_quality_prefilter"]["routing"]
+        for rule in routing["rules"][:2]:
+            with self.subTest(label=rule["label"]):
+                self.assertEqual(
+                    {condition["question_id"] for condition in rule["any_of"]},
+                    set(templates),
+                )
+
+    def test_shipped_policy_falls_back_to_escalation(self):
+        entry = load_policy(default_policy_path())["operations"]["text_quality_prefilter"]
+        self.assertEqual(entry["fallback_route"], "escalate_llm")
+
+    def test_shipped_policy_batches_text_quality_at_four_pages(self):
+        # A text-quality item is one page carrying its dimensions, so the
+        # per-request item ceiling is a page ceiling.
+        entry = load_policy(default_policy_path())["operations"]["text_quality_prefilter"]
+        self.assertEqual(entry["max_items_per_request"], 4)
+
+    def test_screened_clear_may_not_be_a_fallback_route(self):
+        # A fallback means "we do not know", which can never be a clearance.
+        for operation in OPERATIONS:
+            with self.subTest(operation=operation):
+                policy = make_policy()
+                policy["operations"][operation]["fallback_route"] = "screened_clear"
+                with self.assertRaises(ContractError):
+                    validate_policy(policy)
 
 
 def make_context(**overrides):

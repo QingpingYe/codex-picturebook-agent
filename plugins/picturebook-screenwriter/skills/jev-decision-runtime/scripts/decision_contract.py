@@ -486,6 +486,11 @@ def validate_policy(payload: Any) -> None:
         fallback = _require_nonempty_str(entry, "fallback_route", label)
         if fallback not in ROUTE_VALUES:
             raise ContractError(f"{label}.fallback_route must be one of {ROUTE_VALUES}")
+        if fallback == "screened_clear":
+            raise ContractError(
+                f"{label}.fallback_route must not be 'screened_clear': a fallback "
+                "means the rules did not decide, which can never be a clearance"
+            )
         _validate_routing_table(entry, label)
         if "fallback_label" in entry:
             _require_nonempty_str(entry, "fallback_label", label)

@@ -117,14 +117,32 @@
       "calibration_status": "experimental",
       "fallback_route": "escalate_llm",
       "fallback_label": "uncertain",
+      "max_items_per_request": 4,
       "question_templates": {
         "direct_moralizing": {
           "type": "noul",
-          "instructions": "这一页是否直接替读者说出道理、教训或训诫？",
-          "criteria": {
-            "true": "直接说出道理或训诫",
-            "false": "通过情节或动作呈现"
-          }
+          "instructions": "针对 `pages.<page>.text`：这一页是否直接替读者说出道理、教训或训诫？",
+          "criteria": { "true": "直接说出道理或训诫", "false": "通过情节或动作呈现" }
+        },
+        "age_comprehension_risk": {
+          "type": "noul",
+          "instructions": "针对 `pages.<page>.text` 与 `task.age_band`：目标年龄儿童是否需要页面上没有给出的上下文才能理解？",
+          "criteria": { "true": "需要未给出的上下文", "false": "本页即可理解" }
+        },
+        "read_aloud_friction": {
+          "type": "noul",
+          "instructions": "针对 `pages.<page>.text`：是否存在明显拗口、指代绕行或口语节奏障碍？",
+          "criteria": { "true": "朗读明显受阻", "false": "朗读顺畅" }
+        },
+        "weak_page_turn_motivation": {
+          "type": "noul",
+          "instructions": "针对 `pages.<page>.text`：非末页是否缺少让人想继续翻页的动作、问题或悬停？",
+          "criteria": { "true": "缺少继续翻页的动力", "false": "留有悬念或动作" }
+        },
+        "emotion_told_not_shown": {
+          "type": "noul",
+          "instructions": "针对 `pages.<page>.text`：是否主要直接命名情绪，而缺少可观察的动作或感官线索？",
+          "criteria": { "true": "只命名情绪，无可观察线索", "false": "用动作或感官呈现情绪" }
         }
       },
       "routing": {
@@ -137,10 +155,33 @@
             "route": "escalate_llm",
             "label": "risk",
             "any_of": [
-              {
-                "question_id": "direct_moralizing",
-                "bands": ["risk"]
-              }
+              { "question_id": "direct_moralizing", "bands": ["risk"] },
+              { "question_id": "age_comprehension_risk", "bands": ["risk"] },
+              { "question_id": "read_aloud_friction", "bands": ["risk"] },
+              { "question_id": "weak_page_turn_motivation", "bands": ["risk"] },
+              { "question_id": "emotion_told_not_shown", "bands": ["risk"] }
+            ]
+          },
+          {
+            "route": "escalate_llm",
+            "label": "grey",
+            "any_of": [
+              { "question_id": "direct_moralizing", "bands": ["grey"] },
+              { "question_id": "age_comprehension_risk", "bands": ["grey"] },
+              { "question_id": "read_aloud_friction", "bands": ["grey"] },
+              { "question_id": "weak_page_turn_motivation", "bands": ["grey"] },
+              { "question_id": "emotion_told_not_shown", "bands": ["grey"] }
+            ]
+          },
+          {
+            "route": "screened_clear",
+            "label": "clear",
+            "all_of": [
+              { "question_id": "direct_moralizing", "bands": ["clear"] },
+              { "question_id": "age_comprehension_risk", "bands": ["clear"] },
+              { "question_id": "read_aloud_friction", "bands": ["clear"] },
+              { "question_id": "weak_page_turn_motivation", "bands": ["clear"] },
+              { "question_id": "emotion_told_not_shown", "bands": ["clear"] }
             ]
           }
         ]
