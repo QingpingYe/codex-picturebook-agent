@@ -14,6 +14,7 @@
 - Jev-assisted decision layer infrastructure: an explicit execution choice gate, `pb-decision-context-v1` propagation, credential waiting and recovery points, a single-holder execution lease, atomic terminal results, decimal cost estimation, and benchmark case alignment.
 - `knowledge_relevance`: authority pages are chunked, hard-constraint chunks are marked unfilterable, soft candidates are recalled, and Jev screens those candidates; the reduced evidence bundle feeds the ordinary model context while the unfiltered revision vector stays available to the dependency lock.
 - `text_quality_prefilter`: every active red line and the five per-page text-quality dimensions are pre-screened by Jev, with Chinese calibration samples and a threshold calibration tool.
+- `text_quality_prefilter` now has its operator entry point: `skills/pre_output-baseline/scripts/screening_cli.py` screens a draft's page table against the authority red-line catalog, writes the escalation package for the plain LLM, and reports the ratios, `catalog_gap`, `blocked_records` and warnings instead of leaving the orchestration reachable only from tests.
 
 ### Changed
 

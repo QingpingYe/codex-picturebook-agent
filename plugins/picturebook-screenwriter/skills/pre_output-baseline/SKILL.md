@@ -36,6 +36,28 @@ description: pre_output 槽位的全产物类型兜底技能，先做廉价代�
 
 阈值不写死在代码里：按 `references/calibration-samples.md` 跑真实测量，再用 `scripts/calibrate.py` 选阈值，然后才改 `calibration_status`。
 
+### 运行预筛
+
+```bash
+python scripts/screening_cli.py \
+    --script <逐页脚本 draft.md> \
+    --bundle <authority bundle.json> \
+    --run-dir <run_dir> \
+    [--run-id <run_id>] \
+    [--age-band 3-6] \
+    [--window-width 1] \
+    [--escalation-out <升级包.json>] \
+    [--report-out <报告.json>]
+```
+
+- `--script` 指向被审的逐页脚本；红线词表由 `--bundle` 里的权威页面重建，字面扫描只补充候选证据，不缩小提问范围。
+- `--escalation-out` 写出的升级包只含非 `screened_clear` 的维度（高风险、灰区、异常与失败），交给普通 LLM 复核；`--report-out` 写出同一份报告，含比率、路由、`blocked_records` 与 `warnings`。
+- 报告里的 `catalog_gap=true` 表示红线词表为空——那是词表缺口，不是"草稿没有红线"；`page_count>0` 而 `item_count=0` 表示页面全部无文字，这两条都会在 `warnings` 里写明，空报告不是"通过"。
+- `calibration_status` 仍是 `experimental` 时 `may_skip_llm_review` 恒为 false：`screened_clear` 不缩减普通 LLM 复核范围。
+- 读不成逐页脚本的文件（页面表解析不出任何行）与读不成证据包的 bundle，都在发出任何请求前以 JSON 错误退出（退出码 1），不会留下升级包。
+- 预筛本身跑完就返回 0：即使所有维度都在等待 key 或已失败，结论也只在 `results[].status`、`summary` 与 `warnings` 里。只检查退出码会把它误读成"已通过"。
+- run id 默认取 `--run-dir` 的目录名；目录名不符合 `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`（含点号、空格、中文或过长）时命令拒绝执行，并提示显式传入 `--run-id`。
+
 ## Output
 
 输出 FLAG 表格、判定结果、阻断建议和来源；Jev 辅助路径额外输出预筛比率（clear / 升级 / 失败）与升级包。

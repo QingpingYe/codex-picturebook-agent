@@ -348,6 +348,19 @@ class JevPhase3DocumentationTests(unittest.TestCase):
         runtime = json.loads(CONTRACT.read_text(encoding="utf-8"))["jev_runtime"]
         self.assertIn("text_quality_prefilter", runtime["operations"])
 
+    def test_pre_output_skill_documents_the_screening_entry_point(self):
+        text = (ROOT / "skills" / "pre_output-baseline" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("screening_cli.py", text)
+        self.assertIn("--escalation-out", text)
+        self.assertIn("catalog_gap", text)
+
+    def test_enforcement_matrix_documents_the_pre_screen_entry_point(self):
+        text = ENFORCEMENT.read_text(encoding="utf-8")
+        self.assertIn("screening_cli.py", text)
+        self.assertIn("item_count = 0", text)
+
 
 if __name__ == "__main__":
     unittest.main()
