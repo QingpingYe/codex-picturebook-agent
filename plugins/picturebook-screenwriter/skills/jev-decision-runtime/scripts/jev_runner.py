@@ -911,8 +911,10 @@ def _superseded(request, config, operation_id, reason) -> dict:
 # argparse echoes the value back to the terminal before any of these CLIs can
 # refuse the request, so the check has to catch the shape of the flag rather
 # than the handful of names someone happened to be using when it was written.
-# A flag whose name ends in `key` is refused with them, which is what catches
-# the provider-prefixed spellings.
+# A flag whose last `-`/`_`-separated segment is `key` is refused with them,
+# which is what catches the provider-prefixed spellings; `--sort-key` and
+# `--primary-key` name an ordering or a relation rather than a secret, so they
+# stay allowed, and a bare word like `--monkey` was never a flag for a key.
 CREDENTIAL_ARGUMENT_MARKERS = (
     "api-key",
     "apikey",
@@ -932,6 +934,24 @@ CREDENTIAL_ARGUMENT_MARKERS = (
     "bearer",
 )
 
+# The qualifiers that make a trailing `key` name an identifier rather than a
+# secret: how to order, key, or cache a row, not what opens an account. A flag
+# built from one of these is passed through, so the gate does not refuse the
+# ordinary arguments of unrelated tools that share this command line.
+NON_CREDENTIAL_KEY_QUALIFIERS = (
+    "sort",
+    "order",
+    "primary",
+    "foreign",
+    "partition",
+    "shard",
+    "group",
+    "cache",
+    "hot",
+    "shortcut",
+    "dedupe",
+)
+
 
 def credential_flag(argument: Any) -> str | None:
     """The credential-shaped flag name in one argument, if it carries one.
@@ -948,7 +968,15 @@ def credential_flag(argument: Any) -> str | None:
         return None
     if any(marker in name for marker in CREDENTIAL_ARGUMENT_MARKERS):
         return name
-    return name if name.endswith("key") else None
+    if name == "key":
+        return name
+    for separator in ("-", "_"):
+        suffix = separator + "key"
+        if name.endswith(suffix):
+            qualifier = name[: -len(suffix)].rsplit(separator, 1)[-1]
+            return None if qualifier in NON_CREDENTIAL_KEY_QUALIFIERS else name
+    # `--monkey` and `--hotkey` are words, not flags that name one of these.
+    return None
 
 
 def reject_credential_arguments(arguments) -> str | None:

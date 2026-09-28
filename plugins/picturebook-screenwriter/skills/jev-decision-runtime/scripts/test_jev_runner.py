@@ -959,6 +959,28 @@ class CliTests(RunnerCase):
                 self.assertIsNotNone(refusal)
                 self.assertNotIn("SUPER-SECRET-VALUE", refusal)
 
+    def test_a_vendor_prefixed_key_flag_is_refused_by_its_shape(self):
+        # The provider list can never be complete, so a trailing `key` segment
+        # is refused whatever stands in front of it: `--openai-key`,
+        # `--typesafe-key` and `--my-key` are all the same mistake.
+        for flag in ("--key", "--openai-key", "--anthropic-key", "--typesafe-key",
+                     "--my-key", "--vendor-key", "--OPENAI_KEY"):
+            with self.subTest(flag=flag):
+                refusal = reject_credential_arguments([f"{flag}=SUPER-SECRET-VALUE"])
+                self.assertIsNotNone(refusal)
+                self.assertNotIn("SUPER-SECRET-VALUE", refusal)
+
+    def test_a_key_that_names_an_ordering_or_a_word_is_not_a_credential(self):
+        # `--sort-key` and `--primary-key` name a column, not a secret, and
+        # `--monkey` names an animal. Refusing those would make the gate refuse
+        # the ordinary arguments of unrelated tools that share a command line.
+        for argument in ("--sort-key=2", "--SORT_KEY=2", "--primary-key=id",
+                         "--foreign-key=user_id", "--cache-key=page-1",
+                         "--monkey=1", "--hotkey=ctrl+k", "--shortcut-key=x"):
+            with self.subTest(argument=argument):
+                self.assertIsNone(credential_flag(argument))
+                self.assertIsNone(reject_credential_arguments([argument]))
+
     def test_an_ordinary_flag_or_value_is_not_read_as_a_credential(self):
         # The gate may not refuse these CLIs' own arguments, and it judges the
         # flag name only: a path that happens to contain the word "key" is data

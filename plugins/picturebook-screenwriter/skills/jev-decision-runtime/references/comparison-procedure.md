@@ -92,8 +92,14 @@ python scripts/compare_cli.py \
   runner 的 `verdicts=` 钩子写入：两个数相加等于本次真正判定过的项数，`escalated` 等于
   升级包的大小（升级项与无法判定的项都算，因为两者都要普通 LLM 再看一遍）。
 - 报告会逐 operation 列出 `jev_operations`（`item_count`、`screened_clear_count`、
-  `escalated_count`、`runtime_failure`、耗时与成本）。这里的 `item_count` 是请求引用到的
-  权威页数，**不是**进入 LLM 的项数，别拿它当上面那两行。
+  `escalated_count`、`runtime_failure`、`traces_without_verdicts`、耗时与成本）。这里的
+  `item_count` 是请求引用到的权威页数，**不是**进入 LLM 的项数，别拿它当上面那两行。
+- **用 `jev_runner resume` 从凭据等待继续的批次不带判定计数**：CLI 的 `resume` 没有该
+  operation 的路由可以交给 runner，于是那条已经成功、却把两个计数都写成 0 的 trace 会被
+  记成 `traces_without_verdicts`（`notes` 里也会出现同名条目）。它旁边的升级率只是**下界**，
+  所以只要存在这类 trace，该 operation 的建议一律是 `keep_experimental` 并写明原因，不会给出
+  `eligible_for_calibrated`，也不会借它条的数字给出 `review_thresholds`。要拿可比较的升级率，
+  请整条 run 重跑一次，而不是靠 `resume` 补记。
 - 报告开头会写 `trace 数` 与其中属于其它 case 的条数；运行目录里出现多次运行
   （trace 的 `run_id` 不止一个）时直接判 `comparable: false` 并列出 run_id，不把两次
   运行的数字相加后当成一次。
@@ -109,8 +115,9 @@ python scripts/compare_cli.py \
 
 1. 测量用的是同一 case identity，报告 `comparable: true`。
 2. 本次运行没有 `runtime_failure`。
-3. 按 `references/calibration-samples.md` 用 `calibrate.py` 选出了满足假阴性预算的阈值。
-4. 人工复核升级项与漏检，确认可接受。
+3. 本次运行没有 `traces_without_verdicts`（即没有被 `resume` 补记、因而缺计数的批次）。
+4. 按 `references/calibration-samples.md` 用 `calibrate.py` 选出了满足假阴性预算的阈值。
+5. 人工复核升级项与漏检，确认可接受。
 
 改的是 `decision-policies.json` 里该 operation 的 `calibration_status` 与 band。不同 operation 不共享阈值。
 

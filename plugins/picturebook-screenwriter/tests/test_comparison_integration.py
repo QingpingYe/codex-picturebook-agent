@@ -1,5 +1,6 @@
 """Phase 4 integration: the comparison report and its export boundary."""
 
+import copy
 import json
 import sys
 import tempfile
@@ -25,13 +26,17 @@ from jev_client import (  # noqa: E402
     JevClient,
     TransportResponse,
 )
-from jev_runner import RunnerConfig, write_atomic  # noqa: E402
+from jev_runner import RunnerConfig, resume_operation, write_atomic  # noqa: E402
 from page_quality import parse_script_pages  # noqa: E402
 from recall import partition  # noqa: E402
 from redline_catalog import RedlineRule, catalog_from_bundle  # noqa: E402
 from relevance import screen_candidates  # noqa: E402
 from required_marking import mark_bundle  # noqa: E402
-from screening_runner import run_screening, screening_items  # noqa: E402
+from screening_runner import (  # noqa: E402
+    plan_batches,
+    run_screening,
+    screening_items,
+)
 
 CASE_ID = "sha256:" + "0" * 64
 RUN_ID = "20260923-integration-0001"
@@ -336,6 +341,22 @@ def noul(value):
     return {"type": "noul", "noul": value}
 
 
+def unbandable_answer():
+    """A contract-valid answer the router refuses to band.
+
+    `routing.answer_band` only bands `noul` answers, so a Choice for a noul
+    question satisfies the result contract and then makes the router refuse the
+    item. That is the reachable shape behind "a dimension nobody could read":
+    the answer is not malformed, it just carries no yes/no likelihood the
+    policy's bands were written against.
+    """
+
+    return {
+        "type": "choice", "choice": "是的",
+        "probabilities": {"是的": 0.9, "不是": 0.1}, "confidence": 0.9,
+    }
+
+
 def authority_bundle():
     return {
         "items": ({"key": "海外绘本/小老鼠迈尔斯/corrections",
@@ -363,8 +384,8 @@ KNOWLEDGE_BUNDLE = {
 }
 
 
-def all_clear_answers():
-    """Exactly the question set the pre-screen asks, every answer in the clear band.
+def clear_answers_for(items):
+    """Exactly the question set these items ask, every answer in the clear band.
 
     Supplying an answer for a question that was not asked is rejected as an
     unknown answer id, so this mirrors `screening_items` rather than guessing.
@@ -372,9 +393,15 @@ def all_clear_answers():
 
     return {
         f"{item['item_id']}::{dimension}": noul(0.05)
-        for item in screening_items(PAGES, REDLINE_RULES)
+        for item in items
         for dimension in item["dimensions"]
     }
+
+
+def all_clear_answers():
+    """The clear-band answer set for every page window this script asks about."""
+
+    return clear_answers_for(screening_items(PAGES, REDLINE_RULES))
 
 
 def knowledge_candidates():
@@ -407,10 +434,23 @@ class RealRunComparisonTests(unittest.TestCase):
 
     @staticmethod
     def _client(answers):
-        body = json.dumps({"model": "jev-1.13.0", "answers": answers,
-                           "usage": {"input_tokens": 400, "output_tokens": 40}})
+        return RealRunComparisonTests._client_bodies([
+            RealRunComparisonTests._response(answers),
+        ])
+
+    @staticmethod
+    def _response(answers, status_code=200):
+        body = "" if status_code != 200 else json.dumps(
+            {"model": "jev-1.13.0", "answers": answers,
+             "usage": {"input_tokens": 400, "output_tokens": 40}},
+            ensure_ascii=False,
+        )
+        return TransportResponse(status_code, body, {})
+
+    @staticmethod
+    def _client_bodies(responses):
         return JevClient(
-            FakeTransport(responses=[TransportResponse(200, body, {})]),
+            FakeTransport(responses=list(responses)),
             environ={API_KEY_ENV: "sk-abc"}, sleep=lambda _: None,
         )
 
@@ -559,6 +599,101 @@ class RealRunComparisonTests(unittest.TestCase):
         self.assertEqual(report["jev_assisted"]["knowledge_items_entered"], 1)
         self.assertIsNone(report["jev_assisted"]["quality_items_entered"])
         self.assertEqual(report["jev_assisted"]["issues_found"], 1)
+
+    def test_a_dimension_the_router_cannot_read_is_escalated_never_cleared(self):
+        # The answer passes the result contract and cannot be banded, so the
+        # dimension becomes a runtime failure: the plain LLM has to look at it.
+        # Counting it as cleared would shrink the escalation share, and that is
+        # the one number the calibration advice is made of.
+        unreadable = "page-1::direct_moralizing"
+        answers = all_clear_answers()
+        self.assertIn(unreadable, answers)
+        answers[unreadable] = unbandable_answer()
+        run_dir, outcome = self._screen_pages(answers)
+        self.assertEqual(outcome.summary["runtime_failure"], 1)
+        self.assertEqual(self._summed(run_dir, "escalated_count"), 1)
+        self.assertEqual(
+            self._summed(run_dir, "screened_clear_count"),
+            outcome.summary["total"] - 1,
+        )
+
+    def test_a_chunk_the_router_cannot_read_is_handed_to_the_llm(self):
+        # Same shape on the knowledge side: a chunk whose answers cannot be
+        # read is kept and flagged, never silently excluded, so its verdict is
+        # an escalation and the trace says so.
+        chunk = knowledge_candidates()[0]
+        run_dir, outcome = self._screen_knowledge({
+            f"{chunk.chunk_id}::relevant": unbandable_answer(),
+        })
+        self.assertIn(chunk, outcome.kept)
+        self.assertIn(chunk, outcome.uncertain)
+        self.assertEqual(self._summed(run_dir, "escalated_count"), 1)
+        self.assertEqual(
+            self._summed(run_dir, "screened_clear_count"), len(outcome.routes)
+        )
+        self.assertEqual(
+            self._summed(run_dir, "screened_clear_count")
+            + self._summed(run_dir, "escalated_count"),
+            len(knowledge_candidates()),
+        )
+
+    def test_a_batch_resumed_after_the_key_was_refused_is_named(self):
+        # The documented recovery from a credential wait is `jev_runner
+        # resume`, which has no operation routing to hand the runner: the batch
+        # it settles writes the zero pair. The report may not read that as
+        # "this operation cleared everything" — the visible escalation share is
+        # a lower bound — so the advice has to withhold the promotion and say
+        # why.
+        policy = copy.deepcopy(self.policy)
+        policy["operations"]["text_quality_prefilter"]["max_items_per_request"] = 1
+        batches = plan_batches(screening_items(PAGES, REDLINE_RULES), 1)
+        self.assertEqual(len(batches), 3)
+        # One batch asks one window's questions: an answer set for the whole
+        # draft is rejected as a response to a single-batch request.
+        answers = [clear_answers_for(batch) for batch in batches]
+        run_dir = self.root / "quality-run"
+        config = RunnerConfig(run_dir=run_dir, policy=policy)
+        outcome = run_screening(
+            run_id=RUN_ID, policy=policy, pages=PAGES, rules=REDLINE_RULES,
+            bundle=authority_bundle(), config=config, age_band="3-6",
+            client=self._client_bodies([
+                self._response(answers[0]), self._response(answers[1]),
+                # The third call comes back refused: the key the user had is
+                # no longer accepted, which leaves the run waiting and
+                # resumable with exactly one open call.
+                self._response(answers[2], status_code=401),
+            ]),
+        )
+        self.assertEqual(
+            [result["status"] for result in outcome.results],
+            ["succeeded", "succeeded", "waiting_for_jev_key"],
+        )
+        pending = next((run_dir / "jev").glob("*/pending.json"))
+        request = json.loads(
+            (pending.parent / "request.json").read_text(encoding="utf-8")
+        )
+        resumed = resume_operation(
+            config, self._client(answers[2]), request["context_refs"]
+        )
+        self.assertEqual(resumed["status"], "succeeded")
+        traces = load_traces(run_dir)
+        # The wait wrote no trace of its own, so the resumed attempt is the
+        # only record of that batch — and it carries the zero pair.
+        self.assertEqual(len(traces), 3)
+        self.assertEqual(self._summed(run_dir, "escalated_count"), 0)
+        report = build_case_report(
+            run_dir=run_dir, policy=policy,
+            llm_usage_path=self._usage_path(traces[0], "text_quality_prefilter"),
+        )
+        measured = report["jev_operations"][0]
+        self.assertEqual(measured["traces"], 3)
+        self.assertEqual(measured["traces_without_verdicts"], 1)
+        self.assertIn("traces_without_verdicts=1", report["jev_assisted"]["notes"])
+        self.assertIn("traces_without_verdicts=1", report_to_markdown(report))
+        advice = next(entry for entry in report["calibration"]
+                      if entry["operation"] == "text_quality_prefilter")
+        self.assertEqual(advice["suggestion"], "keep_experimental")
+        self.assertIn("没有记下判定计数", advice["reason"])
 
 
 if __name__ == "__main__":

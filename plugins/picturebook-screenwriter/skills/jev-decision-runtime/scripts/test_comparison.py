@@ -5,6 +5,8 @@ import unittest
 from comparison import (
     COMPARISON_SCHEMA,
     IDENTITY_FIELDS,
+    ITEMS_ENTERED_BY_OPERATION,
+    METRIC_NAMES,
     CaseMetrics,
     build_case_report,
     build_report,
@@ -15,6 +17,7 @@ from comparison import (
     jev_metrics,
     load_llm_usage,
     load_traces,
+    operation_metrics,
     report_to_markdown,
     validate_identity,
 )
@@ -449,6 +452,50 @@ class TraceLoadingTests(unittest.TestCase):
         self.assertIsNone(pages_only.knowledge_items_entered)
         self.assertEqual(pages_only.quality_items_entered, 4)
 
+    def test_the_two_entered_rows_are_built_from_one_mapping(self):
+        # Both rows are read out of `ITEMS_ENTERED_BY_OPERATION`, so the pair a
+        # reader finds there is the pair the report renders — not a leftover
+        # copy of the same knowledge that has since drifted.
+        self.assertEqual(ITEMS_ENTERED_BY_OPERATION, (
+            ("knowledge_relevance", "knowledge_items_entered"),
+            ("text_quality_prefilter", "quality_items_entered"),
+        ))
+        for _operation, metric in ITEMS_ENTERED_BY_OPERATION:
+            with self.subTest(metric=metric):
+                self.assertIn(metric, METRIC_NAMES)
+
+    def test_a_succeeded_trace_that_recorded_no_verdicts_is_named(self):
+        # A batch settles as `succeeded` only after deciding something, so a
+        # zero pair on a succeeded trace is a hole rather than a clean run: the
+        # `resume` entry point has no operation routing to hand the runner.
+        # The escalation rows beside it are lower bounds then, and the note
+        # says so where the reader looks.
+        metrics = jev_metrics((
+            trace("text_quality_prefilter", screened_clear_count=0,
+                  escalated_count=0),
+        ))
+        self.assertIn("traces_without_verdicts=1", metrics.notes)
+
+    def test_a_failed_attempt_is_not_a_trace_without_verdicts(self):
+        # A batch that never settled decided nothing, so its zero pair is the
+        # truth rather than a missing measurement: it is reported through
+        # `runtime_failure`, which is what keeps the failure out of calibration.
+        entries = operation_metrics((
+            trace("text_quality_prefilter", status="failed",
+                  screened_clear_count=0, escalated_count=0),
+            trace("text_quality_prefilter", attempt=2),
+        ))
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["runtime_failure"], 1)
+        self.assertEqual(entries[0]["traces_without_verdicts"], 0)
+        self.assertNotIn(
+            "traces_without_verdicts",
+            " ".join(jev_metrics((
+                trace("text_quality_prefilter", status="failed",
+                      screened_clear_count=0, escalated_count=0),
+            )).notes),
+        )
+
     def test_two_runs_in_one_directory_are_named_not_summed_silently(self):
         # Two run ids of one operation are two measurements. Their sum may not
         # read as a single run, so it is named where the number is.
@@ -593,6 +640,26 @@ class CalibrationSuggestionTests(unittest.TestCase):
         entry = self._entry(report)
         self.assertEqual(entry["suggestion"], "keep_experimental")
         self.assertIn("不可比较", entry["reason"])
+
+    def test_an_operation_that_lost_its_verdict_counts_is_never_promoted(self):
+        # The counts look perfect — nothing escalated out of 14 items — but one
+        # of the succeeded traces never recorded what it decided, so the ratio
+        # is a lower bound. A lower bound may not be read as "cleared enough to
+        # stop re-checking", and the reason has to name why.
+        report = self._report(text_quality_prefilter=(0, 14))
+        report["jev_operations"][0]["traces_without_verdicts"] = 1
+        entry = self._entry(report)
+        self.assertEqual(entry["suggestion"], "keep_experimental")
+        self.assertIn("没有记下判定计数", entry["reason"])
+
+    def test_a_high_escalation_share_is_not_advice_when_counts_are_missing(self):
+        # The other direction of the same hole: with a batch's counts missing,
+        # even the "review the thresholds" reading rests on a partial number.
+        report = self._report(text_quality_prefilter=(9, 1))
+        report["jev_operations"][0]["traces_without_verdicts"] = 2
+        entry = self._entry(report)
+        self.assertEqual(entry["suggestion"], "keep_experimental")
+        self.assertIn("2 条", entry["reason"])
 
     def test_a_trace_naming_an_unknown_operation_produces_no_advice(self):
         # A hand-written trace cannot be priced against a policy, so it gives

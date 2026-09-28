@@ -387,6 +387,17 @@ def operation_metrics(traces, *, measurable_only: bool = True) -> tuple[dict, ..
             "runtime_failure": len(
                 [item for item in items if item.get("status") != "succeeded"]
             ),
+            # A succeeded batch decided at least one item, so both counts being
+            # zero on a succeeded trace means they were never recorded — the
+            # shape the `resume` path leaves, because that entry point has no
+            # operation routing to hand the runner. The numbers beside it are a
+            # lower bound then, and the advice has to know that.
+            "traces_without_verdicts": len([
+                item for item in items
+                if item.get("status") == "succeeded"
+                and not item.get("screened_clear_count")
+                and not item.get("escalated_count")
+            ]),
             "elapsed_ms": _sum_optional(item.get("elapsed_ms") for item in items),
             "request_count": _sum_optional(
                 item.get("request_count") for item in items
@@ -418,6 +429,19 @@ def _items_entered(per_operation, operation: str) -> int | None:
         and isinstance(entry.get("escalated_count"), int)
     ]
     return sum(values) if values else None
+
+
+def _entered_by_metric(per_operation) -> dict:
+    """The two "what still goes to the plain LLM" rows, from one mapping.
+
+    `ITEMS_ENTERED_BY_OPERATION` is the mapping both rows are built from, so
+    the pair cannot drift away from the table a reader consults.
+    """
+
+    return {
+        metric: _items_entered(per_operation, operation)
+        for operation, metric in ITEMS_ENTERED_BY_OPERATION
+    }
 
 
 def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
@@ -456,6 +480,14 @@ def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
         # Two runs of one task in one directory are two measurements, so the
         # sum is named for what it is instead of reading as a single run.
         notes.append(f"runs={len(run_ids)}")
+    without_verdicts = sum(
+        entry["traces_without_verdicts"] for entry in per_operation
+    )
+    if without_verdicts:
+        # Name the hole where the numbers are: those traces carry a zero pair
+        # that was never decided, so the escalation rows beside them are lower
+        # bounds rather than measurements.
+        notes.append(f"traces_without_verdicts={without_verdicts}")
     return CaseMetrics(
         path="jev_assisted",
         elapsed_ms=_sum_optional(item.get("elapsed_ms") for item in measured),
@@ -466,8 +498,7 @@ def jev_metrics(traces, *, measurable_only: bool = True) -> CaseMetrics:
         estimated_cost_usd=_sum_cost(
             item.get("estimated_cost_usd") for item in measured
         ),
-        knowledge_items_entered=_items_entered(per_operation, "knowledge_relevance"),
-        quality_items_entered=_items_entered(per_operation, "text_quality_prefilter"),
+        **_entered_by_metric(per_operation),
         issues_found=(escalated + failed) if escalated is not None else None,
         misses_or_disagreements=None,
         notes=tuple(notes),
@@ -533,6 +564,11 @@ def calibration_suggestions(
     measurement" is not evidence in either direction — the report names the
     operations it ran separately.
 
+    An operation that holds a succeeded trace whose counts were never recorded
+    gets no promotion either: a batch settled that way always decided at least
+    one item, so the visible escalation share is a lower bound, and a bound may
+    not be read as "cleared enough to stop re-checking".
+
     The suggestion is advisory only. Flipping `calibration_status` changes how
     much the plain LLM re-checks, so it stays a human decision recorded in the
     policy file.
@@ -549,6 +585,7 @@ def calibration_suggestions(
         screened_clear = measured.get("screened_clear_count")
         escalated = measured.get("escalated_count")
         failed = measured.get("runtime_failure") or 0
+        without_verdicts = measured.get("traces_without_verdicts") or 0
         total = (
             screened_clear + escalated
             if isinstance(screened_clear, int) and isinstance(escalated, int)
@@ -560,6 +597,14 @@ def calibration_suggestions(
         reason = "尚无足够的本地测量"
         if not report.get("comparable"):
             reason = "两次运行不可比较，本次数据不能用于校准"
+        elif without_verdicts:
+            # Fail closed: the missing counts are the reason the ratio beside
+            # them is wrong rather than merely thin, so no promotion — and no
+            # "review the thresholds" either — is read out of this run.
+            reason = (
+                f"该 operation 有 {without_verdicts} 条已成功的 trace 没有记下判定计数"
+                "（例如由 resume 继续的批次），升级率只是下界，不能用于校准"
+            )
         elif failed:
             reason = f"该 operation 本次有 {failed} 项运行失败，失败项不得计入校准"
         elif total:

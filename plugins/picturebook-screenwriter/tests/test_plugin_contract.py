@@ -281,6 +281,23 @@ class JevPhase1DocumentationTests(unittest.TestCase):
         text = ENFORCEMENT.read_text(encoding="utf-8")
         self.assertIn("不提供跨主机互斥", text)
 
+    def test_enforcement_matrix_does_not_overclaim_the_credential_gate(self):
+        # The gate refuses the credential flags whose shape it can read before
+        # argparse runs; argparse still echoes any *other* argument it is
+        # handed. A row promising that a value is never echoed would describe a
+        # protection the code does not have, so both credential rows have to
+        # name where the echo comes from instead.
+        rows = [
+            line for line in ENFORCEMENT.read_text(encoding="utf-8").splitlines()
+            if line.startswith("|")
+            and "credential argument" in line.split("|")[1].lower()
+        ]
+        self.assertGreaterEqual(len(rows), 2)
+        for row in rows:
+            with self.subTest(row=row.split("|")[1].strip()):
+                self.assertNotIn("never echoed", row)
+                self.assertIn("argparse", row)
+
     def test_plugin_readme_documents_the_jev_credential_environment(self):
         text = PLUGIN_README.read_text(encoding="utf-8")
         self.assertIn("TYPESAFE_API_KEY", text)
