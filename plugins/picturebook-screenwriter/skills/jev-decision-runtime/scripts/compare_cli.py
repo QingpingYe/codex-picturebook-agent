@@ -24,26 +24,56 @@ from export_session import export_session  # noqa: E402
 OUT_OF_PLUGIN_ERROR = "output directory must be outside the plugin"
 SESSION_ID = "path-comparison"
 
+# The gate may not trust the caller's `--plugin-root` alone: a decoy root would
+# let an export land inside the plugin this file is installed in. The script
+# always knows its own plugin root, so both are checked.
+PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+
 
 def require_explicit_output_dir(output_dir, plugin_root) -> Path:
     """Validate a user-supplied export directory.
 
     The two rules mirror session-export: the caller must name the directory
-    absolutely, and it must not land inside the installed plugin.
+    absolutely, and it must not land inside the installed plugin. "The
+    installed plugin" means both the root the caller declares and the root this
+    file actually lives in.
     """
 
     output_dir = Path(output_dir)
     if not output_dir.is_absolute():
         raise ValueError("output directory must be an absolute path")
     resolved = output_dir.resolve()
-    plugin_root = Path(plugin_root).resolve()
-    if resolved == plugin_root or plugin_root in resolved.parents:
-        raise ValueError(OUT_OF_PLUGIN_ERROR)
+    for root in (Path(plugin_root).resolve(), PLUGIN_ROOT):
+        if resolved == root or root in resolved.parents:
+            raise ValueError(OUT_OF_PLUGIN_ERROR)
     return resolved
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="compare_cli.py")
+class _StreamArgumentParser(argparse.ArgumentParser):
+    """An ArgumentParser that reports to the streams this CLI was handed.
+
+    argparse writes usage and error text to the process streams by default,
+    which would make the `stderr` argument a lie: an embedded caller would
+    capture nothing while the message leaked to the terminal.
+    """
+
+    def __init__(self, *args, stream=None, **kwargs):
+        self._stream = stream
+        super().__init__(*args, **kwargs)
+
+    def _print_message(self, message, file=None):
+        if not message:
+            return
+        if file is None:
+            file = sys.stderr
+        if file is sys.stdout or file is sys.stderr:
+            if self._stream is not None:
+                file = self._stream
+        file.write(message)
+
+
+def _build_parser(stderr=None) -> argparse.ArgumentParser:
+    parser = _StreamArgumentParser(prog="compare_cli.py", stream=stderr)
     parser.add_argument("--run-dir", required=True,
                         help="the jev_assisted run directory holding the traces")
     parser.add_argument("--llm-usage", required=True,
@@ -65,7 +95,7 @@ def main(argv=None, stdout=None, stderr=None) -> int:
         print(refusal, file=err)
         return 2
 
-    parser = _build_parser()
+    parser = _build_parser(err)
     if not arguments:
         parser.print_usage(err)
         return 2
@@ -75,16 +105,21 @@ def main(argv=None, stdout=None, stderr=None) -> int:
         return 2 if exit_error.code else 0
 
     try:
+        # Pre-flight the export destination. An unusable directory must be
+        # reported as such, and nothing may touch the disk until every gate has
+        # passed.
+        export_dir = None
+        if args.output_dir:
+            if not args.plugin_root:
+                raise ValueError("--plugin-root is required when exporting")
+            export_dir = require_explicit_output_dir(args.output_dir, args.plugin_root)
         policy = load_policy(args.policy or default_policy_path())
         report = build_case_report(
             run_dir=Path(args.run_dir), llm_usage_path=Path(args.llm_usage),
             policy=policy,
         )
-        if args.output_dir:
-            if not args.plugin_root:
-                raise ValueError("--plugin-root is required when exporting")
-            bundle = _export(args, report)
-            report["exported_to"] = str(bundle)
+        if export_dir is not None:
+            _export(export_dir, report)
     except (ContractError, JevClientError, OSError, ValueError) as error:
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False),
               file=err)
@@ -94,21 +129,28 @@ def main(argv=None, stdout=None, stderr=None) -> int:
     return 0
 
 
-def _export(args, report) -> Path:
-    """Write the report through the session-export bundle helper."""
+def _export(output_dir, report) -> Path:
+    """Write the report through the session-export bundle helper.
 
-    output_dir = require_explicit_output_dir(args.output_dir, args.plugin_root)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    The bundle directory is created by the helper, and only after its own gate
+    has passed, so a refused export leaves nothing behind. `exported_to` is
+    filled in before rendering, because the copy on disk is the artifact of
+    record and must carry the same value as the printed one.
+    """
+
     bundle = export_session(
         SESSION_ID, [], ["comparison.json", "comparison.md"], [],
-        output_dir, Path(args.plugin_root),
+        output_dir, PLUGIN_ROOT,
     )
+    report["exported_to"] = str(bundle)
     (bundle / "comparison.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
     (bundle / "comparison.md").write_text(
-        report_to_markdown(report) + f"\n生成时间：{now_iso()}\n", encoding="utf-8"
+        report_to_markdown(report)
+        + f"\n导出位置：{bundle}\n生成时间：{now_iso()}\n",
+        encoding="utf-8",
     )
     return bundle
 
