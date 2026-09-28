@@ -43,7 +43,7 @@ def require_explicit_output_dir(output_dir, plugin_root) -> Path:
     if not output_dir.is_absolute():
         raise ValueError("output directory must be an absolute path")
     resolved = output_dir.resolve()
-    for root in (Path(plugin_root).resolve(), PLUGIN_ROOT):
+    for root in (Path(plugin_root).resolve(), Path(PLUGIN_ROOT).resolve()):
         if resolved == root or root in resolved.parents:
             raise ValueError(OUT_OF_PLUGIN_ERROR)
     return resolved

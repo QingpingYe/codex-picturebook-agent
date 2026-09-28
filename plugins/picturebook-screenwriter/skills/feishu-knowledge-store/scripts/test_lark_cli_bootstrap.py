@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -29,6 +30,7 @@ class Runner:
 
 
 class LarkCliBootstrapTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows executable locations")
     def test_default_candidates_include_portable_windows_locations(self):
         environ = {
             "LARK_CLI_PATH": r"C:\Explicit\lark-cli.exe",
@@ -46,6 +48,17 @@ class LarkCliBootstrapTests(unittest.TestCase):
             Path(r"C:\Users\writer\AppData\Roaming\npm\node_modules\@larksuite\cli\bin\lark-cli.exe"),
             Path(r"C:\Program Files\nodejs\lark-cli.cmd"),
         ])
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable locations")
+    def test_default_candidates_include_portable_posix_locations(self):
+        candidates = default_cli_candidates(
+            {"HOME": "/home/writer"}, which=lambda _: None,
+        )
+        self.assertEqual(candidates, (
+            Path("/home/writer/.local/bin/lark-cli"),
+            Path("/usr/local/bin/lark-cli"),
+            Path("/opt/homebrew/bin/lark-cli"),
+        ))
 
     def test_bootstrap_platform_candidates_exclude_author_drive_letters(self):
         candidates = default_cli_candidates({

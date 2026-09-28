@@ -209,7 +209,7 @@ class SyncRunnerTests(unittest.TestCase):
             workspace=Path(self.tmp.name), environ={},
         )
         runner.prepare(self.run_dir)
-        self.assertEqual(runner.config_path, workspace_config)
+        self.assertEqual(runner.config_path, workspace_config.resolve())
 
     def test_node_mode_with_no_children_is_rejected(self):
         self._write_manifest()

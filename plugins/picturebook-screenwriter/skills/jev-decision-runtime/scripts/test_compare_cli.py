@@ -69,6 +69,13 @@ class OutputDirGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "outside the plugin"):
                 require_explicit_output_dir(installed, self.plugin)
 
+    def test_installed_root_alias_is_checked_after_resolution(self):
+        installed = self.root / "installed"
+        installed.mkdir()
+        with mock.patch.object(compare_cli, "PLUGIN_ROOT", installed / ".." / "installed"):
+            with self.assertRaisesRegex(ValueError, "outside the plugin"):
+                require_explicit_output_dir(installed / "exports", self.plugin)
+
 
 class CompareCliTests(unittest.TestCase):
     def setUp(self):
@@ -143,7 +150,7 @@ class CompareCliTests(unittest.TestCase):
         code, _, _ = self._main(self._argv())
         self.assertEqual(code, 0)
         bundle = self.out_dir / "path-comparison-audit"
-        self.assertIn(str(bundle),
+        self.assertIn(str(bundle.resolve()),
                       (bundle / "comparison.md").read_text(encoding="utf-8"))
 
     def test_a_relative_output_directory_exits_with_a_usage_error(self):
