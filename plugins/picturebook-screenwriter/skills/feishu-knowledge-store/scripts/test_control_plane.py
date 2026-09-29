@@ -62,6 +62,16 @@ def index_entry():
                       last_seen_revision_id=1, status="published")
 
 
+class ControlDocumentRoundTripTests(unittest.TestCase):
+
+    def test_control_document_accepts_feishu_blank_line(self):
+        content = "# AI_KB_INDEX_V1\n\n```json\n{\"schema_version\":1,\"entries\":[]}\n```\n"
+        plane = ControlPlane(FakeCli(index_content=content), control_tokens())
+        revision, entries = plane.read_index_with_revision()
+        self.assertEqual(revision, 2)
+        self.assertEqual(entries, {})
+
+
 class ReadIndexRevisionTests(unittest.TestCase):
 
     def test_read_index_with_revision_returns_document_revision(self):

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from control_plane import ControlPlaneCorrupt, _index_entry, _parse_control
+from remote_markdown import normalize_remote_markdown
 from page_codec import PageCodecError, parse_remote_page
 
 
@@ -24,7 +25,10 @@ def run_lint(fixture: str | Path) -> dict[str, Any]:
         tree = []
 
     try:
-        index_content = (fixture / "index.md").read_text(encoding="utf-8")
+        index_content = normalize_remote_markdown(
+            (fixture / "index.md").read_text(encoding="utf-8"),
+            kind="control",
+        )
         payload = _parse_control(index_content, "# AI_KB_INDEX_V1")
         if set(payload) != {"schema_version", "entries"} or payload.get("schema_version") != 1:
             raise ControlPlaneCorrupt("invalid index schema")
@@ -78,9 +82,14 @@ def run_lint(fixture: str | Path) -> dict[str, Any]:
             errors.append(
                 f"index last_seen_revision_id precedes last_ai_revision_id: {key}"
             )
-        matches = [node for node in tree if isinstance(node, dict) and node.get("title") == key]
+        matches = [
+            node for node in tree
+            if isinstance(node, dict) and node.get("node_token") == entry.wiki_node_token
+        ]
         if len(matches) != 1:
-            errors.append(f"index key is represented by {len(matches)} tree nodes: {key}")
+            errors.append(
+                f"index node token is represented by {len(matches)} tree nodes: {key}"
+            )
 
     for key in sorted(set(pages_by_key) - set(entries)):
         errors.append(f"page has no index entry: {key}")

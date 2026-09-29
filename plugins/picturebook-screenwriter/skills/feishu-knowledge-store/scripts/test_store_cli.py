@@ -1,5 +1,6 @@
 import contextlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -309,11 +310,13 @@ class StoreCliTests(unittest.TestCase):
 
     def test_missing_config_error_is_machine_readable(self):
         stdout = StringIO()
-        exit_code = store_cli.main(
-            ["resolve", "--workspace", str(self.tmp.name)],
-            stdout=stdout,
-            components_factory=store_cli.build_components,
-        )
+        missing = Path(self.tmp.name) / "missing.json"
+        with patch.dict(os.environ, {"PICTUREBOOK_KB_CONFIG": str(missing)}):
+            exit_code = store_cli.main(
+                ["resolve", "--workspace", str(self.tmp.name)],
+                stdout=stdout,
+                components_factory=store_cli.build_components,
+            )
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 1)
         self.assertEqual(payload["status"], "missing_config")
@@ -321,7 +324,8 @@ class StoreCliTests(unittest.TestCase):
 
     def test_config_status_reports_missing_configuration(self):
         stdout = StringIO()
-        with patch.object(store_cli, "ensure_lark_cli", return_value={
+        missing = Path(self.tmp.name) / "missing.json"
+        with patch.dict(os.environ, {"PICTUREBOOK_KB_CONFIG": str(missing)}), patch.object(store_cli, "ensure_lark_cli", return_value={
             "status": "available", "path": "D:\\lark-cli\\lark-cli.exe",
             "version": "1.0.95",
         }):
@@ -348,7 +352,8 @@ class StoreCliTests(unittest.TestCase):
             "identity": "user", "lock_ttl_minutes": 45,
         }), encoding="utf-8")
         stdout = StringIO()
-        with patch.object(store_cli, "ensure_lark_cli", return_value={
+        missing = Path(self.tmp.name) / "missing.json"
+        with patch.dict(os.environ, {"PICTUREBOOK_KB_CONFIG": str(missing)}), patch.object(store_cli, "ensure_lark_cli", return_value={
             "status": "available", "path": "D:\\lark-cli\\lark-cli.exe",
             "version": "1.0.95",
         }):

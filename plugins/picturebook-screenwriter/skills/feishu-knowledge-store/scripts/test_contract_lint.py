@@ -82,6 +82,32 @@ class ContractLintTests(unittest.TestCase):
         self.assertEqual(result["warnings"], [])
         self.assertEqual(result["exit_code"], 0)
 
+    def test_valid_fixture_accepts_feishu_blank_line(self):
+        fixture = make_valid_fixture(self.tmp.name)
+        path = fixture / "index.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "# AI_KB_INDEX_V1\n```json\n",
+                "# AI_KB_INDEX_V1\n\n```json\n",
+            ),
+            encoding="utf-8",
+        )
+        result = run_lint(fixture)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["exit_code"], 0)
+
+    def test_display_title_does_not_break_index_tree_mapping(self):
+        fixture = make_valid_fixture(self.tmp.name)
+        tree_path = fixture / "tree.json"
+        tree = json.loads(tree_path.read_text(encoding="utf-8"))
+        for node in tree:
+            if node.get("node_token") == "node-page":
+                node["title"] = "世界观显示标题"
+        tree_path.write_text(json.dumps(tree, ensure_ascii=False), encoding="utf-8")
+        result = run_lint(fixture)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["exit_code"], 0)
+
     def test_duplicate_logical_key_fails(self):
         result = run_lint_at(self.tmp.name, duplicate_key=True)
         self.assertIn("duplicate logical key", result["errors"][0])

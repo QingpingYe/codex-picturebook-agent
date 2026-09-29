@@ -53,6 +53,11 @@ class TestSourceAdmission(unittest.TestCase):
         policy = sa.parse_source_admission(page)
         self.assertEqual(policy.entries[0].token, "tokA")
 
+    def test_control_page_allows_feishu_blank_line_round_trip(self):
+        page = "# AI_KB_SOURCE_ADMISSION_V1\n\n```json\n" + json.dumps(payload([entry("tokA")])) + "\n```\n"
+        policy = sa.parse_source_admission(page)
+        self.assertEqual(policy.entries[0].token, "tokA")
+
     def test_unknown_field_and_wrong_schema_version_fail(self):
         bad = entry("tokA")
         bad["extra"] = "no"

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import json
+import re
 from typing import Any, Mapping
 
 ADMISSION_HEADING = "# AI_KB_SOURCE_ADMISSION_V1"
@@ -123,13 +124,15 @@ def parse_admission_snapshot(snapshot: Any) -> AdmissionPolicy:
 def parse_source_admission(content: str) -> AdmissionPolicy:
     if not isinstance(content, str):
         raise SourceAdmissionError("admission control document must be text")
-    prefix = ADMISSION_HEADING + "\n```json\n"
-    suffix = "\n```\n"
-    if (not content.startswith(prefix) or not content.endswith(suffix)
-            or content.count("```") != 2):
+    match = re.fullmatch(
+        rf"{re.escape(ADMISSION_HEADING)}\s*```json\s*\n(.*)\n```\s*",
+        content,
+        flags=re.DOTALL,
+    )
+    if match is None:
         raise SourceAdmissionError("admission control document format is invalid")
     try:
-        payload = json.loads(content[len(prefix):-len(suffix)])
+        payload = json.loads(match.group(1))
     except json.JSONDecodeError as error:
         raise SourceAdmissionError("admission control JSON is invalid") from error
     return parse_admission_payload(payload)
