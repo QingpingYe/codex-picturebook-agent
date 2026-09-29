@@ -1,6 +1,6 @@
 # KB-AI 来源状态、候选时效与源准入实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 将来源增量判据迁移到远端索引时间/revision 证据，补齐候选时效校验，并实现 `AI_KB_SOURCE_ADMISSION_V1` 的默认纳入与子树排除。
 
@@ -44,11 +44,11 @@
 - Produces: `resolve_source_admission(policy: AdmissionPolicy, snapshot: Mapping[str, Any]) -> AdmissionResult`.
 - Fixture fields are the verified WorkBuddy contract: `token`, `title`, `decision`, `decided_by`, `decided_at`, `reason`.
 
-- [ ] **Step 1: Capture the read-only admission fixture**
+- [x] **Step 1: Capture the read-only admission fixture**
 
   Run an authorized read-only fetch of `AI_KB_SOURCE_ADMISSION_V1`. Save a minimized fixture containing one `admit` and one `exclude`, preserving exact field names and decision timestamps. If no real sample is available, stop Task 1 and request the WorkBuddy fixture; do not guess.
 
-- [ ] **Step 2: Write failing parser and tree tests**
+- [x] **Step 2: Write failing parser and tree tests**
 
   Add tests:
 
@@ -64,23 +64,23 @@
 
   Assert `resolve_source_admission(...).excluded_tokens` contains the excluded node and every descendant, and `excluded_containers` contains every excluded container.
 
-- [ ] **Step 3: Run the tests to verify failure**
+- [x] **Step 3: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_source_admission.py' -v`
 
   Expected: FAIL because `source_admission.py` and the fixture do not exist.
 
-- [ ] **Step 4: Implement strict parsing and tree resolution**
+- [x] **Step 4: Implement strict parsing and tree resolution**
 
   `parse_source_admission()` must accept the exact `# AI_KB_SOURCE_ADMISSION_V1` JSON block, require exactly the six verified fields, reject empty values, duplicate tokens, unknown fields and invalid `decision` values. `admit` has no admission effect; `exclude` tokens are expanded into the subtree closure. Build descendants only from `parent_node_token`; missing parents/cycles stop the run only when the policy contains at least one effective exclusion.
 
-- [ ] **Step 5: Run the tests to verify pass**
+- [x] **Step 5: Run the tests to verify pass**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_source_admission.py' -v`
 
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   `git add plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/source_admission.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/test_source_admission.py plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/fixtures/source_admission_v1.json`
 
@@ -105,7 +105,7 @@
 - Modifies: `Publisher.resolve_control_plane(require_admission: bool = False) -> dict[str, str]`; `admission` is present only when the page exists or `require_admission=True`.
 - Adds command: `store_cli.py source-baseline --config ... --workspace ... --out <path>`.
 
-- [ ] **Step 1: Write failing projection and CLI tests**
+- [x] **Step 1: Write failing projection and CLI tests**
 
   Add tests:
 
@@ -118,17 +118,17 @@
 
   Assert the JSON includes `schema_version`, `index_revision_id`, `entries`, and `admission`; entries contain only `key`, `source_revisions`, and `source_edit_times`.
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_source_baseline.py' -v`
 
   Expected: FAIL because the module and command do not exist.
 
-- [ ] **Step 3: Implement the read-only projection**
+- [x] **Step 3: Implement the read-only projection**
 
   Add `source-baseline` to the parser and dispatch. It resolves optional admission, reads index with revision, validates both payloads, writes atomically to `--out`, and prints `{"out": "...", "index_revision_id": N}`. It must not call `update_doc`, `create_doc`, `create_space_doc`, acquire or release a lock.
 
-- [ ] **Step 4: Run projection, control-plane, publisher and CLI tests**
+- [x] **Step 4: Run projection, control-plane, publisher and CLI tests**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_source_baseline.py' -v`
 
@@ -138,7 +138,7 @@
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   `git add plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts`
 
@@ -159,7 +159,7 @@
 - Modifies: `validate_file(filepath: str, snapshot: Mapping[str, Any] | None = None)`.
 - Modifies CLI: `--nodes` is required for `--validate-only`; valid when supplied with manifest generation.
 
-- [ ] **Step 1: Extend the fixture helper and write failing tests**
+- [x] **Step 1: Extend the fixture helper and write failing tests**
 
   Add `source_edit_time_parts` to `_file()`. Add tests:
 
@@ -172,27 +172,27 @@
   - `test_missing_snapshot_time_warns`
   - `test_manifest_entry_contains_source_edit_times`
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_generate_entries.py' -v`
 
   Expected: FAIL because time parsing and `--nodes` do not exist.
 
-- [ ] **Step 3: Implement the time vector and freshness validator**
+- [x] **Step 3: Implement the time vector and freshness validator**
 
   Use `shared_schema.validate_edit_times`. Make `source_edit_time_parts` a required candidate field. `--validate-only` returns `2` for missing/unreadable `--nodes`; per-candidate mismatch is `FAIL`; missing snapshot time is `WARN`. Add `source_edit_times` to manifest entries.
 
-- [ ] **Step 4: Update templates and ingest instructions**
+- [x] **Step 4: Update templates and ingest instructions**
 
   All templates must show the ordered time list. Step 5/6 of `wiki-ingest/SKILL.md` must require the list and call `generate_entries.py --validate-only --nodes <snapshot>` before handing off.
 
-- [ ] **Step 5: Run the tests to verify pass**
+- [x] **Step 5: Run the tests to verify pass**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_generate_entries.py' -v`
 
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   `git add plugins/picturebook-screenwriter/skills/wiki-ingest`
 
@@ -210,7 +210,7 @@
 - Produces: `build_token_baseline(payload) -> dict[str, dict[str, Any]]`.
 - Modifies: `classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=None)`.
 
-- [ ] **Step 1: Replace state-based tests with failing remote-baseline tests**
+- [x] **Step 1: Replace state-based tests with failing remote-baseline tests**
 
   Add tests:
 
@@ -227,23 +227,23 @@
 
   Assert no skip can result from `edit_time_ms` equality alone and that local cache does not participate in the verdict.
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_check_delta.py' -v`
 
   Expected: FAIL because `classify()` still accepts local state.
 
-- [ ] **Step 3: Implement token baseline and fail-safe classification**
+- [x] **Step 3: Implement token baseline and fail-safe classification**
 
   Build token evidence by scanning raw index entries. Mark token evidence inconsistent when times or revisions disagree, or when an entry has `source_edit_times=null`. Use `source_revisions` as the applicable revision baseline for `docx/wiki`; files may skip on matching edit time alone. Local cache and `feishu_hash` do not participate in the verdict. Detect `deleted` only when a token appears in the remote index and is absent from the current snapshot.
 
-- [ ] **Step 4: Run the tests to verify pass**
+- [x] **Step 4: Run the tests to verify pass**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_check_delta.py' -v`
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   `git add plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/check_delta.py plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/test_check_delta.py`
 
@@ -261,7 +261,7 @@
 - Consumes: `parse_source_admission()` and `resolve_source_admission()` from Task 1.
 - Produces: result keys `excluded`, `excluded_containers`, and per-token verdict `excluded`.
 
-- [ ] **Step 1: Write failing integration tests**
+- [x] **Step 1: Write failing integration tests**
 
   Add tests:
 
@@ -272,21 +272,21 @@
   - `test_only_on_excluded_token_exits_3`
   - `test_corrupt_admission_baseline_stops_ingest`
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_check_delta.py' -v`
 
   Expected: FAIL because `check_delta.py` does not consume admission.
 
-- [ ] **Step 3: Integrate admission resolution before classification**
+- [x] **Step 3: Integrate admission resolution before classification**
 
   Parse admission from the projection. Resolve the excluded set before classifying tokens. Excluded tokens receive `{"verdict": "excluded", "reason": ...}` when reported, but are never counted as `process`. Excluded containers are included in `excluded_containers`. `--only` checks exclusions before normal processing and returns exit code `2` through a typed error or parser-level failure.
 
-- [ ] **Step 4: Update ingest instructions**
+- [x] **Step 4: Update ingest instructions**
 
   Step 2/3 of `wiki-ingest/SKILL.md` must state that containers and excluded nodes do not enter download, external-link scanning or candidate generation.
 
-- [ ] **Step 5: Run the tests to verify pass**
+- [x] **Step 5: Run the tests to verify pass**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_check_delta.py' -v`
 
@@ -294,7 +294,7 @@
 
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   `git add plugins/picturebook-screenwriter/skills/wiki-ingest plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/source_admission.py`
 
@@ -313,33 +313,33 @@
 - Removes: `merge_state`, `--state`, `--write-state`, `--hash-map`, `--revision-map`, and finalize mode.
 - Keeps: `--nodes`, `--source-baseline`, `--cache-dir`, `--force-full`, `--only`, `--out`.
 
-- [ ] **Step 1: Write failing retirement tests**
+- [x] **Step 1: Write failing retirement tests**
 
   Add parser tests that each retired option exits with code `2`. Add a static test in `test_check_delta.py` that read `check_delta.py` and asserts it does not contain `merge_state`, `delta_state.json`, `--write-state`, `--hash-map`, `--revision-map`, or `finalize 阶段`.
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_check_delta.py' -v`
 
   Expected: FAIL while legacy symbols remain.
 
-- [ ] **Step 3: Remove the legacy code paths**
+- [x] **Step 3: Remove the legacy code paths**
 
   Delete `merge_state` and all writeback branches. Remove stale imports/constants. Update the module docstring to describe only `--source-baseline` plan mode. Update run-directory layout and delete instructions so `delta_state.json` is no longer created or mentioned.
 
-- [ ] **Step 4: Scan for consumers**
+- [x] **Step 4: Scan for consumers**
 
   Run: `rg -n "merge_state|delta_state|--state|--write-state|--hash-map|--revision-map|finalize" plugins/picturebook-screenwriter/skills/wiki-ingest`
 
   Expected: no runtime references; historical notes are removed or explicitly marked not applicable.
 
-- [ ] **Step 5: Run the full wiki-ingest suite**
+- [x] **Step 5: Run the full wiki-ingest suite**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/wiki-ingest/scripts -p 'test_*.py' -v`
 
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   `git add plugins/picturebook-screenwriter/skills/wiki-ingest`
 
@@ -359,21 +359,21 @@
 - Consumes all interfaces from Tasks 1–6.
 - Produces a documented operator sequence: `source-baseline` → `check_delta` → candidate generation → `prepare`/`publish`.
 
-- [ ] **Step 1: Add failing end-to-end tests**
+- [x] **Step 1: Add failing end-to-end tests**
 
   Add `test_source_baseline_to_delta_to_publish_contract` in `test_end_to_end.py`: build a fake index/admission, invoke the projection, classify a matching token as unchanged, and classify a time-mismatched token as changed. Include one excluded token and assert no candidate is produced for it.
 
-- [ ] **Step 2: Run the test to verify failure**
+- [x] **Step 2: Run the test to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_end_to_end.py' -v`
 
   Expected: FAIL until the modules and documented interfaces are connected.
 
-- [ ] **Step 3: Wire the documented operator sequence**
+- [x] **Step 3: Wire the documented operator sequence**
 
   Update store and ingest skill steps to call `store_cli.py source-baseline` before `check_delta.py`, pass `--source-baseline`, and run `generate_entries.py --validate-only --nodes`. Document missing admission as empty policy and corrupt admission as hard failure.
 
-- [ ] **Step 4: Run targeted end-to-end and CLI tests**
+- [x] **Step 4: Run targeted end-to-end and CLI tests**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_end_to_end.py' -v`
 
@@ -381,7 +381,7 @@
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   `git add README.md plugins/picturebook-screenwriter/README.md plugins/picturebook-screenwriter/skills/feishu-knowledge-store docs/workbuddy-feishu-knowledge-base-compatibility.md`
 
@@ -395,7 +395,7 @@
 **Interfaces:**
 - No new runtime interface.
 
-- [ ] **Step 1: Run all affected suites**
+- [x] **Step 1: Run all affected suites**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_*.py' -v`
 
@@ -405,23 +405,23 @@
 
   Expected: PASS.
 
-- [ ] **Step 2: Run the retirement and contract scans**
+- [x] **Step 2: Run the retirement and contract scans**
 
   Run: `rg -n "delta_state|merge_state|--write-state|--hash-map|--revision-map|forceFullSync" plugins/picturebook-screenwriter docs/workbuddy-feishu-knowledge-base-compatibility.md`
 
   Expected: no active runtime or current-contract references.
 
-- [ ] **Step 3: Verify no remote-write call was added to source projection**
+- [x] **Step 3: Verify no remote-write call was added to source projection**
 
   Run: `rg -n "update_doc|create_doc|create_space_doc|acquire_lock|release_lock" plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/source_baseline.py`
 
   Expected: no matches.
 
-- [ ] **Step 4: Record the verification result**
+- [x] **Step 4: Record the verification result**
 
   Add a short `Implementation Record` section to this plan with commit range, suite counts, and unresolved remote-readiness items. Do not claim remote acceptance.
 
-- [ ] **Step 5: Commit the verification record**
+- [x] **Step 5: Commit the verification record**
 
   `git add docs/superpowers/plans/2026-09-29-codex-kb-ai-source-state-and-admission.md`
 

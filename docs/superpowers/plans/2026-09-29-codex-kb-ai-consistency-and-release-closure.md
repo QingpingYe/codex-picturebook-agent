@@ -1,6 +1,6 @@
 # KB-AI 一致性与发布收口实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 统一前三批后的协议、技能、模板、CLI 文档和测试，完成离线一致性验收，并把远端只读验收、版本确认和真实发布授权固定为独立门槛。
 
@@ -40,7 +40,7 @@
 - Produces a checked-in contract matrix covering control tokens, index schema, source revisions/times, candidate times, page footer, content authority, admission, `needs_review`, overwrite disclosure and deletion.
 - Produces static tests that read implementation/docs and assert required terms exist together.
 
-- [ ] **Step 1: Write the failing contract test**
+- [x] **Step 1: Write the failing contract test**
 
   Add `KB_AIContractConsistencyTests` with tests:
 
@@ -53,27 +53,27 @@
 
   The test reads the compatibility doc and the three skill docs from the repository root and asserts each required concept is stated in at least one current-authority section.
 
-- [ ] **Step 2: Run the test to verify failure**
+- [x] **Step 2: Run the test to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/tests -p 'test_kb_ai_contract_consistency.py' -v`
 
   Expected: FAIL until the contract matrix and current wording are present.
 
-- [ ] **Step 3: Add the contract matrix**
+- [x] **Step 3: Add the contract matrix**
 
   Update `docs/workbuddy-feishu-knowledge-base-compatibility.md` with a table whose rows match the spec’s cross-side matrix. For every row, name the Codex implementation, the test that proves it, and whether WorkBuddy confirmation is pending or complete. Do not mark a row complete from documentation alone.
 
-- [ ] **Step 4: Align the older authoritative design**
+- [x] **Step 4: Align the older authoritative design**
 
   Update `2026-09-17-feishu-authoritative-knowledge-base-design.md` only where it contradicts the current contract: source time baseline, remote index status, admission default/admit/exclude, no conflict queue, no human-priority merge, and local state limitations.
 
-- [ ] **Step 5: Run the contract test**
+- [x] **Step 5: Run the contract test**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/tests -p 'test_kb_ai_contract_consistency.py' -v`
 
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   `git add plugins/picturebook-screenwriter/tests/test_kb_ai_contract_consistency.py docs/workbuddy-feishu-knowledge-base-compatibility.md docs/superpowers/specs/2026-09-17-feishu-authoritative-knowledge-base-design.md`
 
@@ -95,7 +95,7 @@
 **Interfaces:**
 - No new runtime API. Produces one consistent operator sequence and one set of current status terms.
 
-- [ ] **Step 1: Add failing wording tests**
+- [x] **Step 1: Add failing wording tests**
 
   Add:
 
@@ -105,23 +105,23 @@
   - `test_no_current_queue_or_human_priority_promise`
   - `test_source_baseline_and_admission_are_named_in_ingest_skill`
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/tests -p 'test_kb_ai_contract_consistency.py' -v`
 
   Expected: FAIL while any skill, template or README still uses a superseded term.
 
-- [ ] **Step 3: Update all current-authority surfaces**
+- [x] **Step 3: Update all current-authority surfaces**
 
   Make the operator sequence explicit: `source-baseline` → `check_delta` → candidate generation → `generate_entries --validate-only --nodes` → `prepare` → `publish` → `verify`. Keep historical statements only in changelog/history sections. Remove fixed WorkBuddy command counts and copied step numbers from current instructions.
 
-- [ ] **Step 4: Run the tests to verify pass**
+- [x] **Step 4: Run the tests to verify pass**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/tests -p 'test_kb_ai_contract_consistency.py' -v`
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   `git add README.md docs/CHANGELOG.md plugins/picturebook-screenwriter`
 
@@ -138,7 +138,7 @@
 - Produces a manual evidence template with no secret fields.
 - Produces a final gate checklist that distinguishes offline, remote read-only and authorized write states.
 
-- [ ] **Step 1: Write failing release-document tests**
+- [x] **Step 1: Write failing release-document tests**
 
   Add:
 
@@ -148,23 +148,23 @@
   - `test_release_gate_distinguishes_readonly_from_publish`
   - `test_release_gate_requires_explicit_user_authorization`
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/tests -p 'test_kb_ai_contract_consistency.py' -v`
 
   Expected: FAIL because the release-gate files do not exist.
 
-- [ ] **Step 3: Write both documents**
+- [x] **Step 3: Write both documents**
 
   The read-only record must capture timestamp, command, control revision, sample keys, decision, schema result and unresolved items without tokens or private body text. The release gate must list all conditions from spec §6 and must state that `verify` never counts as `published`.
 
-- [ ] **Step 4: Run the tests to verify pass**
+- [x] **Step 4: Run the tests to verify pass**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/tests -p 'test_kb_ai_contract_consistency.py' -v`
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   `git add docs/release-gates plugins/picturebook-screenwriter/tests/test_kb_ai_contract_consistency.py`
 
@@ -178,7 +178,7 @@
 **Interfaces:**
 - No new interface. Produces the evidence required before remote read-only acceptance.
 
-- [ ] **Step 1: Run all affected suites**
+- [x] **Step 1: Run all affected suites**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts -p 'test_*.py' -v`
 
@@ -190,17 +190,17 @@
 
   Expected: PASS.
 
-- [ ] **Step 2: Run the final old-contract scan**
+- [x] **Step 2: Run the final old-contract scan**
 
   Run: `rg -n "人工优先|三方合并|冲突入队|queued|third_party_edits|delta_state|forceFullSync|merge_protocol|sync_knowledge|target_state" docs plugins/picturebook-screenwriter/skills plugins/picturebook-screenwriter/tests`
 
   Expected: every match is in history, an explicit not-applicable section, or a test proving the identifier is retired.
 
-- [ ] **Step 3: Write the offline evidence into the release gate**
+- [x] **Step 3: Write the offline evidence into the release gate**
 
   Record commands, pass counts, scanned paths and unresolved items in `docs/release-gates/2026-09-29-kb-ai-release-gate.md`. Do not mark remote conditions complete.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   `git add docs/release-gates/2026-09-29-kb-ai-release-gate.md`
 
