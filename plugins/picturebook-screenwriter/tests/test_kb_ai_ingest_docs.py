@@ -31,5 +31,22 @@ class KB_AI_IngestDocsTests(unittest.TestCase):
                 self.assertNotIn("sync_constraint_data.py", path.read_text(encoding="utf-8"))
 
 
+    def test_corrections_promote_is_marked_unimplemented(self):
+        templates = TEMPLATES.read_text(encoding="utf-8")
+        self.assertIn("corrections-promote", templates)
+        self.assertIn("本仓未实现", templates)
+
+    def test_corrections_candidate_does_not_claim_empty_template_replacement(self):
+        combined = TEMPLATES.read_text(encoding="utf-8") + EXTRACTION.read_text(encoding="utf-8")
+        self.assertIn("不得以空模板替换", combined)
+
+    def test_future_correction_append_requires_remote_read(self):
+        combined = TEMPLATES.read_text(encoding="utf-8") + EXTRACTION.read_text(encoding="utf-8")
+        self.assertIn("先读取当前远端权威页", combined)
+
+    def test_corrections_redline_terms_are_preserved(self):
+        templates = TEMPLATES.read_text(encoding="utf-8")
+        self.assertIn("保留已有红线和词表", templates)
+
 if __name__ == "__main__":
     unittest.main()

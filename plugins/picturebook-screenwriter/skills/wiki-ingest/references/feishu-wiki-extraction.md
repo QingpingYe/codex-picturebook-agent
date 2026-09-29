@@ -209,6 +209,7 @@ source_edit_time_parts:
 - 编辑时间必须是正整数毫秒时间戳，并与本轮 `nodes_snapshot.json` 的 `edit_time_ms` 一致。
 - 正文中的事实声明必须写中文来源引用。
 - 冲突内容写入 `corrections.md` 候选，不得自行裁决。
+- 任何 corrections promotion 都必须先读取当前远端权威页，再追加新卡片；不得以空模板替换，且必须保留已有红线和词表。
 
 ## 失败处理
 
