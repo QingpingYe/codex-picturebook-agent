@@ -162,6 +162,22 @@ def build_summary_line(summary):
     return line
 
 
+def new_source_tokens(result):
+    """Return sorted content tokens whose verdict is exactly ``new``."""
+    verdicts = result.get("verdicts") or {}
+    return sorted(
+        token for token, value in verdicts.items()
+        if isinstance(value, dict) and value.get("verdict") == "new"
+    )
+
+
+def build_new_sources_line(result):
+    tokens = new_source_tokens(result)
+    if not tokens:
+        return "NEW_SOURCES: 0"
+    return f"NEW_SOURCES: {len(tokens)} tokens={','.join(tokens)}"
+
+
 def classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=None):
     """按远端 source baseline 判定快照节点；cache_dir 保留为兼容参数但不决定 verdict。"""
     del cache_dir
@@ -238,12 +254,14 @@ def main(argv=None):
         if args.out:
             write_atomic(args.out, result)
         print(build_summary_line(result["summary"]))
+        print(build_new_sources_line(result))
         for warning in result.get("warnings") or []:
             print(f"WARN: {warning}", file=sys.stderr)
         return 0
     except Exception as error:
         print(f"ERROR: check_delta failed: {error}", file=sys.stderr)
         print("DELTA: 0 nodes → skip 0 / process 0 / new 0 / deleted 0 / unknown 0")
+        print("NEW_SOURCES: 0")
         print("FALLBACK: 全部节点按 unknown 处理（等同旧全量下载），不阻断同步",
               file=sys.stderr)
         return 1

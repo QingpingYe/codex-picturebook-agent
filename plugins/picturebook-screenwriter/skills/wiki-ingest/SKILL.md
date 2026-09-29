@@ -93,7 +93,7 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/check_delta.p
   --out <run_id>/delta_plan.json
 ```
 
-没有远端 baseline 时按首次运行处理。
+没有远端 baseline 时按首次运行处理。每轮同时输出 `DELTA` 与 `NEW_SOURCES` 审计行；零新增固定输出 `NEW_SOURCES: 0`，降级路径也不得省略。
 
 仅下载或解析 verdict 为 `first_run`、`new`、`changed` 或 `unknown` 的节点。`unchanged` 节点不允许重新网络拉取。读取规则见 `references/feishu-wiki-extraction.md`。每次读取后校验内容完整性并记录来源 URL、标题、节点 token 和修订号。
 

@@ -137,6 +137,49 @@ class TestBaseline(unittest.TestCase):
         self.assertFalse(built["tok"]["complete"])
 
 
+class TestNewSourcesAudit(unittest.TestCase):
+
+    @staticmethod
+    def _result(verdicts, first_run=False):
+        return {"first_run": first_run, "verdicts": verdicts}
+
+    def test_new_sources_zero_uses_fixed_line(self):
+        result = self._result({"a": {"verdict": "unchanged"}})
+        self.assertEqual(cd.build_new_sources_line(result), "NEW_SOURCES: 0")
+
+    def test_new_sources_lists_content_tokens_sorted_and_unique(self):
+        result = self._result({
+            "b": {"verdict": "new"},
+            "a": {"verdict": "new"},
+            "c": {"verdict": "changed"},
+        })
+        self.assertEqual(cd.build_new_sources_line(result),
+                         "NEW_SOURCES: 2 tokens=a,b")
+
+    def test_first_run_does_not_count_as_new(self):
+        result = self._result({"a": {"verdict": "first_run"}}, first_run=True)
+        self.assertEqual(cd.build_new_sources_line(result), "NEW_SOURCES: 0")
+
+    def test_containers_are_not_new_sources(self):
+        result = self._result({"container": {"verdict": "container"}})
+        self.assertEqual(cd.new_source_tokens(result), [])
+
+    def test_excluded_nodes_are_not_new_sources(self):
+        result = self._result({"excluded": {"verdict": "excluded"}})
+        self.assertEqual(cd.new_source_tokens(result), [])
+
+    def test_new_sources_line_is_emitted_on_fallback(self):
+        import contextlib
+        from io import StringIO
+
+        stdout = StringIO()
+        stderr = StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            rc = cd.main(["--nodes", "missing.json"])
+        self.assertEqual(rc, 1)
+        self.assertIn("NEW_SOURCES: 0", stdout.getvalue())
+
+
 class TestRetirement(unittest.TestCase):
 
     def test_retired_state_options_are_rejected(self):
