@@ -1,6 +1,6 @@
 # KB-AI 发布门
 
-> 状态：技术门通过；真实 publish 与跨侧并发仍待 explicit user authorization。
+> 状态：技术门通过；执行门暂缓，真实 publish 与跨侧并发仍待 explicit user authorization。
 
 ## 离线条件
 
@@ -30,3 +30,10 @@
 - [x] 远端只读：index revision 24；lock revision 89 空闲；admission revision 5；12/12 页面通过。
 - [x] `source_baseline.py` 无 update/create/lock 写调用。
 - [ ] explicit user authorization。
+
+## 发布决定
+
+- 决定：本轮不执行真实 publish，不解除 Codex/WorkBuddy 并发禁令。
+- 原因：用户授权的是远端只读验收；读取授权不能推导写入或并发授权。
+- publish run owner、目标 revision 和回滚路径：N/A，因本轮没有发布动作。
+- 后续若获明确发布授权，需先重新读取 index/lock/admission revision，再按当前 revision 执行。

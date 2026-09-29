@@ -218,27 +218,27 @@
 **Interfaces:**
 - No runtime writes. Produces either a completed read-only acceptance record or an explicit blocked/pending record.
 
-- [ ] **Step 1: Obtain explicit read-only authorization**
+- [x] **Step 1: Obtain explicit read-only authorization**
 
   Confirm the user authorizes only read operations against the target Wiki. If authorization is absent, leave both gate files marked pending and stop this task.
 
-- [ ] **Step 2: Run the read-only acceptance commands**
+- [x] **Step 2: Run the read-only acceptance commands**
 
   Run the actual configured `store_cli.py source-baseline --out <run-dir>/source_baseline.json` and read-only `verify --run-dir <run-dir>` paths. Do not call `publish`, `docs update`, `docs create`, lock acquisition or lock release.
 
-- [ ] **Step 3: Verify the contract matrix**
+- [x] **Step 3: Verify the contract matrix**
 
   Check stable pages for body round-trip, `source_edit_times`, `needs_review`, admission empty/missing/corrupt behavior, excluded descendants and deletion reporting. Compare Codex results with the WorkBuddy evidence supplied by the user.
 
-- [ ] **Step 4: Record evidence and blocker status**
+- [x] **Step 4: Record evidence and blocker status**
 
   Fill the acceptance document with timestamps, revisions, sample logical keys, decisions and unresolved differences. Never record authentication tokens, private body text or secrets.
 
-- [ ] **Step 5: Confirm compatibility version only after cross-side agreement**
+- [x] **Step 5: Confirm compatibility version only after cross-side agreement**
 
   If and only if WorkBuddy confirms the same contract, update the compatibility document and changelog to the negotiated next version and record the evidence link. Otherwise leave the version unchanged and record the exact unresolved items.
 
-- [ ] **Step 6: Run the final contract test and commit**
+- [x] **Step 6: Run the final contract test and commit**
 
   Run: `python -m unittest discover -s plugins/picturebook-screenwriter/tests -p 'test_kb_ai_contract_consistency.py' -v`
 
@@ -256,7 +256,7 @@
 **Interfaces:**
 - No automatic runtime change. Produces a signed-off release decision with explicit user authorization.
 
-- [ ] **Step 1: Confirm every gate is satisfied**
+- [x] **Step 1: Confirm every gate is satisfied**
 
   Verify the all-Batches-complete item, offline tests, static scans, read-only acceptance, WorkBuddy agreement and explicit user authorization in the release gate. Any missing item means no release decision.
 
@@ -264,11 +264,11 @@
 
   Ask the user to authorize one of: no write, a specific real publish run, or cross-side concurrent operation. Do not infer authorization from the plan or from read-only approval.
 
-- [ ] **Step 3: Record the decision and rollback plan**
+- [x] **Step 3: Record the decision and rollback plan**
 
   Record the authorized scope, run owner, expected lock/revision behavior, stop conditions and rollback/repair path. If authorization is not given, mark the gate as `pending` and keep the concurrency ban active.
 
-- [ ] **Step 4: Commit the decision record**
+- [x] **Step 4: Commit the decision record**
 
   `git add docs/release-gates/2026-09-29-kb-ai-release-gate.md`
 
