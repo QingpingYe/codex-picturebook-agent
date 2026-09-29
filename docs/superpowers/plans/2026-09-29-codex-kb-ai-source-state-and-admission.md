@@ -42,7 +42,7 @@
 - Produces: `AdmissionEntry`, `AdmissionPolicy`, `AdmissionResult` immutable dataclasses.
 - Produces: `parse_source_admission(content: str) -> AdmissionPolicy`.
 - Produces: `resolve_source_admission(policy: AdmissionPolicy, snapshot: Mapping[str, Any]) -> AdmissionResult`.
-- Fixture fields must match WorkBuddy's six-field contract exactly. This plan uses `node_token`, `title`, `decision`, `reason`, `decided_at`, `decided_by`; if the captured contract differs, update the fixture and constants in the same task before implementation continues.
+- Fixture fields are the verified WorkBuddy contract: `token`, `title`, `decision`, `decided_by`, `decided_at`, `reason`.
 
 - [ ] **Step 1: Capture the read-only admission fixture**
 
@@ -55,8 +55,9 @@
   - `test_missing_page_is_empty_policy`
   - `test_fixture_has_exact_six_fields`
   - `test_unknown_field_and_wrong_schema_version_fail`
-  - `test_latest_admit_cancels_previous_exclude`
-  - `test_equal_decided_at_conflict_fails`
+  - `test_six_fields_reject_empty_values`
+  - `test_duplicate_token_fails`
+  - `test_admit_has_no_admission_effect`
   - `test_exclude_marks_node_container_and_all_descendants`
   - `test_empty_policy_does_not_require_complete_ancestry`
   - `test_noncritical_missing_parent_or_cycle_stops`
@@ -71,7 +72,7 @@
 
 - [ ] **Step 4: Implement strict parsing and tree resolution**
 
-  `parse_source_admission()` must accept the exact `# AI_KB_SOURCE_ADMISSION_V1` JSON block, reject unknown/missing fields, and reject invalid `decision` values. Resolve decisions by `decided_at`; equal timestamps for competing decisions are a conflict. Build descendants only from `parent_node_token`; missing parents/cycles stop the run only when the policy contains at least one effective exclusion.
+  `parse_source_admission()` must accept the exact `# AI_KB_SOURCE_ADMISSION_V1` JSON block, require exactly the six verified fields, reject empty values, duplicate tokens, unknown fields and invalid `decision` values. `admit` has no admission effect; `exclude` tokens are expanded into the subtree closure. Build descendants only from `parent_node_token`; missing parents/cycles stop the run only when the policy contains at least one effective exclusion.
 
 - [ ] **Step 5: Run the tests to verify pass**
 

@@ -114,14 +114,15 @@ load_source_admission(payload) -> AdmissionPolicy
 resolve_source_admission(policy, snapshot) -> AdmissionResult
 ```
 
-`AdmissionPolicy` 只保存已验证的六字段条目；字段名和精确约束来自 WorkBuddy `AI_KB_SOURCE_ADMISSION_V1` 契约。实现前必须先通过授权的只读命令取得真实样例并固化为离线 fixture；不得猜测字段名，不得接受未知字段，不得把解析失败降级为空策略。
+`AdmissionPolicy` 只保存已验证的六字段条目：`token`、`title`、`decision`、`decided_by`、`decided_at`、`reason`。所有字段必须是非空字符串，`decision` 只能是 `admit` 或 `exclude`，同一 token 重复即控制面损坏。不得接受未知字段，不得把解析失败降级为空策略。
 
 `AdmissionResult` 至少包含：
 
 - `excluded_tokens`：被显式排除的 token 及其全部后代。
 - `excluded_containers`：被排除且不再遍历的容器 token。
 - `included_tokens`：未裁定默认纳入或被显式 `admit` 的节点。
-- `active_decisions`：按契约确定的最新有效决定；同一 token 的决定顺序不明确时判为冲突。
+- `admission_revision_id`：准入页回读 revision；页缺失时为 `null`。
+- `page_present`：准入页是否存在；缺页为空排除，不能被当作损坏。
 
 ## 4. 判定语义
 
@@ -149,12 +150,13 @@ resolve_source_admission(policy, snapshot) -> AdmissionResult
 
 - 未裁定的节点默认 `admit`。
 - 只有 `decision == "exclude"` 产生排除效果。
-- `admit` 只用于撤销先前排除；它不能绕过当前有效的最新 `exclude`。
+- 同一 token 只能有一条条目；治理写入通过覆盖该 token 的条目实现撤销，解析器遇到重复 token 必须硬失败。
+- `admit` 条目没有准入副作用，只表示该 token 当前不在排除集合；未出现的 token 与 `admit` 一样默认纳入。
 - 被排除 token 自身、全部后代和后代容器都判 `excluded`，不得下载正文、扫描外链、生成候选或发布。
 - 排除集合为空时，不要求祖先链完整。
 - 排除集合非空且祖先链缺父节点、父节点不在快照中或形成环时，整轮停止并逐行列出问题 token。
 - `--only` 命中 `excluded` token 时拒绝执行；未裁定 token 不拒绝。
-- 远端准入页缺失等同空排除；页面存在但标题、`schema_version`、六字段结构、决策枚举或决定顺序无效时硬失败。
+- 远端准入页缺失等同空排除；页面存在但标题、`schema_version`、六字段结构、非空字符串值、决策枚举或重复 token 无效时硬失败。
 - 不创建、不修改、不删除远端准入页。
 
 ### 4.3 本地 state 退役
@@ -200,7 +202,7 @@ resolve_source_admission(policy, snapshot) -> AdmissionResult
 5. 远端索引有来源 token、快照缺失时判 `deleted`，但不自动归档目标页。
 6. `source-baseline` 对索引和准入页只读，绝不调用任何写命令；准入页缺失为空策略，损坏为硬失败。
 7. 未裁定默认纳入、叶子排除、容器子树排除、未来新增后代自动继承排除、悬断祖先链和环。
-8. `admit` 撤销、多个决定的确定性、未知字段和错误 `schema_version` 的失败语义。
+8. `admit` 无副作用、同 token 由治理写入覆盖、重复 token、未知字段和错误 `schema_version` 的失败语义。
 9. `--only` 对 excluded、未裁定和正常 token 的行为。
 10. `delta_state.json`、finalize、local state CLI 参数和 `merge_state` 已无运行时消费者。
 11. 技能文档、模板、帮助文字和测试不再把本地 state 描述为跨轮基线。
