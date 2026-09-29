@@ -66,5 +66,40 @@ class KB_AI_IngestDocsTests(unittest.TestCase):
         self.assertNotIn("13条命令", combined)
 
 
+    def test_download_rules_precede_staging_explanation(self):
+        combined = (
+            SKILL.read_text(encoding="utf-8")
+            + EXTRACTION.read_text(encoding="utf-8")
+        )
+        self.assertIn("先执行下载规则", combined)
+
+    def test_staging_versions_may_lag_without_drift(self):
+        combined = (
+            SKILL.read_text(encoding="utf-8")
+            + EXTRACTION.read_text(encoding="utf-8")
+        )
+        self.assertIn("staging 版本向量允许滞后，滞后不等于漂移", combined)
+
+    def test_authority_paths_are_named_for_ingest_and_store(self):
+        store_skill = (ROOT / "plugins/picturebook-screenwriter/skills/feishu-knowledge-store/SKILL.md").read_text(encoding="utf-8")
+        combined = store_skill + SKILL.read_text(encoding="utf-8") + EXTRACTION.read_text(encoding="utf-8")
+        for name in (
+            "nodes_snapshot.json",
+            "_manifest.json",
+            "AI_KB_INDEX_V1",
+            "AI_KB_SOURCE_ADMISSION_V1",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, combined)
+
+    def test_workbuddy_step_numbers_are_not_present(self):
+        combined = (
+            SKILL.read_text(encoding="utf-8")
+            + EXTRACTION.read_text(encoding="utf-8")
+            + TEMPLATES.read_text(encoding="utf-8")
+        )
+        self.assertNotIn("WorkBuddy Step", combined)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -95,7 +95,7 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/check_delta.p
 
 没有远端 baseline 时按首次运行处理。每轮同时输出 `DELTA` 与 `NEW_SOURCES` 审计行；零新增固定输出 `NEW_SOURCES: 0`，降级路径也不得省略。
 
-仅下载或解析 verdict 为 `first_run`、`new`、`changed` 或 `unknown` 的节点。`unchanged` 节点不允许重新网络拉取。读取规则见 `references/feishu-wiki-extraction.md`。每次读取后校验内容完整性并记录来源 URL、标题、节点 token 和修订号。
+先执行下载规则，再生成或更新 staging；staging 版本向量允许滞后，滞后不等于漂移。仅下载或解析 verdict 为 `first_run`、`new`、`changed` 或 `unknown` 的节点。`unchanged` 节点不允许重新网络拉取。读取规则见 `references/feishu-wiki-extraction.md`。每次读取后校验内容完整性并记录来源 URL、标题、节点 token、修订号和编辑时间。
 
 `deleted` 节点只进入报告；没有足够证据时标为 `unknown`，不得臆测删除。
 
