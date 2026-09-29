@@ -25,7 +25,7 @@ description: 通过远端租约、docx revision 前提、正文内容比较和�
 1. Run `store_cli.py config-status` to confirm durable configuration and CLI availability before remote work.
 2. 运行 `scripts/lark_cli_bootstrap.py` 检查兼容的 lark-cli。若结果为 `missing`，先向用户说明将执行 `npx @larksuite/cli@latest install`，获得明确批准后加 `--install` 重跑；若为 `unsupported`，不得替换用户已有 CLI。
 3. 运行 `preflight`，验证用户身份、原始库读取和目标库读写能力。安装 CLI 不代表完成登录；认证失败时由用户本人执行 `lark-cli auth login`。
-4. 控制页位于远端系统树中：`AI_KB_INDEX_V1` 是唯一同步状态权威，`AI_KB_LOCK_V1` 提供租约；只读准入策略来自 `AI_KB_SOURCE_ADMISSION_V1`，缺失表示空排除，损坏则硬失败。远端命令在 `build_components()` 中通过 `Publisher.resolve_control_plane()` 解析索引和锁，必须保留准入页的只读边界，不得创建替代文档；`Publisher.initialize()` 是发布流程为新建页定位（必要时创建）系统树的路径，不用于在控制页缺失时顶替。
+4. 控制页位于远端系统树中：`AI_KB_INDEX_V1` 是唯一同步状态权威，`AI_KB_LOCK_V1` 提供租约；只读准入策略来自 `AI_KB_SOURCE_ADMISSION_V1`：未裁定默认纳入，只有 `exclude` 生效并作用于自身、全部后代和后代容器；页缺失表示空排除，损坏则硬失败。远端命令在 `build_components()` 中通过 `Publisher.resolve_control_plane()` 解析索引和锁，必须保留准入页的只读边界，不得创建替代文档；`Publisher.initialize()` 是发布流程为新建页定位（必要时创建）系统树的路径，不用于在控制页缺失时顶替。
 5. 在 `wiki-ingest` 建立本轮运行目录后，先运行只读 `source-baseline --out <run-id>/source_baseline.json`，再运行 `wiki-ingest` 生成任务局部 `_manifest.json`；该投影包含远端索引和准入排除快照，不取锁、不写远端。
 6. 运行 `prepare`，读取原始库节点并校验 `wiki-ingest` 生成的候选清单；它只写任务局部 run 目录，不接触目标库，也不持有锁。
 7. 运行 `publish`：先取得远端锁，再逐页读取当前目标页并比较候选正文与当前正文；确有内容变化才做条件更新、写后回读和索引回写，内容相同则只刷新索引时间。

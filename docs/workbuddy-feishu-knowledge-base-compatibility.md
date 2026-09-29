@@ -1,6 +1,6 @@
 # WorkBuddy 飞书知识库兼容协议
 
-**协议版本：** 1.4.0（2026-09-29 变更：KB-AI 页面内容以同步方候选正文为准，比较时忽略纯排版标记；退役人工优先三方合并、冲突队列读写与 `queued` 报告口径。源节点准入与本地 state 退役仍待后续批次）
+**协议版本：** 1.4.0（2026-09-29 变更：KB-AI 页面内容以同步方候选正文为准，比较时忽略纯排版标记；退役人工优先三方合并、冲突队列读写与 `queued` 报告口径；Codex 已接入远端 `source_edit_times` 来源基线和 `AI_KB_SOURCE_ADMISSION_V1` 子树排除。远端只读验收与跨侧版本确认仍待完成）
 **适用对象：** WorkBuddy 专家团及后续所有直接读写「绘本创作知识库（AI）」的自动化系统  
 **兼容基准：** `picturebook-screenwriter` 插件的 `wiki-ingest`、`feishu-knowledge-store`、`knowledge-loader` 实现  
 **生效原则：** 本文档描述的是远端契约。任何实现只要遵守这些格式、状态和并发规则，就可以与 Codex 插件互通；具体使用 lark-cli 还是其他 Feishu API 客户端不是兼容性的必要条件。
@@ -393,11 +393,26 @@ docs +create --as user --parent-token {wiki_node_token} --title {title} --doc-fo
 - [ ] 索引写入后回读比对，结果不一致时停止并进入 `needs_review`。
 - [ ] 比较候选与当前页正文时忽略纯排版标记；正文变化即发布，partial、warning、索引失败时设置 `needs_review` 并报告。
 - [ ] 不读取、不追加、不创建 `AI_KB_CONFLICT_QUEUE_V1`；`needs_review` 只表示本轮未安全发布，下一轮可重试。
+- [ ] 读取并严格校验 `AI_KB_SOURCE_ADMISSION_V1`：页缺失为空排除，未裁定默认纳入，`exclude` 作用于自身和全部后代及容器。
 - [ ] 覆盖人工编辑过的页面时，报告列出 `overwritten_human_edits`。
 - [ ] 页面写入使用当前 revision，并在写后回读确认真实 revision 后再更新索引。
 - [ ] 结束时释放自己的锁，并输出完整中文报告。
 
-## 13. 实现依据
+## 13. 跨侧只读契约矩阵
+
+| 契约点 | Codex 当前行为 | 证据 | 状态 |
+| --- | --- | --- | --- |
+| 控制页集合 | `index`、`lock`；`admission` 可选 | `source_admission.py`、`source_baseline.py` | Codex 已实现，待跨侧确认 |
+| 来源版本 | `source_edit_times` + 适用 revision 判定来源是否变化 | `check_delta.py`、来源状态测试 | Codex 已实现，待只读验收 |
+| 候选时间 | `source_edit_time_parts` 与 token/revision 顺序一致 | `generate_entries.py`、模板契约测试 | Codex 已实现 |
+| 准入语义 | 未裁定默认纳入；`exclude` 展开自身、后代和容器；重复 token/坏 schema 硬失败 | `source_admission.py`、准入测试 | Codex 已实现，待只读验收 |
+| 正文权威 | 只比较正文内容，纯排版差异保留 | `sync_runner.py`、第一批测试 | Codex 已实现 |
+| 失败状态 | `needs_review` 可重试，不读取冲突队列 | `SyncRunner`、报告测试 | Codex 已实现 |
+| 删除语义 | 远端索引有来源、当前快照无来源时报告 `deleted`，不自动归档 | `check_delta.py` | Codex 已实现 |
+
+本矩阵只记录当前实现与证据；远端只读验收完成前，不把任何跨侧行为标记为最终兼容。
+
+## 14. 实现依据
 
 本协议依据以下当前实现和设计：
 

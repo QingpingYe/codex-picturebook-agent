@@ -97,6 +97,8 @@ Picture Book Screenwriter：绘本创作
 
 每篇知识页面末尾固定保留 `## 系统元数据（请勿编辑）` 标题和一个 `json` 代码块，至少包含 `key`、源节点 token、页面类型与最后一次 AI 写入 revision。索引条目与页尾元数据可选包含 `source_edit_times`（来源 token 到最近一次已摄取快照毫秒时间的映射）：索引允许缺失或为 `null`，有值时键集必须与 `source_revisions` 一致；页尾有值时键集必须与 `source_node_tokens` 一致。`knowledge-loader` 不将该节注入创作上下文。控制文档或页面元数据也可能被人工误改，因此每次读取必须校验 JSON schema、校验条目 token 可读。无法校验时，系统停止写入、报告故障，并通过扫描 `01_知识内容` 页面末尾的系统元数据重建候选索引；重建结果需要用户确认后才替换控制文档。
 
+`AI_KB_SOURCE_ADMISSION_V1` 是只读源排除裁定表：未裁定默认纳入，只有 `exclude` 生效并作用于自身、全部后代和后代容器；页缺失表示空排除，页面存在但六字段 schema、重复 token 或 decision 无效时硬失败。来源增量判据来自远端索引的 `source_edit_times` 与当前快照 `edit_time_ms`；本地 `delta_state.json` 不再作为跨轮基线。
+
 `同步锁` 采用租约：运行实例读取锁文档并取得其 `revision_id`，仅在锁空闲或过期时带该版本号写入 `{run_id, holder, started_at, expires_at}`。版本冲突表示有其他实例抢先获得锁。长同步在阶段边界续租，结束时释放；租约过期才允许接管。
 
 ## 同步与合并协议

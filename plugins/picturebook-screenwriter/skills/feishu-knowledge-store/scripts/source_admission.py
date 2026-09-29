@@ -97,6 +97,29 @@ def parse_admission_payload(payload: Mapping[str, Any], *,
                            page_present=page_present)
 
 
+def parse_admission_snapshot(snapshot: Any) -> AdmissionPolicy:
+    if snapshot is None:
+        return empty_admission_policy(page_present=False)
+    if not isinstance(snapshot, Mapping):
+        raise SourceAdmissionError("admission snapshot must be an object")
+    if set(snapshot) - {"schema_version", "entries", "revision_id", "page_present"}:
+        raise SourceAdmissionError("invalid admission snapshot fields")
+    page_present = snapshot.get("page_present", True)
+    if not isinstance(page_present, bool):
+        raise SourceAdmissionError("admission page_present must be boolean")
+    revision_id = snapshot.get("revision_id")
+    if revision_id is not None and (
+        isinstance(revision_id, bool) or not isinstance(revision_id, int) or revision_id < 0
+    ):
+        raise SourceAdmissionError("admission revision_id is invalid")
+    payload = {
+        "schema_version": snapshot.get("schema_version"),
+        "entries": snapshot.get("entries"),
+    }
+    return parse_admission_payload(payload, revision_id=revision_id,
+                                   page_present=page_present)
+
+
 def parse_source_admission(content: str) -> AdmissionPolicy:
     if not isinstance(content, str):
         raise SourceAdmissionError("admission control document must be text")

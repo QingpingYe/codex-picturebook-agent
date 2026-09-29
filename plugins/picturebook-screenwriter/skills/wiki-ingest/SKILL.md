@@ -96,7 +96,7 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/check_delta.p
   --out <run_id>/delta_plan.json
 ```
 
-`source-baseline` 是只读命令：它不取锁、不写远端；缺准入页时投影 `page_present: false` 和空排除，准入页存在但读不懂则硬失败。`--only` 命中排除闭包时 `check_delta` 以退出码 3 停止。
+`source-baseline` 是只读命令：它投影 `AI_KB_INDEX_V1` 与 `AI_KB_SOURCE_ADMISSION_V1`，不取锁、不写远端；未裁定默认纳入，只有 `exclude` 生效并作用于整棵子树；缺准入页时投影 `page_present: false` 和空排除，准入页存在但读不懂则硬失败。`--only` 命中排除闭包时 `check_delta` 以退出码 3 停止。
 
 没有远端 baseline 时按首次运行处理。每轮同时输出 `DELTA` 与 `NEW_SOURCES` 审计行；零新增固定输出 `NEW_SOURCES: 0`，降级路径也不得省略。
 
