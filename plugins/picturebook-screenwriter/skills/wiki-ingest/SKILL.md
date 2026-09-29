@@ -42,7 +42,7 @@ applies_to:
 ├── settings.json
 ├── nodes_snapshot.json
 ├── delta_plan.json
-├── delta_state.json
+├── source_baseline.json
 ├── cache/
 ├── texts/
 ├── capture/
@@ -53,7 +53,7 @@ applies_to:
     └── <project_id>/
 ```
 
-`settings.json` 是本次运行的批处理配置，仅包含源 URL 和外链扫描过滤参数；不得写入令牌或个人秘密。`cache/` 与 `delta_state.json` 只服务当前运行，不作为下轮共享基线。
+`settings.json` 是本次运行的批处理配置，仅包含源 URL 和外链扫描过滤参数；不得写入令牌或个人秘密。`cache/` 和 `delta_plan.json` 只服务当前运行；跨轮来源基线来自远端 `source_baseline.json` 投影，不使用本地 state。
 
 ## 执行流程
 
@@ -83,15 +83,17 @@ lark-cli wiki +node-get --node-token <source_root_token> --as user --format json
 
 ### 3. 做增量判定并读取内容
 
-如果当前运行目录内有 `delta_state.json`，先用 `check_delta.py` 计算变更计划；否则本次按首次运行处理：
+先由 `feishu-knowledge-store` 的只读 `source-baseline` 投影生成 `<run_id>/source_baseline.json`，再运行：
 
 ```bash
 python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/check_delta.py \
   --nodes <run_id>/nodes_snapshot.json \
-  --state <run_id>/delta_state.json \
+  --source-baseline <run_id>/source_baseline.json \
   --cache-dir <run_id>/cache \
   --out <run_id>/delta_plan.json
 ```
+
+没有远端 baseline 时按首次运行处理。
 
 仅下载或解析 verdict 为 `first_run`、`new`、`changed` 或 `unknown` 的节点。`unchanged` 节点不允许重新网络拉取。读取规则见 `references/feishu-wiki-extraction.md`。每次读取后校验内容完整性并记录来源 URL、标题、节点 token 和修订号。
 

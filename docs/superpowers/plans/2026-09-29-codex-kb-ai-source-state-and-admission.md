@@ -215,15 +215,16 @@
 
   - `test_missing_baseline_is_first_run`
   - `test_token_absent_from_index_is_new`
-  - `test_matching_time_revision_and_cache_is_unchanged`
+  - `test_matching_time_and_revision_is_unchanged`
   - `test_missing_index_time_forces_changed`
   - `test_conflicting_index_times_force_changed`
   - `test_doc_revision_mismatch_forces_changed`
-  - `test_file_without_revision_can_skip_with_time_and_cache`
+  - `test_file_without_revision_can_skip_with_time`
+  - `test_cache_loss_does_not_change_verdict`
   - `test_index_token_missing_from_snapshot_is_deleted`
   - `test_only_never_infers_deleted`
 
-  Assert no skip can result from `edit_time_ms` equality alone.
+  Assert no skip can result from `edit_time_ms` equality alone and that local cache does not participate in the verdict.
 
 - [ ] **Step 2: Run the tests to verify failure**
 
@@ -233,7 +234,7 @@
 
 - [ ] **Step 3: Implement token baseline and fail-safe classification**
 
-  Build token evidence by scanning raw index entries. Mark token evidence inconsistent when times or revisions disagree, or when an entry has `source_edit_times=null`. Use `source_revisions` as the applicable revision baseline for `docx/wiki`; files may skip on time + cache hash. Detect `deleted` only when a token appears in the remote index and is absent from the current snapshot.
+  Build token evidence by scanning raw index entries. Mark token evidence inconsistent when times or revisions disagree, or when an entry has `source_edit_times=null`. Use `source_revisions` as the applicable revision baseline for `docx/wiki`; files may skip on matching edit time alone. Local cache and `feishu_hash` do not participate in the verdict. Detect `deleted` only when a token appears in the remote index and is absent from the current snapshot.
 
 - [ ] **Step 4: Run the tests to verify pass**
 

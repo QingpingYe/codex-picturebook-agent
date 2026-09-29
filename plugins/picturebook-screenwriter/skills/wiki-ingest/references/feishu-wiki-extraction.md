@@ -64,21 +64,22 @@ lark-cli auth status --json --verify
 
 ## 增量判定
 
-当前运行目录中存在 `delta_state.json` 时，先运行 `check_delta.py`。缓存文件和状态都只允许位于当前运行目录：
+先由 `feishu-knowledge-store` 的只读 `source-baseline` 命令生成：
 
 ```text
-.picturebook-screenwriter/tmp/<run_id>/cache/
-.picturebook-screenwriter/tmp/<run_id>/delta_state.json
+.picturebook-screenwriter/tmp/<run_id>/source_baseline.json
 ```
+
+再运行 `check_delta.py --nodes <snapshot> --source-baseline <baseline>`。`cache/` 仍可位于当前运行目录，但不作为跨轮判据，也不参与 `unchanged` 决策。
 
 处理规则：
 
 - `first_run`、`new`、`changed`、`unknown` 必须读取内容。
-- `unchanged` 只能使用当前运行缓存，不得重新网络读取。
+- `unchanged` 必须有完整远端 edit time 与适用 revision 证据。
 - `deleted` 必须再次只读复核；无权限或不确定时改回 `unknown`。
-- 缓存哈希不匹配一律按 `changed` 处理。
+- 远端 baseline 缺失、时间缺失/冲突或 revision 不一致时 fail-safe 为 `changed`/`unknown`。
 
-没有跨运行的共享增量权威。上一轮运行目录不应被当作本轮默认基线。
+没有跨运行的共享本地增量权威。上一轮运行目录不应被当作本轮默认基线。
 
 ## 文件类型路由
 

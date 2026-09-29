@@ -140,10 +140,10 @@ resolve_source_admission(policy, snapshot) -> AdmissionResult
 
 1. 节点未被准入排除。
 2. 快照 `edit_time_ms` 与远端基线一致。
-3. 对 `docx`/`wiki` 节点，快照可用 revision 与远端基线一致；revision 为缺失或 `N/A` 时不得跳过。对没有 revision 语义的文件节点，以编辑时间和缓存哈希作为正向证据。
-4. 本地缓存存在且哈希与记录的 `feishu_hash` 一致。
+3. 远端索引为该 token 提供唯一、完整的 edit time 和 revision 证据。
+4. 对 `docx`/`wiki` 节点，快照 revision 与远端基线一致；revision 为缺失或 `N/A` 时不得跳过。对没有 revision 语义的文件节点，以编辑时间作为正向证据。
 
-缓存缺失、哈希不符、缓存目录缺失或 revision 不可确认时，结果降级为 `changed`，原因是“缺少正向 skip 证据”。这允许重读，不会漏掉变化源。
+本地缓存不再决定 skip。远端索引没有内容哈希字段，跨轮判据不得要求本地 `feishu_hash`。缓存仍可帮助代理在读取后复用内容，但丢失、过期或损坏不能使结论变为 `unchanged`，也不能成为共享基线。
 
 ### 4.2 准入判定
 
@@ -176,7 +176,7 @@ resolve_source_admission(policy, snapshot) -> AdmissionResult
 | 准入页缺失 | 空排除策略 |
 | 准入页 schema/决定无效 | 停止整轮，列出首条错误 |
 | 排除祖先链断裂或成环 | 停止整轮，逐行列出 token |
-| 缓存缺失/哈希失败 | 判 `changed`，重新读取 |
+| 本地缓存缺失/损坏 | 不作为 skip 证据；只要远端时间/revision 证据完整仍可判 `unchanged` |
 | 候选时间与快照不一致 | 机械校验 `FAIL`，不得发布 |
 | `--only` 命中排除 token | 拒绝执行并列出 token |
 | 目标页发布失败 | 交由第一批 `needs_review` 和报告语义处理，不写入准入页 |
@@ -195,8 +195,8 @@ resolve_source_admission(policy, snapshot) -> AdmissionResult
 
 1. 快照、候选 token/revision/time 三组列表的顺序、长度、正整数和唯一性。
 2. `source_edit_time_parts` 缺失、非法或不匹配时不得通过 B1 校验。
-3. 索引无 token、时间缺失/冲突、revision 不一致、缓存缺失和哈希不符时正确降级为处理。
-4. 时间、revision 和缓存全部匹配时才判 `unchanged`。
+3. 索引无 token、时间缺失/冲突或 revision 不一致时正确降级为处理。
+4. 时间和适用 revision 完整匹配时才判 `unchanged`；本地缓存不参与该判定。
 5. 远端索引有来源 token、快照缺失时判 `deleted`，但不自动归档目标页。
 6. `source-baseline` 对索引和准入页只读，绝不调用任何写命令；准入页缺失为空策略，损坏为硬失败。
 7. 未裁定默认纳入、叶子排除、容器子树排除、未来新增后代自动继承排除、悬断祖先链和环。
