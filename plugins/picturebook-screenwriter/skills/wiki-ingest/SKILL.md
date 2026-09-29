@@ -79,7 +79,7 @@ lark-cli wiki +node-get --node-token <source_root_token> --as user --format json
 - 编辑时间
 - 可用的修订号
 
-将结果写入 `nodes_snapshot.json`。文件夹节点只递归，不生成候选。
+将结果写入 `nodes_snapshot.json`。文件夹节点只递归，不下载容器正文，不生成候选，也不进入内容节点的 verdict；`DELTA` 只单独统计 `containers`。本仓没有容器正文下载路径，因此 WorkBuddy N2 纯容器优化不适用。
 
 ### 3. 做增量判定并读取内容
 

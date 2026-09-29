@@ -60,7 +60,7 @@ lark-cli auth status --json --verify
 .picturebook-screenwriter/tmp/<run_id>/nodes_snapshot.json
 ```
 
-节点 token 缺失、对象类型不可识别或元数据格式错误时标为 `unknown`，继续用只读方式复核；不得因解析失败直接删除状态。
+节点 token 缺失、对象类型不可识别或元数据格式错误时标为 `unknown`，继续用只读方式复核；不得因解析失败直接删除状态。文件夹节点只递归，不下载容器正文，也不进入内容节点 verdict。
 
 ## 增量判定
 

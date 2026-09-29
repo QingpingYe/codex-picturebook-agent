@@ -135,7 +135,12 @@ def _classify_node(token, node, baseline, force_full):
     }
 
 
-def _summarize(verdicts, first_run):
+def is_container(node):
+    """A source tree container is identified by an explicit has_child flag."""
+    return isinstance(node, dict) and node.get("has_child") is True
+
+
+def _summarize(verdicts, first_run, containers=0):
     counts = defaultdict(int)
     for value in verdicts.values():
         counts[value["verdict"]] += 1
@@ -151,12 +156,14 @@ def _summarize(verdicts, first_run):
         "deleted": counts["deleted"],
         "unknown": unknown,
         "first_run": first_run,
+        "containers": containers,
     }
 
 
 def build_summary_line(summary):
     line = ("DELTA: {total} nodes → skip {skip} / process {process} / new {new} "
             "/ deleted {deleted} / unknown {unknown}").format(**summary)
+    line += f" / containers {summary.get('containers', 0)}"
     if summary.get("first_run"):
         line += " / first_run"
     return line
@@ -195,11 +202,17 @@ def classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=N
 
     baseline = build_token_baseline(source_baseline)
     first_run = not baseline
+    all_nodes = snapshot["nodes"]
+    container_tokens = sorted(t for t, node in all_nodes.items() if is_container(node))
+    content_nodes = {
+        token: node for token, node in all_nodes.items()
+        if token not in set(container_tokens)
+    }
     verdicts = {}
-    tokens = snapshot["nodes"]
+    tokens = content_nodes
     if only is not None:
         only_set = set(only)
-        tokens = {t: snapshot["nodes"][t] for t in only_set & set(snapshot["nodes"].keys())}
+        tokens = {t: content_nodes[t] for t in only_set & set(content_nodes.keys())}
 
     for token, node in tokens.items():
         if first_run:
@@ -221,7 +234,7 @@ def classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=N
     result = {
         "first_run": first_run,
         "verdicts": verdicts,
-        "summary": _summarize(verdicts, first_run),
+        "summary": _summarize(verdicts, first_run, len(container_tokens)),
     }
     if warnings:
         result["warnings"] = warnings
@@ -260,7 +273,7 @@ def main(argv=None):
         return 0
     except Exception as error:
         print(f"ERROR: check_delta failed: {error}", file=sys.stderr)
-        print("DELTA: 0 nodes → skip 0 / process 0 / new 0 / deleted 0 / unknown 0")
+        print("DELTA: 0 nodes → skip 0 / process 0 / new 0 / deleted 0 / unknown 0 / containers 0")
         print("NEW_SOURCES: 0")
         print("FALLBACK: 全部节点按 unknown 处理（等同旧全量下载），不阻断同步",
               file=sys.stderr)

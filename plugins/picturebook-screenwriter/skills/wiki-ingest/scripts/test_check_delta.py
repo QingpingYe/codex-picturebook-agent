@@ -137,6 +137,47 @@ class TestBaseline(unittest.TestCase):
         self.assertFalse(built["tok"]["complete"])
 
 
+class TestContainers(unittest.TestCase):
+
+    def test_container_is_counted_not_processed(self):
+        result = cd.classify(
+            {"nodes": {
+                "container": {"has_child": True},
+                "content": snap_node("content"),
+            }},
+            baseline([entry("content")]),
+        )
+        self.assertNotIn("container", result["verdicts"])
+        self.assertEqual(result["summary"]["containers"], 1)
+
+    def test_missing_has_child_is_not_container(self):
+        result = cd.classify({"nodes": {"a": snap_node("a")}}, baseline([entry("a")]))
+        self.assertIn("a", result["verdicts"])
+        self.assertEqual(result["summary"]["containers"], 0)
+
+    def test_container_never_receives_new_or_changed_verdict(self):
+        result = cd.classify({"nodes": {"container": {"has_child": True}}}, baseline([]))
+        self.assertNotIn("container", result["verdicts"])
+        self.assertEqual(result["summary"]["new"], 0)
+        self.assertEqual(result["summary"]["changed"], 0)
+
+    def test_delta_line_displays_containers(self):
+        summary = {
+            "total": 0, "skip": 0, "process": 0, "new": 0,
+            "changed": 0, "deleted": 0, "unknown": 0,
+            "first_run": False, "containers": 2,
+        }
+        self.assertIn("containers 2", cd.build_summary_line(summary))
+
+    def test_check_delta_has_no_container_body_download_path(self):
+        root = Path(__file__).parents[1]
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        extraction = (root / "references/feishu-wiki-extraction.md").read_text(encoding="utf-8")
+        self.assertIn("文件夹节点只递归，不下载容器正文", skill)
+        self.assertIn("文件夹节点只递归，不下载容器正文", extraction)
+        self.assertNotIn("pure_containers", skill)
+
+
 class TestNewSourcesAudit(unittest.TestCase):
 
     @staticmethod
