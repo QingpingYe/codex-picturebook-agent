@@ -178,6 +178,26 @@ class TestContainers(unittest.TestCase):
         self.assertNotIn("pure_containers", skill)
 
 
+class TestForceFullHelp(unittest.TestCase):
+
+    def _help(self):
+        import contextlib
+        from io import StringIO
+
+        stdout = StringIO()
+        with contextlib.redirect_stdout(stdout):
+            with self.assertRaises(SystemExit) as raised:
+                cd.main(["--help"])
+        self.assertEqual(raised.exception.code, 0)
+        return stdout.getvalue()
+
+    def test_force_full_help_requires_explicit_dispatch(self):
+        self.assertIn("调度方显式传 --force-full", self._help())
+
+    def test_force_full_help_does_not_claim_settings_key(self):
+        self.assertNotIn("forceFullSync", self._help())
+
+
 class TestNewSourcesAudit(unittest.TestCase):
 
     @staticmethod

@@ -48,5 +48,23 @@ class KB_AI_IngestDocsTests(unittest.TestCase):
         templates = TEMPLATES.read_text(encoding="utf-8")
         self.assertIn("保留已有红线和词表", templates)
 
+    def test_force_full_docs_do_not_claim_settings_key(self):
+        combined = (
+            SKILL.read_text(encoding="utf-8")
+            + EXTRACTION.read_text(encoding="utf-8")
+            + TEMPLATES.read_text(encoding="utf-8")
+        )
+        self.assertNotIn("forceFullSync", combined)
+
+    def test_no_fixed_workbuddy_command_count_is_stated(self):
+        combined = (
+            SKILL.read_text(encoding="utf-8")
+            + EXTRACTION.read_text(encoding="utf-8")
+            + TEMPLATES.read_text(encoding="utf-8")
+        )
+        self.assertNotIn("13 条命令", combined)
+        self.assertNotIn("13条命令", combined)
+
+
 if __name__ == "__main__":
     unittest.main()
