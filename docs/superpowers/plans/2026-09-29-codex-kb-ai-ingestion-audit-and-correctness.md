@@ -341,3 +341,14 @@
   `git add docs/superpowers/plans/2026-09-29-codex-kb-ai-ingestion-audit-and-correctness.md`
 
   `git commit -m "test: verify ingest audit batch"`
+## Implementation Record
+
+- Status: 第三批可实现项完成；CLI 命令文档的 `source-baseline` 项仍依赖第二批 Task 2。
+- Commits: `4f8664a`, `fb032ae`, `12fd005`, `e8f2efe`, `5d94258`, `a1e7541`.
+- Verification: wiki-ingest 87 tests passed; Feishu store 199 tests passed; KB-AI ingest docs 13 tests passed.
+- N2 decision: containers are recursion-only and do not download body content; N2 pure-container optimization is not applicable.
+- N7 decision: redline terms remain a template convention; no automatic wordlist reconstruction exists.
+- corrections decision: automatic `corrections-promote` is not implemented; any future path must read the current remote authority page, append, and preserve existing redlines/terms.
+- A1 decision: `--force-full` is scheduler-explicit; no `forceFullSync` settings contract.
+- Static scan matches for retired or not-applicable terms are confined to regression tests and explicit documentation notes.
+- No remote writes were performed.
