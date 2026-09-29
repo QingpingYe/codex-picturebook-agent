@@ -55,7 +55,7 @@ Each writer should:
 2. Obtain read access to the source Feishu Wiki and write access to the target Feishu Wiki.
 3. Copy `plugins/picturebook-screenwriter/config/feishu-knowledge-base.example.json` to `.picturebook-screenwriter/feishu-knowledge-base.json`.
 
-The target Feishu Wiki is the authoritative shared knowledge source. Human edits are preserved. If the target Wiki is unavailable, the plugin can only use its last confirmed local cache after explicitly warning that the content is offline.
+The target Feishu Wiki is the authoritative shared knowledge source. Page content follows the candidate body: the sync compares candidate and current page text, ignoring presentation-only Markdown, and publishes the candidate whenever the text differs; a page that contains resources, comments, or unknown blocks is the exception — it is left unwritten and flagged `needs_review`. A confirmed overwrite of a human edit is disclosed in the sync report as `overwritten_human_edits`. If the target Wiki is unavailable, the plugin can only use its last confirmed local cache after explicitly warning that the content is offline.
 
 ## Verify locally
 
@@ -78,7 +78,7 @@ Before the first live sync, set the local config path and verify user authentica
 ```powershell
 $env:PICTUREBOOK_KB_CONFIG = "$PWD\.picturebook-screenwriter\feishu-knowledge-base.json"
 lark-cli auth login
-python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_knowledge.py preflight --config $env:PICTUREBOOK_KB_CONFIG
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py preflight --config $env:PICTUREBOOK_KB_CONFIG
 ```
 
 ## Feishu sync runner
@@ -89,9 +89,9 @@ The end-to-end runtime commands are:
 
 ```powershell
 $run_dir = "$PWD\.picturebook-screenwriter\runs\$(Get-Date -Format yyyyMMdd-HHmmss)"
-python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_runner.py prepare --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
-python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_runner.py publish --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
-python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py prepare --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py publish --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py verify --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
 ```
 
 `prepare` only writes the task-local run directory, `publish` holds the remote lock while updating the target Wiki, and `verify` is read-only.

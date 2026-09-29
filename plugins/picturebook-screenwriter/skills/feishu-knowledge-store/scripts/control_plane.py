@@ -15,6 +15,10 @@ class ControlPlaneCorrupt(ValueError):
     pass
 
 
+class IndexOutcomeUnknown(ControlPlaneCorrupt):
+    """The index write may have landed but its result could not be verified."""
+
+
 class LockHeld(RuntimeError):
     pass
 
@@ -119,12 +123,15 @@ class ControlPlane:
         for page in pages:
             try:
                 metadata = page["metadata"]
-                entry = _index_entry({
+                raw = {
                     "key": metadata["key"], "doc_token": page["doc_token"], "wiki_node_token": page["wiki_node_token"],
                     "source_revisions": metadata["source_revisions"],
                     "last_ai_revision_id": metadata["last_ai_revision_id"], "last_seen_revision_id": page["revision_id"],
                     "status": "published",
-                })
+                }
+                if "source_edit_times" in metadata:
+                    raw["source_edit_times"] = metadata["source_edit_times"]
+                entry = _index_entry(raw)
             except (KeyError, TypeError) as error:
                 raise ControlPlaneCorrupt("published page metadata is invalid") from error
             if entry.key in rebuilt:
@@ -141,18 +148,38 @@ class ControlPlane:
             "entries": [asdict(entry) for entry in sorted(merged.values(), key=lambda item: item.key)],
         }
         rendered = _render_control("# AI_KB_INDEX_V1", payload)
+        # Only a failure while reading the index proves that nothing was written;
+        # every failure after the write call is ambiguous and must be reported as
+        # an unknown outcome rather than a definite non-commit.
         revision, _ = self._fetch(self.control_tokens["index"])
-        result = self.cli.update_doc(self.control_tokens["index"], revision, rendered)
+        try:
+            result = self.cli.update_doc(self.control_tokens["index"], revision, rendered)
+        except RevisionConflict:
+            raise
+        except Exception as error:
+            raise IndexOutcomeUnknown("index update outcome is unknown") from error
         has_warnings = isinstance(result, Mapping) and result.get("warnings")
         is_partial = isinstance(result, Mapping) and result.get("data", {}).get("result") == "partial_success"
         if has_warnings or is_partial:
-            raise ControlPlaneCorrupt("index update returned warnings or partial success")
-        new_revision = self._revision_from_update_result(result)
-        verified_revision, verified_content = self._fetch(self.control_tokens["index"])
-        verified = _parse_control(verified_content, "# AI_KB_INDEX_V1")
+            raise IndexOutcomeUnknown("index update returned warnings or partial success")
+        try:
+            new_revision = self._revision_from_update_result(result)
+        except ControlPlaneCorrupt as error:
+            raise IndexOutcomeUnknown("index update returned an invalid revision") from error
+        try:
+            verified_revision, verified_content = self._fetch(self.control_tokens["index"])
+        except Exception as error:
+            raise IndexOutcomeUnknown("index readback is unavailable") from error
+        try:
+            verified = _parse_control(verified_content, "# AI_KB_INDEX_V1")
+        except Exception as error:
+            raise IndexOutcomeUnknown("index readback is malformed") from error
         if verified_revision != new_revision or verified != payload:
-            raise ControlPlaneCorrupt("index readback did not match the expected entries")
-        return self.read_index()
+            raise IndexOutcomeUnknown("index readback did not match the expected entries")
+        try:
+            return self.read_index()
+        except Exception as error:
+            raise IndexOutcomeUnknown("index readback is unavailable after update") from error
 
     def _read_lock(self) -> tuple[int, dict[str, Any]]:
         revision, content = self._fetch(self.control_tokens["lock"])
@@ -203,10 +230,6 @@ def render_empty_lock() -> str:
     })
 
 
-def render_empty_conflict_queue() -> str:
-    return "# AI_KB_CONFLICT_QUEUE_V1\n"
-
-
 def _parse_control(content: str, heading: str) -> dict[str, Any]:
     prefix = heading + "\n```json\n"
     suffix = "\n```\n"
@@ -224,7 +247,7 @@ def _parse_control(content: str, heading: str) -> dict[str, Any]:
 
 def _index_entry(raw: Any) -> IndexEntry:
     fields = {"key", "doc_token", "wiki_node_token", "source_revisions", "last_ai_revision_id", "last_seen_revision_id", "status"}
-    if not isinstance(raw, Mapping) or set(raw) != fields:
+    if not isinstance(raw, Mapping) or not fields <= set(raw) or not set(raw) <= fields | {"source_edit_times"}:
         raise ControlPlaneCorrupt("invalid index entry schema")
     for name in ("key", "doc_token", "wiki_node_token"):
         if not isinstance(raw[name], str) or not raw[name].strip():
@@ -234,6 +257,11 @@ def _index_entry(raw: Any) -> IndexEntry:
     revisions = raw["source_revisions"]
     if not isinstance(revisions, dict) or not revisions or any(not isinstance(k, str) or not k.strip() or not isinstance(v, str) or not v.strip() for k, v in revisions.items()):
         raise ControlPlaneCorrupt("invalid index entry source_revisions")
+    times = raw.get("source_edit_times")
+    if times is not None and (not isinstance(times, dict) or set(times) != set(revisions)
+                              or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                                     for value in times.values())):
+        raise ControlPlaneCorrupt("invalid index entry source_edit_times")
     for name in ("last_ai_revision_id", "last_seen_revision_id"):
         if isinstance(raw[name], bool) or not isinstance(raw[name], int) or raw[name] < 0:
             raise ControlPlaneCorrupt(f"invalid index entry {name}")

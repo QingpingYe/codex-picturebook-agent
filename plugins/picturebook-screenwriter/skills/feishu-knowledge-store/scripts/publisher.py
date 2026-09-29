@@ -1,21 +1,26 @@
 """Docx wiki publishing with revision preconditions and human-content safety."""
 
-import re
 from dataclasses import dataclass, replace
-from typing import Any, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from control_plane import (
-    render_empty_conflict_queue,
     render_empty_index,
     render_empty_lock,
 )
 from lark_cli import RevisionConflict
 from models import IndexEntry
 from page_codec import parse_remote_page, render_remote_page
+from remote_markdown import mark_insensitive
 
 
 class NeedsReview(RuntimeError):
-    pass
+    """Review required; ``page_written`` marks an already confirmed page write."""
+
+    def __init__(self, message: str, page_written: bool = False,
+                 after_revision: int | None = None) -> None:
+        super().__init__(message)
+        self.page_written = page_written
+        self.after_revision = after_revision
 
 
 CONTROL_TREE = (
@@ -24,7 +29,6 @@ CONTROL_TREE = (
     ("99_系统控制台", (
         "AI_KB_INDEX_V1",
         "AI_KB_LOCK_V1",
-        "AI_KB_CONFLICT_QUEUE_V1",
     )),
 )
 
@@ -61,7 +65,6 @@ class Publisher:
                 canonical = {
                     "AI_KB_INDEX_V1": "index",
                     "AI_KB_LOCK_V1": "lock",
-                    "AI_KB_CONFLICT_QUEUE_V1": "conflict",
                 }
                 if child in canonical:
                     tokens[canonical[child]] = child_token
@@ -88,7 +91,6 @@ class Publisher:
             ("99_系统控制台", (
                 "AI_KB_INDEX_V1",
                 "AI_KB_LOCK_V1",
-                "AI_KB_CONFLICT_QUEUE_V1",
             )),
         ):
             for child in children:
@@ -98,7 +100,6 @@ class Publisher:
                 tokens[child] = token
         tokens["index"] = tokens["AI_KB_INDEX_V1"]
         tokens["lock"] = tokens["AI_KB_LOCK_V1"]
-        tokens["conflict"] = tokens["AI_KB_CONFLICT_QUEUE_V1"]
         tokens["content"] = tokens["01_知识内容"]
         return tokens
 
@@ -110,7 +111,6 @@ class Publisher:
             seed_content = {
                 "AI_KB_INDEX_V1": render_empty_index(),
                 "AI_KB_LOCK_V1": render_empty_lock(),
-                "AI_KB_CONFLICT_QUEUE_V1": render_empty_conflict_queue(),
             }
             response = self.cli.create_space_doc(
                 self.space_id, title, seed_content.get(title, ""),
@@ -161,29 +161,33 @@ class Publisher:
 
     def publish_new(self, entry: IndexEntry, body: str, parent: str) -> IndexEntry:
         title = entry.key
-        existing_nodes = [
-            node
-            for node in self.cli.list_nodes(self.space_id, parent_node_token=parent)
-            if node.get("title") == title
-        ]
-        if existing_nodes:
+        # The logical key must be unique across the whole target tree, not only
+        # among the direct children of the content container.
+        if any(node.get("title") == title for node in self._iter_tree([parent])):
             raise NeedsReview(f"logical key page already exists: {title}")
         page = render_remote_page(body, self._metadata(entry, revision=0))
-        result = self.cli.create_doc(parent, title, page)
+        try:
+            result = self.cli.create_doc(parent, title, page)
+        except Exception as error:
+            return self._recover_uncertain_create(parent, title, entry, body, error)
+        if (not isinstance(result, Mapping) or result.get("code", 0) != 0
+                or result.get("warnings") or result.get("data", {}).get("result") == "partial_success"):
+            return self._recover_uncertain_create(parent, title, entry, body, None)
         document = result.get("data", {}).get("document", {})
-        revision = int(document.get("revision_id", 0))
-        if revision <= 0:
-            raise NeedsReview("created document did not return a positive revision")
+        revision = document.get("revision_id")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision <= 0:
+            return self._recover_uncertain_create(parent, title, entry, body, None)
         doc_token = document.get("document_id", document.get("doc_token", document.get("token")))
         if not doc_token:
-            raise NeedsReview("created document did not return a usable doc token")
+            return self._recover_uncertain_create(parent, title, entry, body, None)
         node_token = self._node_token(parent, title)
-        current = self.cli.fetch_doc(doc_token).get("data", {}).get("document", {})
+        current = self.fetch_current(doc_token)
         parsed = parse_remote_page(current["content"])
-        if parsed.metadata["key"] != entry.key:
-            raise NeedsReview("created page metadata key mismatch")
+        if (mark_insensitive(parsed.body) != mark_insensitive(parse_remote_page(page).body)
+                or parsed.metadata != self._metadata(entry, revision=0)):
+            raise NeedsReview("created page did not match body and metadata")
         fixed = self._write_page_with_metadata_fix(
-            doc_token, int(current["revision_id"]), parsed.body, entry,
+            doc_token, current["revision_id"], parsed.body, entry,
         )
         return replace(fixed, doc_token=doc_token, wiki_node_token=node_token)
 
@@ -193,6 +197,7 @@ class Publisher:
         current: Mapping[str, Any],
         merged_markdown: str,
         source_revisions: Mapping[str, str],
+        source_edit_times: Mapping[str, int] | None = None,
     ) -> IndexEntry:
         content = current.get("content", "")
         if not content:
@@ -202,39 +207,13 @@ class Publisher:
             raise NeedsReview("document contains resources or comments and must be reviewed")
 
         merged = parse_remote_page(merged_markdown)
-        revision = int(current["revision_id"])
-        final_revision = None
-        for _attempt in range(self.MAX_METADATA_ATTEMPTS):
-            predicted_revision = revision + self.revision_advance
-            updated_metadata = dict(merged.metadata)
-            updated_metadata["source_revisions"] = dict(source_revisions)
-            updated_metadata["last_ai_revision_id"] = predicted_revision
-            normalized_page = render_remote_page(merged.body, updated_metadata)
-            result = self.cli.update_doc(entry.doc_token, revision, normalized_page)
-            if result.get("warnings") or result.get("data", {}).get("result") == "partial_success":
-                raise NeedsReview("partial or warned update")
-            actual_revision = int(result["data"]["document"]["revision_id"])
-            if actual_revision == predicted_revision:
-                final_revision = actual_revision
-                break
-            self.revision_advance = actual_revision - revision
-        if final_revision is None:
-            raise NeedsReview("revision did not converge to metadata value after retries")
-        verified = self.fetch_current(entry.doc_token)
-        verified_page = parse_remote_page(verified["content"])
-        if verified_page.body != merged.body:
-            raise NeedsReview("updated page body did not match merged content")
-        if verified_page.metadata["last_ai_revision_id"] != final_revision:
-            raise NeedsReview("updated page metadata revision did not match write result")
-        if verified_page.metadata["source_revisions"] != dict(source_revisions):
-            raise NeedsReview("updated page source revisions did not match merge decision")
-        return replace(
-            entry,
-            source_revisions=dict(source_revisions),
-            last_ai_revision_id=final_revision,
-            last_seen_revision_id=final_revision,
-            status="published",
-        )
+        times = source_edit_times if source_edit_times is not None else merged.metadata.get("source_edit_times")
+        if (times is None and source_edit_times is None and merged.metadata.get("source_edit_times") is None
+                and dict(source_revisions) == entry.source_revisions):
+            times = entry.source_edit_times
+        updated_entry = replace(entry, source_revisions=dict(source_revisions),
+                                source_edit_times=None if times is None else dict(times))
+        return self._write_page_with_metadata_fix(entry.doc_token, int(current["revision_id"]), merged.body, updated_entry)
 
     def _write_page_with_metadata_fix(
         self,
@@ -243,55 +222,134 @@ class Publisher:
         body: str,
         entry: IndexEntry,
     ) -> IndexEntry:
-        final_revision = None
+        revision = current_revision
+        confirmed_revision: int | None = None
+
+        def review(message: str, observed: int | None = None) -> NeedsReview:
+            # A correction attempt that follows a verified write must not erase the
+            # fact that the candidate body is already on the page.
+            seen = confirmed_revision if observed is None else observed
+            return NeedsReview(message, page_written=seen is not None, after_revision=seen)
+
         for _attempt in range(self.MAX_METADATA_ATTEMPTS):
-            predicted_revision = current_revision + self.revision_advance
+            predicted_revision = revision + self.revision_advance
             updated_metadata = self._metadata(entry, predicted_revision)
             normalized = render_remote_page(body, updated_metadata)
-            result = self.cli.update_doc(doc_token, current_revision, normalized)
-            if result.get("warnings") or result.get("data", {}).get("result") == "partial_success":
-                raise NeedsReview("partial or warned update")
-            actual_revision = int(result["data"]["document"]["revision_id"])
+            try:
+                result = self.cli.update_doc(doc_token, revision, normalized)
+            except RevisionConflict as error:
+                observed = self._observe_page_write(doc_token, body, confirmed_revision)
+                raise review("revision changed during update", observed) from error
+            except Exception as error:
+                observed = self._observe_page_write(doc_token, body, confirmed_revision)
+                raise review("update outcome is uncertain", observed) from error
+            if (not isinstance(result, Mapping) or result.get("code", 0) != 0
+                    or result.get("warnings") or result.get("data", {}).get("result") == "partial_success"):
+                observed = self._observe_page_write(doc_token, body, confirmed_revision)
+                raise review("partial or warned update", observed)
+            actual_revision = result.get("data", {}).get("document", {}).get("revision_id")
+            if isinstance(actual_revision, bool) or not isinstance(actual_revision, int) or actual_revision <= revision:
+                observed = self._observe_page_write(doc_token, body, confirmed_revision)
+                raise review("update returned an invalid revision", observed)
+            verified = self.fetch_current(doc_token)
+            verified_page = parse_remote_page(verified["content"])
+            if mark_insensitive(verified_page.body) != mark_insensitive(body) or verified_page.metadata != updated_metadata:
+                raise review("updated page readback did not match body and metadata")
+            if verified["revision_id"] < max(predicted_revision, actual_revision):
+                raise review("readback revision precedes the verified update")
             if actual_revision == predicted_revision:
-                final_revision = actual_revision
-                break
-            self.revision_advance = actual_revision - current_revision
-        if final_revision is None:
-            raise NeedsReview("revision did not converge after initial metadata fix")
-        return replace(
-            entry,
-            last_ai_revision_id=final_revision,
-            last_seen_revision_id=final_revision,
-            status="published",
-        )
+                return replace(entry, last_ai_revision_id=predicted_revision,
+                               last_seen_revision_id=verified["revision_id"], status="published")
+            if verified["revision_id"] != actual_revision:
+                return replace(entry, last_ai_revision_id=predicted_revision,
+                               last_seen_revision_id=verified["revision_id"], status="published")
+            # The candidate body and metadata are confirmed on the page; only the
+            # AI revision prediction was off, so retry the metadata correction.
+            confirmed_revision = verified["revision_id"]
+            self.revision_advance = actual_revision - revision
+            revision = verified["revision_id"]
+        raise review("revision did not converge after metadata correction")
 
-    def append_conflict(self, parent: str, record: Mapping[str, Any]) -> None:
-        current_document = self.cli.fetch_doc(parent).get("data", {}).get("document", {})
-        current = {
-            "revision_id": current_document.get("revision_id"),
-            "content": current_document.get("content", "# AI_KB_CONFLICT_QUEUE_V1\n"),
-        }
-        before = self._conflict_records(current["content"])
-        content = current.get("content", "# AI_KB_CONFLICT_QUEUE_V1\n")
-        if not content.rstrip().endswith(f"[{record['key']}] {record['reason']}"):
-            content = content.rstrip() + f"\n[{record['key']}] {record['reason']}\n"
-        result = self.cli.update_doc(parent, int(current["revision_id"]), content)
-        if (
-            not isinstance(result, Mapping)
-            or result.get("warnings")
-            or result.get("data", {}).get("result") == "partial_success"
-        ):
-            raise NeedsReview("partial, warned, or invalid conflict queue update")
-        update_revision = result.get("data", {}).get("document", {}).get("revision_id")
-        if isinstance(update_revision, bool) or not isinstance(update_revision, int) or update_revision < 0:
-            raise NeedsReview("conflict queue update did not return a valid revision")
-        verified_document = self.cli.fetch_doc(parent).get("data", {}).get("document", {})
-        verified_revision = verified_document.get("revision_id")
-        if verified_revision != update_revision:
-            raise NeedsReview("conflict queue readback revision did not match update result")
-        after = self._conflict_records(verified_document.get("content", ""))
-        if after[:len(before)] != before or not after or after[-1] != (record["key"], record["reason"]):
-            raise NeedsReview("conflict queue readback did not preserve records")
+    def _observe_page_write(self, doc_token: str, body: str,
+                            confirmed: int | None) -> int | None:
+        """Best-effort readback used to classify an ambiguous update.
+
+        Returns the observed revision when the candidate body is already on the
+        page, or the previously confirmed revision. A read failure yields None
+        instead of replacing the review that is already being raised.
+        """
+        if confirmed is not None:
+            return confirmed
+        try:
+            current = self.fetch_current(doc_token)
+            parsed = parse_remote_page(current["content"])
+        except Exception:
+            return None
+        if mark_insensitive(parsed.body) == mark_insensitive(body):
+            return current["revision_id"]
+        return None
+
+    def _recover_uncertain_create(self, parent: str, title: str, entry: IndexEntry,
+                                  body: str, cause: Exception | None) -> IndexEntry:
+        """Read back a create whose outcome is unknown before giving up on it."""
+        node = self._existing_node(parent, title)
+        if node is None:
+            if cause is not None:
+                raise NeedsReview("create outcome is uncertain") from cause
+            raise NeedsReview("create outcome is uncertain")
+        doc_token = next((node[key] for key in ("obj_token", "node_token", "token")
+                          if node.get(key)), None)
+        if doc_token is None:
+            raise NeedsReview("created page has no usable token", page_written=True)
+        try:
+            current = self.fetch_current(doc_token)
+        except Exception as read_error:
+            raise NeedsReview("created page could not be read back",
+                              page_written=True) from read_error
+        parsed = parse_remote_page(current["content"])
+        if (parsed.metadata.get("key") != entry.key
+                or mark_insensitive(parsed.body) != mark_insensitive(body)):
+            raise NeedsReview("created page did not match body and metadata",
+                              page_written=True)
+        fixed = self._write_page_with_metadata_fix(
+            doc_token, current["revision_id"], parsed.body, entry,
+        )
+        return replace(fixed, doc_token=doc_token,
+                       wiki_node_token=node.get("node_token") or doc_token)
+
+    def _existing_node(self, parent: str, title: str) -> Mapping[str, Any] | None:
+        matches = [
+            node
+            for node in self.cli.list_nodes(self.space_id, parent_node_token=parent)
+            if node.get("title") == title
+        ]
+        if len(matches) > 1:
+            raise NeedsReview(f"duplicate system page: {title}")
+        return matches[0] if matches else None
+
+    def _iter_tree(self, extra_roots: Iterable[str] = ()) -> Iterator[Mapping[str, Any]]:
+        """Yield every node under the target root, breadth first.
+
+        ``extra_roots`` additionally walk subtrees that may not be reachable from
+        the configured root, such as the content container passed to a publisher
+        whose root mode points somewhere else.
+        """
+        root_parent = None if self.root_mode == "space" else self.target_root
+        pending = list(self.cli.list_nodes(self.space_id, parent_node_token=root_parent))
+        seen: set[str] = set()
+        for extra in extra_roots:
+            if extra and extra not in seen:
+                seen.add(extra)
+                pending.extend(self.cli.list_nodes(self.space_id, parent_node_token=extra))
+        while pending:
+            node = pending.pop(0)
+            yield node
+            token = next((node[key] for key in ("node_token", "obj_token", "token")
+                          if node.get(key)), None)
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            pending.extend(self.cli.list_nodes(self.space_id, parent_node_token=token))
 
     def _find_or_create(self, parent: str, title: str) -> tuple[str, bool]:
         existing = self._existing_token(parent, title)
@@ -300,7 +358,6 @@ class Publisher:
         seed_content = {
             "AI_KB_INDEX_V1": render_empty_index(),
             "AI_KB_LOCK_V1": render_empty_lock(),
-            "AI_KB_CONFLICT_QUEUE_V1": render_empty_conflict_queue(),
         }
         response = self.cli.create_doc(parent, title, seed_content.get(title, ""))
         document = response.get("data", {}).get("document", {})
@@ -340,7 +397,7 @@ class Publisher:
 
     @staticmethod
     def _metadata(entry: IndexEntry, revision: int | None = None) -> dict[str, Any]:
-        return {
+        metadata = {
             "schema_version": 1,
             "key": entry.key,
             "page_type": entry.key.split("/")[-1],
@@ -348,6 +405,9 @@ class Publisher:
             "source_revisions": dict(entry.source_revisions),
             "last_ai_revision_id": revision if revision is not None else entry.last_ai_revision_id,
         }
+        if entry.source_edit_times is not None:
+            metadata["source_edit_times"] = dict(entry.source_edit_times)
+        return metadata
 
     def _node_token(self, parent: str, title: str) -> str:
         matches = [
@@ -361,12 +421,3 @@ class Publisher:
             if matches[0].get(key):
                 return matches[0][key]
         raise NeedsReview(f"created page has no usable node token: {title}")
-
-    @staticmethod
-    def _conflict_records(content: str) -> list[tuple[str, str]]:
-        records: list[tuple[str, str]] = []
-        for line in content.splitlines():
-            match = re.fullmatch(r"\[([^\]]+)\] (.+)", line.strip())
-            if match:
-                records.append((match.group(1), match.group(2)))
-        return records

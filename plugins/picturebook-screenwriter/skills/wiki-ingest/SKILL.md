@@ -189,7 +189,7 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/generate_entr
 
 - 禁止写入原始知识库或目标 Wiki。
 - 禁止把本地候选、缓存、状态或清单当作共享权威。
-- 禁止向远程索引、锁、冲突队列或任何 Feishu 文档写入数据。
+- 禁止向远程索引、锁或任何 Feishu 文档写入数据。
 - 禁止省略来源节点和修订向量。
 - 禁止用标题规范化替代逻辑键。
 - 禁止在任务结束后把运行目录留在 `.picturebook-screenwriter/tmp/` 下。

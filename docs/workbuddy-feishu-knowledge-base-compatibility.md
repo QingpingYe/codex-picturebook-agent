@@ -1,6 +1,6 @@
 # WorkBuddy 飞书知识库兼容协议
 
-**协议版本：** 1.3.0（2026-09-20 变更：`creation-standards` 升级为双作用域页型，允许系列通用与项目专用并存；项目专用优先）
+**协议版本：** 1.4.0（2026-09-29 变更：KB-AI 页面内容以同步方候选正文为准，比较时忽略纯排版标记；退役人工优先三方合并、冲突队列读写与 `queued` 报告口径。源节点准入与本地 state 退役仍待后续批次）
 **适用对象：** WorkBuddy 专家团及后续所有直接读写「绘本创作知识库（AI）」的自动化系统  
 **兼容基准：** `picturebook-screenwriter` 插件的 `wiki-ingest`、`feishu-knowledge-store`、`knowledge-loader` 实现  
 **生效原则：** 本文档描述的是远端契约。任何实现只要遵守这些格式、状态和并发规则，就可以与 Codex 插件互通；具体使用 lark-cli 还是其他 Feishu API 客户端不是兼容性的必要条件。
@@ -20,7 +20,7 @@
 2. AI 知识库是唯一共享权威。WorkBuddy 和 Codex 插件都不得把本地缓存、任务临时目录、manifest 或工作区文件当作共享版本基线。
 3. 共享同步状态文件是 `99_系统控制台/AI_KB_INDEX_V1`。目标页发布状态和 revision 基线必须从该远端文档读取，并在成功写入后回写到该文档。当前运行的源节点快照、增量状态、manifest 和运行报告只能服务本轮，不得用于恢复、覆盖或替代远端索引。
 4. WorkBuddy 生成或修改结构化知识时，必须先在原始资料库产生可追踪的源材料，再按来源版本向量同步到 AI 知识库。不得绕过来源版本记录直接“凭记忆”写入权威页。
-5. 人工编辑优先于 AI 内容。人工新增内容必须保留，人工删除内容不得被恢复。
+5. KB-AI 页面的内容以同步方候选正文为准：比较候选与当前页正文时只忽略纯排版标记，改词、增删文字和改标点都算内容变化并必须发布；不因来源修订号未变而跳过比较。人工直接编辑不再具有粘性，被覆盖时必须在同步报告中披露对应逻辑键。
 6. 推荐复用本插件的 `wiki-ingest` 与 `feishu-knowledge-store`。如果 WorkBuddy 自行实现，必须完整实现本文的机器契约。
 
 ## 2. 目标树与逻辑身份
@@ -38,7 +38,7 @@ AI 知识库的固定目录结构：
 99_系统控制台
   ├─ 同步索引
   ├─ 同步锁
-  └─ 冲突待处理
+  └─ 冲突待处理（历史遗留节点，不再读写，见第 9 节）
 ```
 
 `01_知识内容` 下的 `{series_id}/{project_id}/{page_type}` 表示逻辑归属层级，不是要在 Feishu 中创建的两级物理容器。知识页物理平铺在 `01_知识内容` 的直系子节点中，页面显示标题使用完整逻辑键。
@@ -159,19 +159,20 @@ AI 知识库的固定目录结构：
 1. 原始资料修订号统一用字符串。
 2. 目标 docx revision 统一用非负整数。
 3. 人工编辑目标页后，只应观察到 `last_seen_revision_id` 前进，不得伪造 `last_ai_revision_id` 前进。
-4. WorkBuddy 或插件成功条件更新目标页后，`last_ai_revision_id` 与 `last_seen_revision_id` 应同时更新为返回的新 revision。
-5. `revision-id` 只是随请求透传的审计参数，飞书服务端不会用它做乐观并发控制。协议中的互斥不依赖服务端 CAS，而依赖远端锁加写后回读校验。
-6. 如果更新返回 `warnings`、`partial_success`、非成功 result，或无法取到新 revision，不得更新为 published 状态，也不得记录成功 revision。
+4. WorkBuddy 或插件成功条件更新目标页后，`last_ai_revision_id` 与 `last_seen_revision_id` 都应取写后回读确认真实的 revision；回读 revision 与更新响应 revision 不一致时以回读为准。
+5. `last_seen_revision_id` 允许大于 `last_ai_revision_id`（此后出现过外部写入或只刷新了观察值），但不得小于 `last_ai_revision_id`。
+6. `revision-id` 只是随请求透传的审计参数，飞书服务端不会用它做乐观并发控制。协议中的互斥不依赖服务端 CAS，而依赖远端锁加写后回读校验。
+7. 如果更新返回 `warnings`、`partial_success`、非成功 result，或无法取到新 revision，不得更新为 published 状态，也不得记录成功 revision。
 
 ### 4.2 状态枚举
 
 | status | 语义 | 允许的设置条件 |
 | --- | --- | --- |
 | `published` | 页面和索引状态一致，可正常消费 | 条件写入成功、响应完整无警告、索引已成功更新 |
-| `needs_review` | 页面可读，但存在未处理冲突或不确定状态 | 人工与来源语义冲突、页面含资源/评论/未知块、更新 partial、响应有 warnings、revision 冲突重试后仍失败、索引与页面无法对齐 |
+| `needs_review` | 页面可读，但本轮未能安全发布，需要检查或下一轮重试 | 页面含资源/评论/未知块、更新 partial、响应有 warnings、revision 竞态重试耗尽、索引与页面无法对齐、索引状态无法安全提交 |
 | `archived` | 逻辑键已废弃，但保留审计记录 | 用户明确确认废弃；不得因临时失败或找不到源自动设置 |
 
-状态必须写入同步索引，而不是只写在页面正文或本地文件中。`needs_review` 页面仍可被读取，但调用方必须提示“存在未处理冲突”，不得当作已完全验证的定稿知识。
+状态必须写入同步索引，而不是只写在页面正文或本地文件中。`needs_review` 页面仍可被读取，但调用方必须提示“同步未完成，待下一轮复核”，不得当作已完全验证的定稿知识。该状态与冲突队列无关，下一轮可以自然重试，安全发布或保留后恢复为 `published`。
 
 ### 4.3 读路径一致性判定
 
@@ -204,7 +205,7 @@ AI 知识库的固定目录结构：
 2. 顶层 JSON 对象字段必须且只能是 `schema_version` 和 `entries`。
 3. `schema_version` 必须为整数 `1`。
 4. `entries` 必须是数组，且逻辑键不得重复。
-5. 每条索引记录字段必须且只能是：
+5. 每条索引记录必须包含：
    - `key`
    - `doc_token`
    - `wiki_node_token`
@@ -212,6 +213,7 @@ AI 知识库的固定目录结构：
    - `last_ai_revision_id`
    - `last_seen_revision_id`
    - `status`
+   可选字段只有 `source_edit_times`（来源 token 到最近一次已摄取快照时间的映射），解析方必须接受缺失或 `null`；写入方不得新增其他字段。
 6. `doc_token` 与 `wiki_node_token` 必须是非空字符串，并指向同一个可读取的目标页。
 7. `source_revisions` 与状态字段遵循第 4 节规则。
 8. 索引更新必须使用读取时的当前 revision 作为条件更新前提。
@@ -274,77 +276,65 @@ WorkBuddy 每次写入 AI 知识库必须按以下顺序执行：
    - 校验元数据 schema、逻辑键、来源 token 和 revision。
    - 页面含资源、评论或未知块时标记 `needs_review`，不得自动覆盖。
 
-5. **生成候选与合并决策**
-   - 从原始资料库读取增量，保留来源 token 和来源修订号。
-   - 与索引中的 `last_ai_revision_id` 历史版、目标当前版、新候选版做三方合并。
-   - 人工优先规则见第 8 节。
+5. **生成候选**
+   - 从原始资料库读取增量，保留来源 token、来源修订号和可选的来源时间。
+   - 不再读取历史版做三方合并；候选正文本身就是要发布的内容，规则见第 8 节。
 
-6. **条件更新知识页**
-   - 使用 `docs +update` 且带当前 `revision_id`。
+6. **比较并条件更新知识页**
+   - 先比较候选正文与当前页正文：忽略纯排版标记后相同则保留该页、不写页；不同才使用 `docs +update` 且带当前 `revision_id`。
    - 更新成功后完整检查 `warnings`、`result`、`partial_success` 和返回的新 `revision_id`。
-   - 写入后必须回读目标页，确认正文与系统元数据符合预期，且 `last_ai_revision_id` 与实际返回的 revision 一致。
-   - 只有全部正常才进入索引更新。
+   - 写入后必须回读目标页，确认正文与系统元数据符合预期；`last_ai_revision_id` 与 `last_seen_revision_id` 取回读确认的真实 revision，而不是响应里的 revision。
+   - 只有全部正常才进入索引更新。revision 竞态时重读当前页并重新判定，限次重试；耗尽则本轮记为失败与 `needs_review`，不得写入冲突队列。
 
 7. **更新同步索引**
    - 用新的目标 revision 和来源版本向量更新对应条目。
    - 索引更新时先读取当前 revision，写入后回读并比对 `entries`。
-   - 回读结果与预期不一致时停止写入，并把相关条目标为 `needs_review`。
-   - 索引更新失败时不得报告完全成功，应把相关条目标为 `needs_review` 并报告实际状态。
+   - 回读结果与预期不一致时停止写入，并把相关条目标为 `needs_review`（表示本轮未安全发布，不含队列语义）。
+   - 索引更新失败时不得报告完全成功：页面已写而索引未提交必须可见，并把相关条目标为 `needs_review`。
+   - 同一来源 token 集合且候选时间不回退时，保留页面可以只刷新索引的 `source_edit_times`，目标页零写入。
 
 8. **更新导航与日志**
    - 在持锁期间更新 `02_导航与日志/知识导航索引`。
    - `同步日志` 仅追加，不重写历史。
-   - 记录操作者、时间、逻辑键、发布/保留/入队/失败数量、目标页更新前后 revision。
+   - 记录操作者、时间、逻辑键、发布/保留/失败/重试数量、目标页更新前后 revision 与覆盖披露。
 
 9. **释放锁**
    - 无论成功、失败或异常，都要在 finally 语义中释放自己的租约。
 
 10. **输出报告**
-    - 报告必须包含发布、保留、入队、失败、重试数量。
+    - 报告必须包含发布、保留、失败、重试数量；不得再出现“入队”。
     - 列出涉及的逻辑键和页面标题。
-    - 列出冲突队列新增记录。
-    - 列出每个页面更新前后的目标 revision。
+    - 列出本轮实际覆盖的人工编辑逻辑键（`overwritten_human_edits`，升序去重）；只有目标页确实被写并回读确认、且写前 revision 已前进时才列入。
+    - 列出每个页面更新前后的目标 revision，以及 `page_overwritten` / `index_committed`。
 
-## 8. 人工优先合并规则
+## 8. 内容权威、发布与覆盖披露
 
 | 情况 | 必须行为 |
 | --- | --- |
-| 原始资料无变化 | 保留当前目标页，不改写 |
-| 仅原始资料变化 | 发布候选版，保留人工未冲突内容 |
-| 仅人工编辑 | 保留当前目标页，并把人工版作为下一轮基线 |
-| 两者变化且无语义冲突 | 合并：保留人工变化，纳入来源新增内容 |
-| 两者变化且语义冲突 | 人工内容胜出；不覆盖页面，登记冲突 |
-| 条件更新遇到 revision 冲突 | 重读最新目标页并重新合并；仍不安全则入队 |
+| 忽略纯排版标记后候选正文与当前页相同 | 保留当前目标页；可只刷新索引的观察 revision 与同集合来源时间，目标页零写入 |
+| 候选正文与当前页不同，页面可安全往返 | 按当前 revision 条件更新为候选正文；写后回读确认再更新索引 |
+| 页含资源、评论或未知块 | 不写入，标记 `needs_review` 并报告 |
+| 更新 partial、有 warnings、结果不完整或无法回读 | 不写入成功状态，标记 `needs_review` 并报告 |
+| 条件更新遇到 revision 竞态 | 重读最新目标页并重新判定，限次重试；耗尽则本轮失败并标记 `needs_review`，下一轮可自然重试 |
 
-合并结果必须满足：
+约束：
 
-1. 人工新增行不得丢失。
-2. 人工删除行不得恢复。
-3. 来源新增内容不得遗漏，除非它与人工内容冲突并已入队。
-4. 合并后的页面必须仍符合第 3 节格式。
+1. 不读取历史版做人工优先三方合并；人工新增与人工删除都不再具有粘性。
+2. 比较只忽略排版语法与已知往返改写：成对强调标记、标题与引用前缀、首尾空行和行尾排版空格、自动链接包裹写法、表格空尾格。代码围栏与行内代码、URL 与链接目标、作为字面量出现的 `*`/`_`/`#`、文字与标点变化都必须算作内容变化。
+3. 只有当目标页确实被写入并回读确认时，才把该逻辑键列入 `overwritten_human_edits`；保留、`needs_review` 和 dry-run 不入列。
+4. 候选与当前页使用同一比较规则；该规则只用于比较，不用于写入，页面正文仍按候选原文发布。
+5. 发布后的页面必须仍符合第 3 节格式。
 
-## 9. 冲突队列
+## 9. 冲突队列（已退役）
 
-`99_系统控制台/冲突待处理` 是仅追加文档。当前兼容格式为每条记录一行：
-
-```text
-[{logical_key}] {reason}
-```
+`99_系统控制台/冲突待处理`（`AI_KB_CONFLICT_QUEUE_V1`）是已退役的历史节点。
 
 规则：
 
-1. 必须在持有同步锁时追加。
-2. 追加前读取当前 revision，并用该 revision 条件更新。
-3. 追加后必须回读，确认新增记录存在且原有记录未丢失。
-4. 不得删除、改写或重排已有记录。
-5. 不得把同一末尾记录重复追加。
-6. 冲突详情、处理建议和审计信息写入同步日志或来源材料，不得改坏冲突队列的简单行格式。
-
-解析规则：
-
-1. 文档标题、空行和不以 `[` 开头的说明性框架行允许存在；解析方必须忽略这些非记录行。
-2. 以 `[` 开头的行是记录行，必须符合 `[逻辑键] 原因`；解析失败时停止写入并报告。
-3. 空队列可以只包含标题（可带空行），但带有说明性占位行也属于当前兼容格式。
+1. 同步流程不得读取、解析、追加、改写或删除该文档，也不得因它缺失而创建。
+2. 该文档已不参与发布判定：`needs_review` 与它无关，写入失败只体现在索引状态与同步报告中。
+3. 人工如需处理历史记录，只能由人直接编辑该文档；同步流程不参与。
+4. 本协议不再定义该文档的记录格式。历史记录格式（`[{logical_key}] {reason}`，仅追加、逐行）仅作参考。
 
 ## 10. Feishu 命令约束
 
@@ -380,7 +370,7 @@ docs +create --as user --parent-token {wiki_node_token} --title {title} --doc-fo
 6. 禁止用显示标题、URL、文件路径或本地路径替代逻辑键。
 7. 禁止在状态未真实成功时写入 `published`。
 8. 禁止静默吞掉冲突、partial success、warnings、权限错误或索引损坏。
-9. 禁止恢复人工删除的内容。
+9. 禁止静默覆盖人工编辑：只有目标页确实写入并回读确认才覆盖，且必须按第 8 节列入 `overwritten_human_edits`。
 10. 禁止在索引中新增任意字段或用自然语言替代 JSON。
 11. 禁止用 WorkBuddy 私有状态文件替代远端同步索引。
 12. 禁止用当前运行的 `nodes_snapshot.json`、`delta_state.json`、`_manifest.json`、`sync_report.json` 或知识检索缓存恢复、替代或重建远端同步索引。
@@ -400,10 +390,11 @@ docs +create --as user --parent-token {wiki_node_token} --title {title} --doc-fo
 - [ ] 首次发布页面的页尾 `last_ai_revision_id` 经修正闭环后等于最终写入的真实 revision，不得写 `0`。
 - [ ] 同步索引是唯一状态来源，且字段集合完全一致。
 - [ ] 成功写入同时更新页面元数据与索引状态。
-- [ ] 索引与冲突队列写入后回读比对，结果不一致时停止并进入 `needs_review`。
-- [ ] 冲突、partial、warning、索引失败时设置 `needs_review` 并报告。
-- [ ] 冲突队列只追加兼容行。
-- [ ] 人工新增保留、人工删除不恢复。
+- [ ] 索引写入后回读比对，结果不一致时停止并进入 `needs_review`。
+- [ ] 比较候选与当前页正文时忽略纯排版标记；正文变化即发布，partial、warning、索引失败时设置 `needs_review` 并报告。
+- [ ] 不读取、不追加、不创建 `AI_KB_CONFLICT_QUEUE_V1`；`needs_review` 只表示本轮未安全发布，下一轮可重试。
+- [ ] 覆盖人工编辑过的页面时，报告列出 `overwritten_human_edits`。
+- [ ] 页面写入使用当前 revision，并在写后回读确认真实 revision 后再更新索引。
 - [ ] 结束时释放自己的锁，并输出完整中文报告。
 
 ## 13. 实现依据
@@ -416,5 +407,5 @@ docs +create --as user --parent-token {wiki_node_token} --title {title} --doc-fo
 - `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/page_codec.py`
 - `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/control_plane.py`
 - `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/publisher.py`
-- `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/merge_protocol.py`
+- `plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/remote_markdown.py`
 - `docs/superpowers/specs/2026-09-17-feishu-authoritative-knowledge-base-design.md`

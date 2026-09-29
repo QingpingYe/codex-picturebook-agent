@@ -10,7 +10,7 @@ if str(SCRIPTS) not in sys.path:
 
 from lark_cli import RevisionConflict
 from models import IndexEntry
-from page_codec import parse_remote_page, render_remote_page
+from page_codec import parse_candidate, parse_remote_page, render_remote_page
 from publisher import NeedsReview, Publisher
 
 
@@ -120,10 +120,9 @@ class PublisherTests(unittest.TestCase):
             "00_使用说明", "AI知识库编辑说明", "01_知识内容",
             "02_导航与日志", "知识导航索引", "同步日志",
             "99_系统控制台", "AI_KB_INDEX_V1", "AI_KB_LOCK_V1",
-            "AI_KB_CONFLICT_QUEUE_V1",
         ])
         self.assertEqual(self.publisher.initialize(), tokens)
-        self.assertEqual(len(self.cli.created_titles), 10)
+        self.assertEqual(len(self.cli.created_titles), 9)
 
     def test_initialize_uses_actual_control_page_titles(self):
         tokens = self.publisher.initialize()
@@ -131,11 +130,10 @@ class PublisherTests(unittest.TestCase):
             "00_使用说明", "AI知识库编辑说明", "01_知识内容",
             "02_导航与日志", "知识导航索引", "同步日志",
             "99_系统控制台", "AI_KB_INDEX_V1", "AI_KB_LOCK_V1",
-            "AI_KB_CONFLICT_QUEUE_V1",
         ])
         self.assertEqual(tokens["index"], "node-8")
         self.assertEqual(tokens["lock"], "node-9")
-        self.assertEqual(tokens["conflict"], "node-10")
+        self.assertNotIn("conflict", tokens)
 
     def test_initialize_rejects_duplicate_system_page(self):
         self.cli.nodes["root"] = [
@@ -197,6 +195,7 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(tokens["00_使用说明"], "node-00")
         self.assertEqual(tokens["content"], "node-01")
         self.assertEqual(tokens["99_系统控制台"], "node-99")
+        self.assertNotIn("conflict", tokens)
         self.assertTrue(any(call[1] is None for call in cli.list_node_calls))
 
     def test_initialize_creates_space_root_system_tree(self):
@@ -208,7 +207,7 @@ class PublisherTests(unittest.TestCase):
         ])
         self.assertEqual(cli.created_titles, [
             "AI知识库编辑说明", "知识导航索引", "同步日志",
-            "AI_KB_INDEX_V1", "AI_KB_LOCK_V1", "AI_KB_CONFLICT_QUEUE_V1",
+            "AI_KB_INDEX_V1", "AI_KB_LOCK_V1",
         ])
         self.assertIsNotNone(tokens["index"])
 
@@ -219,16 +218,130 @@ class PublisherTests(unittest.TestCase):
             '# AI_KB_INDEX_V1\n```json\n{"entries":[],"schema_version":1}\n```\n',
         )
         self.assertIn('"expires_at":null', self.cli.docs[tokens["lock"]]["content"])
-        self.assertEqual(
-            self.cli.docs[tokens["conflict"]]["content"],
-            "# AI_KB_CONFLICT_QUEUE_V1\n",
-        )
+        self.assertNotIn("conflict", tokens)
+
+    def test_resolve_control_plane_does_not_require_conflict_page(self):
+        self.publisher.initialize()
+        tokens = self.publisher.resolve_control_plane()
+        self.assertEqual(set(tokens).intersection({"index", "lock", "content"}), {"index", "lock", "content"})
+        self.assertNotIn("conflict", tokens)
+
+    def test_publish_new_preserves_source_times(self):
+        result = self.publisher.publish_new(replace(entry(), source_edit_times={"source": 123}), "# 正文", "content-root")
+        self.assertEqual(result.source_edit_times, {"source": 123})
+        self.assertEqual(parse_remote_page(self.cli.docs[result.doc_token]["content"]).metadata["source_edit_times"], {"source": 123})
+
+    def test_conditional_update_uses_readback_revision_and_source_times(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        original_update = self.cli.update_doc
+        def update_with_later_readback(token, revision, content):
+            result = original_update(token, revision, content)
+            self.cli.docs[token]["revision_id"] += 1
+            return result
+        self.cli.update_doc = update_with_later_readback
+        result = self.publisher.conditional_update(entry(), current, page("# 新正文"), {"source": "r2"}, {"source": 123})
+        self.assertEqual((result.last_ai_revision_id, result.last_seen_revision_id), (3, 4))
+        self.assertEqual(result.source_edit_times, {"source": 123})
+
+    def test_publish_readback_accepts_presentation_only_markdown_changes(self):
+        original_update = self.cli.update_doc
+        def normalized_update(token, revision, content):
+            result = original_update(token, revision, content)
+            parsed = parse_remote_page(self.cli.docs[token]["content"])
+            self.cli.docs[token]["content"] = render_remote_page(parsed.body.replace("**New**", "New"), parsed.metadata)
+            return result
+        self.cli.update_doc = normalized_update
+        created = self.publisher.publish_new(entry(), "# **New**", "content-root")
+        self.assertEqual(created.last_seen_revision_id, 5)
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        updated = self.publisher.conditional_update(entry(), current, page("# **New**"), {"source": "r2"})
+        self.assertEqual(updated.last_seen_revision_id, 3)
+
+    def test_readback_revision_cannot_precede_verified_ai_revision(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        def misleading_update(token, revision, content):
+            self.cli.docs[token] = {"revision_id": 2, "content": content}
+            return {"code": 0, "data": {"document": {"revision_id": 3}}, "warnings": []}
+        self.cli.update_doc = misleading_update
+        with self.assertRaises(NeedsReview):
+            self.publisher.conditional_update(entry(), current, page("# New"), {"source": "r2"})
+
+    def test_changed_source_vector_without_times_discards_old_times(self):
+        old = replace(entry(), source_edit_times={"source": 100})
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[old.doc_token] = dict(current)
+        result = self.publisher.conditional_update(old, current, page("# New"), {"source": "r2"})
+        self.assertIsNone(result.source_edit_times)
+        self.assertNotIn("source_edit_times", parse_remote_page(self.cli.docs[old.doc_token]["content"]).metadata)
+
+    def test_unchanged_source_vector_without_times_preserves_old_times(self):
+        old = replace(entry(), source_edit_times={"source": 100})
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[old.doc_token] = dict(current)
+        result = self.publisher.conditional_update(old, current, page("# New"), {"source": "r1"})
+        self.assertEqual(result.source_edit_times, {"source": 100})
+        self.assertEqual(parse_remote_page(self.cli.docs[old.doc_token]["content"]).metadata["source_edit_times"], {"source": 100})
+
+    def test_unchanged_vector_preserves_times_through_candidate_pipeline(self):
+        old = replace(entry(), source_edit_times={"source": 100})
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[old.doc_token] = dict(current)
+        candidate = parse_candidate("""---
+series_id: s
+project_id: p
+page_type: worldview
+source_node_tokens: [source]
+source_revision_parts: [r1]
+---
+# New
+""")
+        merged = render_remote_page(candidate.body, candidate.metadata)
+        result = self.publisher.conditional_update(old, current, merged, candidate.metadata["source_revisions"])
+        self.assertEqual(result.source_edit_times, {"source": 100})
+        self.assertEqual(parse_remote_page(self.cli.docs[old.doc_token]["content"]).metadata["source_edit_times"], {"source": 100})
+
+    def test_partial_update_is_read_back_before_review_without_retry(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        writes, reads = [], []
+        original_fetch = self.cli.fetch_doc
+        def partial_write(token, revision, content):
+            writes.append(revision)
+            self.cli.docs[token] = {"revision_id": 2, "content": content}
+            return {"code": 0, "data": {"result": "partial_success", "document": {"revision_id": 2}}, "warnings": ["partial"]}
+        def tracked_fetch(token):
+            reads.append(token)
+            return original_fetch(token)
+        self.cli.update_doc = partial_write
+        self.cli.fetch_doc = tracked_fetch
+        with self.assertRaises(NeedsReview):
+            self.publisher.conditional_update(entry(), current, page("# New"), {"source": "r2"})
+        self.assertEqual(writes, [1])
+        self.assertEqual(reads, [entry().doc_token])
+
+    def test_revision_conflict_refetches_before_review(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        self.cli.update_error = RevisionConflict("changed")
+        fetched = []
+        original_fetch = self.cli.fetch_doc
+        def tracked_fetch(token):
+            fetched.append(token)
+            return original_fetch(token)
+        self.cli.fetch_doc = tracked_fetch
+        with self.assertRaises(NeedsReview):
+            self.publisher.conditional_update(entry(), current, page("# 新正文"), {"source": "r2"})
+        self.assertEqual(fetched, [entry().doc_token])
+        self.assertEqual(len(self.cli.updates), 0)
 
     def test_revision_conflict_does_not_replace_human_page(self):
         current = {"revision_id": 1, "content": page("# 人工规则")}
         self.cli.docs[entry().doc_token] = dict(current)
         self.cli.update_error = RevisionConflict("changed")
-        with self.assertRaises(RevisionConflict):
+        with self.assertRaises(NeedsReview):
             self.publisher.conditional_update(entry(), current, page("# 新规则"), {"source": "r2"})
         self.assertEqual(self.cli.docs["doc-worldview"]["content"], page("# 人工规则"))
 
@@ -329,12 +442,33 @@ class PublisherTests(unittest.TestCase):
         publisher.publish_new(entry(), "# 正文", "content-root")
         self.assertEqual(cli.list_node_calls[-1], ("target-space", "content-root", 10))
 
-    def test_publish_new_rejects_non_positive_create_revision(self):
+    def test_publish_new_recovers_a_create_with_an_invalid_revision(self):
         self.cli = FakeCli(create_revision=0)
         self.publisher = Publisher(self.cli, "root", "target-space")
         zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
-        with self.assertRaises(NeedsReview):
-            self.publisher.publish_new(zero_entry, "# 正文", "content-root")
+        result = self.publisher.publish_new(zero_entry, "# 正文", "content-root")
+        self.assertEqual(result.key, zero_entry.key)
+        self.assertEqual(result.status, "published")
+
+    def test_publish_new_recovers_a_create_without_a_token(self):
+        original_create = self.cli.create_doc
+
+        def tokenless_create(parent, title, content=""):
+            original_create(parent, title, content)
+            return {"code": 0, "data": {"document": {"revision_id": 3}}}
+
+        self.cli.create_doc = tokenless_create
+        result = self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(result.key, entry().key)
+
+    def test_publish_new_rejects_an_invalid_response_without_a_page(self):
+        def no_page(parent, title, content=""):
+            return {"code": 0, "data": {"document": {"revision_id": 0}}}
+
+        self.cli.create_doc = no_page
+        with self.assertRaises(NeedsReview) as caught:
+            self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertFalse(caught.exception.page_written)
 
     def test_publish_new_rejects_partial_metadata_correction(self):
         zero_entry = replace(entry(), last_ai_revision_id=0, last_seen_revision_id=0)
@@ -345,6 +479,126 @@ class PublisherTests(unittest.TestCase):
         }
         with self.assertRaises(NeedsReview):
             self.publisher.publish_new(zero_entry, "# 正文", "content-root")
+
+    def test_publish_new_recovers_warned_creation_by_readback(self):
+        original_create = self.cli.create_doc
+        def warned_create(parent, title, content=""):
+            result = original_create(parent, title, content)
+            result["warnings"] = ["partial create"]
+            return result
+        self.cli.create_doc = warned_create
+        result = self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(result.key, entry().key)
+        self.assertTrue(result.doc_token)
+        self.assertEqual(result.status, "published")
+
+    def test_publish_new_rejects_warned_creation_without_a_page(self):
+        def warned_without_create(parent, title, content=""):
+            return {"code": 0, "data": {"document": {"revision_id": 3}}, "warnings": ["no write"]}
+        self.cli.create_doc = warned_without_create
+        with self.assertRaises(NeedsReview):
+            self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(self.cli.created_titles, [])
+
+    def test_publish_new_requires_review_when_creation_raises(self):
+        def uncertain_create(parent, title, content=""):
+            raise TimeoutError("request timed out")
+        self.cli.create_doc = uncertain_create
+        with self.assertRaises(NeedsReview):
+            self.publisher.publish_new(entry(), "# 正文", "content-root")
+
+    def test_confirmed_write_survives_a_failed_metadata_correction(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        self.publisher.revision_advance = 1
+        original_update = self.cli.update_doc
+        calls = []
+
+        def correction_conflicts(token, revision, content):
+            calls.append(revision)
+            if len(calls) == 1:
+                return original_update(token, revision, content)
+            raise RevisionConflict("changed")
+
+        self.cli.update_doc = correction_conflicts
+        with self.assertRaises(NeedsReview) as caught:
+            self.publisher.conditional_update(entry(), current, page("# 新正文"), {"source": "r1"})
+        self.assertTrue(caught.exception.page_written)
+        self.assertEqual(caught.exception.after_revision, 3)
+
+    def test_confirmed_write_survives_a_failing_diagnostic_read(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        self.publisher.revision_advance = 1
+        original_update = self.cli.update_doc
+        calls = []
+
+        def correction_conflicts(token, revision, content):
+            calls.append(revision)
+            if len(calls) == 1:
+                return original_update(token, revision, content)
+            raise RevisionConflict("changed")
+
+        self.cli.update_doc = correction_conflicts
+        original_fetch = self.publisher.fetch_current
+        fetches = []
+
+        def flaky_fetch(token):
+            fetches.append(token)
+            if len(fetches) > 1:
+                raise TimeoutError("readback timed out")
+            return original_fetch(token)
+
+        self.publisher.fetch_current = flaky_fetch
+        with self.assertRaises(NeedsReview) as caught:
+            self.publisher.conditional_update(entry(), current, page("# 新正文"), {"source": "r1"})
+        self.assertTrue(caught.exception.page_written)
+        self.assertEqual(caught.exception.after_revision, 3)
+
+    def test_uncertain_update_with_an_unreadable_page_stays_unknown(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+
+        def timeout(token, revision, content):
+            raise TimeoutError("request timed out")
+
+        def unreadable(token):
+            raise TimeoutError("readback timed out")
+
+        self.cli.update_doc = timeout
+        self.publisher.fetch_current = unreadable
+        with self.assertRaises(NeedsReview) as caught:
+            self.publisher.conditional_update(entry(), current, page("# 新正文"), {"source": "r1"})
+        self.assertFalse(caught.exception.page_written)
+        self.assertIsNone(caught.exception.after_revision)
+
+    def test_publish_new_recovers_a_create_that_raised_after_writing(self):
+        original_create = self.cli.create_doc
+
+        def create_then_fail(parent, title, content=""):
+            original_create(parent, title, content)
+            raise TimeoutError("request timed out")
+
+        self.cli.create_doc = create_then_fail
+        result = self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(result.key, entry().key)
+        self.assertEqual(result.status, "published")
+
+    def test_publish_new_rejects_a_logical_key_page_deeper_in_the_tree(self):
+        self.cli = FakeCli()
+        self.cli.nodes["content-root"] = [{"title": "container", "node_token": "node-container"}]
+        self.cli.nodes["node-container"] = [{"title": entry().key, "node_token": "node-deep"}]
+        self.publisher = Publisher(self.cli, "root", "target-space")
+        with self.assertRaises(NeedsReview):
+            self.publisher.publish_new(entry(), "# 正文", "content-root")
+        self.assertEqual(self.cli.created_titles, [])
+
+    def test_conditional_update_requires_review_for_error_code(self):
+        current = {"revision_id": 1, "content": page()}
+        self.cli.docs[entry().doc_token] = dict(current)
+        self.cli.update_result = {"code": 1, "data": {"document": {"revision_id": 3}}, "warnings": []}
+        with self.assertRaises(NeedsReview):
+            self.publisher.conditional_update(entry(), current, page("# 新正文"), {"source": "r2"})
 
     def test_conditional_update_records_predicted_revision(self):
         current = {"revision_id": 1, "content": page("# 人工规则")}
@@ -364,10 +618,10 @@ class PublisherTests(unittest.TestCase):
         result = self.publisher.conditional_update(
             entry(), current, page("# 人工规则\n\n新资料"), {"source": "r2"}
         )
-        self.assertEqual(result.last_ai_revision_id, 3)
+        self.assertEqual(result.last_ai_revision_id, 5)
         self.assertEqual(self.publisher.revision_advance, 2)
         parsed = parse_remote_page(self.cli.docs[entry().doc_token]["content"])
-        self.assertEqual(parsed.metadata["last_ai_revision_id"], 3)
+        self.assertEqual(parsed.metadata["last_ai_revision_id"], 5)
 
     def test_resource_bearing_page_requires_review(self):
         current = page("# 正文\n\n[资源](https://example.test/a)")
@@ -376,69 +630,6 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaises(NeedsReview):
             self.publisher.conditional_update(entry(), current_document, page("# 新规则"), {"source": "r2"})
 
-    def test_conflict_records_ignores_framework_lines(self):
-        content = "# AI_KB_CONFLICT_QUEUE_V1\n\n（当前无待处理冲突）\n[s/p/worldview] reason\n"
-        self.assertEqual(
-            self.publisher._conflict_records(content),
-            [("s/p/worldview", "reason")],
-        )
-
-    def test_append_conflict_rejects_lost_record_after_write(self):
-        self.cli.docs["conflict-doc"] = {
-            "revision_id": 4,
-            "content": "# AI_KB_CONFLICT_QUEUE_V1\n",
-        }
-        original_update = self.cli.update_doc
-
-        def drop_update(token, revision, content):
-            result = original_update(token, revision, content)
-            self.cli.docs[token]["content"] = "# AI_KB_CONFLICT_QUEUE_V1\n\n（当前无待处理冲突）\n"
-            return result
-
-        self.cli.update_doc = drop_update
-        with self.assertRaises(NeedsReview):
-            self.publisher.append_conflict(
-                "conflict-doc", {"key": entry().key, "reason": "human conflict"}
-            )
-
-    def test_append_conflict_rejects_warned_update(self):
-        self.cli.docs["conflict-doc"] = {
-            "revision_id": 4,
-            "content": "# AI_KB_CONFLICT_QUEUE_V1\n",
-        }
-        original_update = self.cli.update_doc
-
-        def warned_update(token, revision, content):
-            self.cli.docs[token]["content"] = content
-            self.cli.docs[token]["revision_id"] = 5
-            return {
-                "code": 0,
-                "data": {"document": {"revision_id": 5}},
-                "warnings": ["partial write"],
-            }
-
-        self.cli.update_doc = warned_update
-        with self.assertRaises(NeedsReview):
-            self.publisher.append_conflict(
-                "conflict-doc", {"key": entry().key, "reason": "human conflict"}
-            )
-
-    def test_append_conflict_requires_matching_update_and_readback_revision(self):
-        self.cli.docs["conflict-doc"] = {
-            "revision_id": 4,
-            "content": "# AI_KB_CONFLICT_QUEUE_V1\n",
-        }
-
-        def revision_drift_update(token, revision, content):
-            self.cli.docs[token]["content"] = content
-            self.cli.docs[token]["revision_id"] = 6
-            return {"code": 0, "data": {"document": {"revision_id": 5}}, "warnings": []}
-
-        self.cli.update_doc = revision_drift_update
-        with self.assertRaises(NeedsReview):
-            self.publisher.append_conflict(
-                "conflict-doc", {"key": entry().key, "reason": "human conflict"}
-            )
 
 
 if __name__ == "__main__":

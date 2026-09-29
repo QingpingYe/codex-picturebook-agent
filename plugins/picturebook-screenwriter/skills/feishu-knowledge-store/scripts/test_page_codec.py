@@ -114,3 +114,44 @@ source_revision_parts:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourceEditTimesTests(unittest.TestCase):
+    def candidate(self, extra: str = "") -> str:
+        return f"""---
+series_id: s
+project_id: p
+page_type: worldview
+source_node_tokens: [a, b]
+source_revision_parts: [r1, r2]
+{extra}---
+body
+"""
+
+    def metadata(self, edit_times=...):
+        value = {"key": "s/p/worldview", "page_type": "worldview",
+                 "source_node_tokens": ["a", "b"], "source_revisions": {"a": "r1", "b": "r2"},
+                 "last_ai_revision_id": 1}
+        if edit_times is not ...:
+            value["source_edit_times"] = edit_times
+        return value
+
+    def test_candidate_optional_edit_times(self):
+        absent = parse_candidate(self.candidate()).metadata
+        self.assertIsNone(absent["source_edit_times"])
+        valid = parse_candidate(self.candidate("source_edit_time_parts: [100, 200]\n")).metadata
+        self.assertEqual(valid["source_edit_times"], {"a": 100, "b": 200})
+
+    def test_candidate_rejects_bad_edit_time_parts(self):
+        for parts in ("[100]", "[0, 2]", "[-1, 2]", "[true, 2]"):
+            with self.subTest(parts=parts), self.assertRaises(PageCodecError):
+                parse_candidate(self.candidate(f"source_edit_time_parts: {parts}\n"))
+
+    def test_page_edit_times_missing_valid_and_invalid(self):
+        legacy = parse_remote_page(render_remote_page("body", self.metadata()))
+        self.assertNotIn("source_edit_times", legacy.metadata)
+        valid = parse_remote_page(render_remote_page("body", self.metadata({"a": 100, "b": 200})))
+        self.assertEqual(valid.metadata["source_edit_times"], {"a": 100, "b": 200})
+        for invalid in ({"a": 100}, {"a": 0, "b": 200}, {"a": True, "b": 200}, [100, 200]):
+            with self.subTest(invalid=invalid), self.assertRaises(PageCodecError):
+                render_remote_page("body", self.metadata(invalid))

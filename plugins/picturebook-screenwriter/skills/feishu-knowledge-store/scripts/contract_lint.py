@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -69,30 +68,22 @@ def run_lint(fixture: str | Path) -> dict[str, Any]:
         metadata = page.metadata
         if metadata["key"] != entry.key:
             errors.append(f"page key does not match index: {key}")
+        if metadata["page_type"] != key.split("/")[-1]:
+            errors.append(f"page_type does not match logical key: {key}")
         if metadata["source_revisions"] != entry.source_revisions:
             errors.append(f"page source revisions do not match index: {key}")
         if metadata["last_ai_revision_id"] != entry.last_ai_revision_id:
             errors.append(f"page revision does not match index: {key}")
-        if entry.last_seen_revision_id != entry.last_ai_revision_id:
-            errors.append(f"index page revision does not match metadata revision: {key}")
+        if entry.last_seen_revision_id < entry.last_ai_revision_id:
+            errors.append(
+                f"index last_seen_revision_id precedes last_ai_revision_id: {key}"
+            )
         matches = [node for node in tree if isinstance(node, dict) and node.get("title") == key]
         if len(matches) != 1:
             errors.append(f"index key is represented by {len(matches)} tree nodes: {key}")
 
     for key in sorted(set(pages_by_key) - set(entries)):
         errors.append(f"page has no index entry: {key}")
-
-    try:
-        conflict_content = (fixture / "conflict.md").read_text(encoding="utf-8")
-    except OSError as error:
-        errors.append(f"cannot read conflict fixture: {error}")
-        conflict_content = ""
-    for line in conflict_content.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("["):
-            continue
-        if not re.fullmatch(r"\[([^]]+)\] (.+)", stripped):
-            errors.append(f"malformed conflict record: {stripped}")
 
     return {
         "errors": errors,

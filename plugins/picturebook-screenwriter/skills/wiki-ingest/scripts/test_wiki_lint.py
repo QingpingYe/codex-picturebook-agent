@@ -21,6 +21,9 @@ class WikiLintTests(unittest.TestCase):
         index = {"a/b/worldview": {"key": "a/b/worldview", "status": "needs_review"}}
         findings = lint_index(index)
         self.assertEqual(findings[0].severity, "WARN")
+        self.assertIn("同步未完成", findings[0].message)
+        self.assertIn("待下一轮复核", findings[0].message)
+        self.assertNotIn("冲突", findings[0].message)
 
     def test_control_plane_index_entry_contract_is_supported(self):
         index = {

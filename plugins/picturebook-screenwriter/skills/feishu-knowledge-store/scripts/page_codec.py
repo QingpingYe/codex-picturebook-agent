@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from remote_markdown import normalize_remote_markdown
 from shared_schema import PAGE_TYPES
 from shared_schema import logical_key as shared_logical_key
-from shared_schema import normalize_project_id, normalize_series_id, validate_revisions
+from shared_schema import normalize_project_id, normalize_series_id, validate_revisions, validate_edit_times
 
 
 SYSTEM_HEADING = "## 系统元数据（请勿编辑）"
@@ -57,10 +57,14 @@ def parse_candidate(markdown: str) -> Candidate:
         raise PageCodecError("changed keys are not allowed")
     source_node_tokens = frontmatter.get("source_node_tokens")
     source_revision_parts = frontmatter.get("source_revision_parts")
+    source_edit_time_parts = frontmatter.get("source_edit_time_parts")
     if not isinstance(source_node_tokens, list) or not isinstance(source_revision_parts, list):
         raise PageCodecError("source_node_tokens and source_revision_parts must be lists")
+    if source_edit_time_parts is not None and not isinstance(source_edit_time_parts, list):
+        raise PageCodecError("source_edit_time_parts must be a list")
     try:
         source_revisions = validate_revisions(source_node_tokens, source_revision_parts)
+        source_edit_times = None if source_edit_time_parts is None else validate_edit_times(source_node_tokens, source_edit_time_parts)
     except ValueError as error:
         raise PageCodecError(str(error)) from error
     metadata = {
@@ -69,6 +73,7 @@ def parse_candidate(markdown: str) -> Candidate:
         "page_type": frontmatter["page_type"],
         "source_node_tokens": source_node_tokens,
         "source_revisions": source_revisions,
+        "source_edit_times": source_edit_times,
         "last_ai_revision_id": frontmatter.get("last_ai_revision_id", 0),
     }
     _validate_metadata(metadata)
@@ -111,7 +116,8 @@ def parse_remote_page(markdown: str) -> RemotePage:
 
 def _validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     required = {"schema_version", "key", "page_type", "source_node_tokens", "source_revisions", "last_ai_revision_id"}
-    if set(metadata) != required:
+    allowed = required | {"source_edit_times"}
+    if not set(metadata) <= allowed or not required <= set(metadata):
         raise PageCodecError("metadata must contain exactly the required fields")
     if metadata["schema_version"] != 1:
         raise PageCodecError("unsupported metadata schema_version")
@@ -136,6 +142,13 @@ def _validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         raise PageCodecError("invalid source_revisions")
     if set(source_revisions) != set(tokens):
         raise PageCodecError("source_revisions must match source_node_tokens")
+    if "source_edit_times" in metadata and metadata["source_edit_times"] is not None:
+        edit_times = metadata["source_edit_times"]
+        if not isinstance(edit_times, dict) or set(edit_times) != set(tokens):
+            raise PageCodecError("source_edit_times must match source_node_tokens")
+        if any(not isinstance(token, str) or not token.strip() or isinstance(value, bool) or not isinstance(value, int) or value <= 0
+               for token, value in edit_times.items()):
+            raise PageCodecError("invalid source_edit_times")
     revision = metadata["last_ai_revision_id"]
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
         raise PageCodecError("invalid last_ai_revision_id")

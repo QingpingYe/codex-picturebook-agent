@@ -9,6 +9,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from control_plane import ControlPlane, ControlPlaneCorrupt, LockHeld, LeaseOwnershipError
+from control_plane import IndexOutcomeUnknown
 from lark_cli import RevisionConflict
 from models import IndexEntry
 
@@ -55,7 +56,64 @@ class FakeCli:
         return self.docs[token]["revision_id"]
 
 
+def index_entry():
+    return IndexEntry(key="s/p/worldview", doc_token="doc", wiki_node_token="node",
+                      source_revisions={"source": "r1"}, last_ai_revision_id=1,
+                      last_seen_revision_id=1, status="published")
+
+
+class IndexOutcomeTests(unittest.TestCase):
+    def test_malformed_index_readback_after_write_is_unknown(self):
+        cli = FakeCli()
+        plane = ControlPlane(cli, control_tokens(), lock_ttl_minutes=45)
+        original_update = cli.update_doc
+
+        def corrupting_update(token, revision, content):
+            result = original_update(token, revision, content)
+            if token == "index-doc":
+                cli.docs[token]["content"] = "# AI_KB_INDEX_V1\n```json\nnot json\n```\n"
+            return result
+
+        cli.update_doc = corrupting_update
+        with self.assertRaises(IndexOutcomeUnknown):
+            plane.update_index([index_entry()])
+
+
 class ControlPlaneTests(unittest.TestCase):
+    def test_index_accepts_legacy_missing_null_and_valid_source_times(self):
+        base = {"key": "s/p/worldview", "doc_token": "doc", "wiki_node_token": "node",
+                "source_revisions": {"source": "r1"}, "last_ai_revision_id": 4,
+                "last_seen_revision_id": 6, "status": "published"}
+        for extra, expected in (({}, None), ({"source_edit_times": None}, None),
+                                ({"source_edit_times": {"source": 123}}, {"source": 123})):
+            with self.subTest(extra=extra):
+                plane = ControlPlane(FakeCli(index_content=index_content([{**base, **extra}])), control_tokens())
+                result = plane.read_index()[base["key"]]
+                self.assertEqual(result.source_edit_times, expected)
+                self.assertEqual((result.last_ai_revision_id, result.last_seen_revision_id), (4, 6))
+
+    def test_index_rejects_invalid_source_times(self):
+        base = {"key": "s/p/worldview", "doc_token": "doc", "wiki_node_token": "node",
+                "source_revisions": {"source": "r1"}, "last_ai_revision_id": 4,
+                "last_seen_revision_id": 6, "status": "published"}
+        for extra in ({"other": 1}, {"source_edit_times": {}},
+                      {"source_edit_times": {"other": 1}},
+                      {"source_edit_times": {"source": 0}},
+                      {"source_edit_times": {"source": True}}):
+            with self.subTest(extra=extra):
+                plane = ControlPlane(FakeCli(index_content=index_content([{**base, **extra}])), control_tokens())
+                with self.assertRaises(ControlPlaneCorrupt):
+                    plane.read_index()
+
+    def test_rebuild_preserves_source_times_and_distinct_seen_revision(self):
+        plane = ControlPlane(FakeCli(), control_tokens())
+        page = {"doc_token": "doc", "wiki_node_token": "node", "revision_id": 6,
+                "metadata": {"key": "s/p/worldview", "source_revisions": {"source": "r1"},
+                             "source_edit_times": {"source": 123}, "last_ai_revision_id": 4}}
+        result = plane.rebuild_index([page])["s/p/worldview"]
+        self.assertEqual(result.source_edit_times, {"source": 123})
+        self.assertEqual((result.last_ai_revision_id, result.last_seen_revision_id), (4, 6))
+
     def test_read_lock_is_public(self):
         revision, payload = ControlPlane(FakeCli(), control_tokens()).read_lock()
         self.assertEqual(revision, 1)

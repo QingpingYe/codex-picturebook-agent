@@ -62,3 +62,18 @@ class SharedSchemaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class EditTimeTests(unittest.TestCase):
+    def test_validate_edit_times(self):
+        from shared_schema import validate_edit_times
+        self.assertEqual(validate_edit_times(['a','b'], [1,2]), {'a':1,'b':2})
+        with self.assertRaises(SchemaError): validate_edit_times(['a'], [0])
+
+
+class IndexEntryDefaultsTests(unittest.TestCase):
+    def test_source_edit_times_defaults_to_none(self):
+        from models import IndexEntry
+        entry = IndexEntry(key="s/p/worldview", doc_token="d", wiki_node_token="n",
+                           source_revisions={"a": "r1"}, last_ai_revision_id=0,
+                           last_seen_revision_id=0, status="published")
+        self.assertIsNone(entry.source_edit_times)

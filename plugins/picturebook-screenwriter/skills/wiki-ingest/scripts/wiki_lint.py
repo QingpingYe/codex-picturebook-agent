@@ -34,7 +34,7 @@ def lint_index(index: Mapping[str, Any]) -> tuple[Finding, ...]:
                 f"wiki-review-{key}",
                 "wiki",
                 "WARN",
-                "知识页存在待处理冲突",
+                "知识页同步未完成，待下一轮复核",
                 key,
             ))
     return tuple(findings)

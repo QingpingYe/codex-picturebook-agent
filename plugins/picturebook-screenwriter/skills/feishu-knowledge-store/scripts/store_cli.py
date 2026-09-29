@@ -4,7 +4,6 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +45,7 @@ def build_components(config_path=None, environ=None, workspace=None) -> Componen
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Operate the Feishu knowledge store")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("preflight", "resolve", "lock-status", "conflict-list"):
+    for name in ("preflight", "resolve", "lock-status"):
         command = commands.add_parser(name)
         command.add_argument("--config")
         command.add_argument("--workspace")
@@ -55,12 +54,6 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--config")
         command.add_argument("--workspace")
         command.add_argument("--run-dir", required=True)
-    conflict = commands.add_parser("conflict-append")
-    conflict.add_argument("--config")
-    conflict.add_argument("--workspace")
-    conflict.add_argument("--key", required=True)
-    conflict.add_argument("--reason", required=True)
-    conflict.add_argument("--holder")
     fixture = commands.add_parser("lint-fixture")
     fixture.add_argument("--config")
     fixture.add_argument("--workspace")
@@ -146,8 +139,6 @@ def export_lint_fixture(components: Components, out: str | Path) -> Path:
     tokens = components.publisher.resolve_control_plane()
     index_document = content(tokens["index"])
     (out / "index.md").write_text(index_document, encoding="utf-8")
-    conflict_document = content(tokens["conflict"])
-    (out / "conflict.md").write_text(conflict_document, encoding="utf-8")
 
     pages = out / "pages"
     pages.mkdir(parents=True, exist_ok=True)
@@ -180,19 +171,6 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
         elif args.command == "lock-status":
             revision_id, payload = components.control_plane.read_lock()
             payload = {"revision_id": revision_id, **payload}
-        elif args.command == "conflict-append":
-            if not args.holder:
-                return 2
-            tokens = components.publisher.resolve_control_plane()
-            lease = components.control_plane.acquire_lock(
-                args.holder, datetime.now(timezone.utc),
-            )
-            try:
-                record = {"key": args.key, "reason": args.reason}
-                components.publisher.append_conflict(tokens["conflict"], record)
-            finally:
-                components.control_plane.release_lock(lease)
-            payload = record
         elif args.command == "prepare":
             runner = SyncRunner(
                 components.config_path, components.cli, components.publisher,
@@ -214,8 +192,10 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
         elif args.command == "lint-fixture":
             payload = {"out": str(export_lint_fixture(components, args.out))}
         else:
-            tokens = components.publisher.resolve_control_plane()
-            payload = components.publisher.fetch_current(tokens["conflict"])
+            print(json.dumps({
+                "status": "unsupported_command", "command": args.command,
+            }, ensure_ascii=False, sort_keys=True), file=stdout)
+            return 2
     except Exception as error:
         payload = error.to_dict() if hasattr(error, "to_dict") else {
             "status": "runtime_error", "error": str(error),

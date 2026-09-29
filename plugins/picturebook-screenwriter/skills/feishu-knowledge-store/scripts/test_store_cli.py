@@ -1,3 +1,4 @@
+import contextlib
 import json
 import sys
 import tempfile
@@ -57,10 +58,9 @@ class FakeCli:
         self.fetched.append(doc_token)
         content_by_token = {
             "index-doc": "# AI_KB_INDEX_V1\n```json\n{\"schema_version\":1,\"entries\":[]}\n```\n",
-            "conflict-doc": "# AI_KB_CONFLICT_QUEUE_V1\n",
             "page-doc": "# 世界观\n\n正文\n",
         }
-        revision_by_token = {"index-doc": 2, "conflict-doc": 3, "page-doc": 4}
+        revision_by_token = {"index-doc": 2, "page-doc": 4}
         return {"data": {"document": {
             "revision_id": revision_by_token[doc_token],
             "content": content_by_token[doc_token],
@@ -69,23 +69,13 @@ class FakeCli:
 
 class FakePublisher:
     def __init__(self, tokens=None, error=None):
-        self.tokens = tokens or {
-            "index": "index-doc", "lock": "lock-doc", "conflict": "conflict-doc",
-        }
+        self.tokens = tokens or {"index": "index-doc", "lock": "lock-doc"}
         self.error = error
-        self.appended = []
 
     def resolve_control_plane(self):
         if self.error:
             raise self.error
         return self.tokens
-
-    def fetch_current(self, doc_token):
-        return {"revision_id": 3, "content": "# AI_KB_CONFLICT_QUEUE_V1\n"}
-
-    def append_conflict(self, parent, record):
-        self.appended.append((parent, record))
-        return (parent, record)
 
 
 class FakeControlPlane:
@@ -179,17 +169,6 @@ class StoreCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["revision_id"], 7)
 
-    def test_conflict_list_fetches_conflict_document(self):
-        stdout = StringIO()
-        exit_code = store_cli.main(
-            ["conflict-list", "--config", str(self.config_path)],
-            stdout=stdout,
-            components_factory=fake_factory,
-        )
-        payload = json.loads(stdout.getvalue())
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(payload["revision_id"], 3)
-
     def test_missing_control_page_fails_closed(self):
         class MissingPublisher(FakePublisher):
             def resolve_control_plane(self):
@@ -235,49 +214,21 @@ class StoreCliTests(unittest.TestCase):
         self.assertTrue((run_dir / "source_nodes.json").exists())
         self.assertEqual(cli.listed, ["preloaded-source"])
 
-    def test_conflict_append_acquires_lease_and_records_conflict(self):
-        plane = FakeControlPlane()
-        publisher = FakePublisher()
+    def test_retired_conflict_commands_are_rejected(self):
+        def factory(*args, **kwargs):
+            raise AssertionError("retired command must not build components")
 
-        def factory(config_path, environ=None, workspace=None):
-            return SimpleNamespace(
-                config=config(Path(config_path)), cli=FakeCli(),
-                config_path=Path(config_path),
-                publisher=publisher, control_plane=plane,
-            )
+        for command in ("conflict-list", "conflict-append"):
+            with self.subTest(command=command):
+                with contextlib.redirect_stderr(StringIO()):
+                    with self.assertRaises(SystemExit) as caught:
+                        store_cli.main(
+                            [command, "--config", str(self.config_path)],
+                            stdout=StringIO(), components_factory=factory,
+                        )
+                self.assertEqual(caught.exception.code, 2)
 
-        stdout = StringIO()
-        exit_code = store_cli.main([
-            "conflict-append", "--config", str(self.config_path),
-            "--key", "s/p/worldview", "--reason", "human conflict", "--holder", "human@example",
-        ], stdout=stdout, components_factory=factory)
-        payload = json.loads(stdout.getvalue())
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(payload, {"key": "s/p/worldview", "reason": "human conflict"})
-        self.assertEqual(publisher.appended, [("conflict-doc", payload)])
-        self.assertEqual(plane.acquired, ["human@example"])
-        self.assertEqual(plane.released, ["lease"])
-
-    def test_conflict_append_without_holder_does_not_write(self):
-        plane = FakeControlPlane()
-        publisher = FakePublisher()
-
-        def factory(config_path, environ=None, workspace=None):
-            return SimpleNamespace(
-                config=config(Path(config_path)), cli=FakeCli(),
-                config_path=Path(config_path),
-                publisher=publisher, control_plane=plane,
-            )
-
-        exit_code = store_cli.main([
-            "conflict-append", "--config", str(self.config_path),
-            "--key", "s/p/worldview", "--reason", "human conflict",
-        ], stdout=StringIO(), components_factory=factory)
-        self.assertEqual(exit_code, 2)
-        self.assertEqual(plane.acquired, [])
-        self.assertEqual(publisher.appended, [])
-
-    def test_lint_fixture_writes_tree_index_conflict_and_pages(self):
+    def test_lint_fixture_writes_tree_index_and_pages(self):
         cli = FakeCli()
 
         def factory(config_path, environ=None, workspace=None):
@@ -297,9 +248,9 @@ class StoreCliTests(unittest.TestCase):
         self.assertEqual(payload["out"], str(out))
         self.assertTrue((out / "tree.json").exists())
         self.assertTrue((out / "index.md").exists())
-        self.assertTrue((out / "conflict.md").exists())
+        self.assertFalse((out / "conflict.md").exists())
         self.assertTrue((out / "pages" / "s__p__worldview.md").exists())
-        self.assertEqual(cli.fetched, ["index-doc", "conflict-doc", "page-doc"])
+        self.assertEqual(cli.fetched, ["index-doc", "page-doc"])
 
     def test_components_use_workspace_without_explicit_config(self):
         workspace = Path(self.tmp.name)
@@ -377,6 +328,28 @@ class StoreCliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "placeholder_target_token")
         self.assertNotIn("root-token", stdout.getvalue())
 
+    def test_documented_operator_commands_use_store_cli(self):
+        repo_root = Path(__file__).parents[5]
+        for relative in ("README.md", "plugins/picturebook-screenwriter/README.md"):
+            text = (repo_root / relative).read_text(encoding="utf-8")
+            for command in ("prepare", "publish", "verify"):
+                self.assertNotIn(f"sync_runner.py {command}", text)
+                self.assertIn(f"store_cli.py {command}", text)
+
+    def test_unknown_command_is_reported_instead_of_crashing(self):
+        parser = SimpleNamespace(parse_args=lambda argv: SimpleNamespace(
+            command="future-command", config=None, workspace=None,
+        ))
+        stdout = StringIO()
+        with patch.object(store_cli, "build_parser", return_value=parser):
+            exit_code = store_cli.main(
+                ["future-command"], stdout=stdout,
+                components_factory=lambda *args, **kwargs: SimpleNamespace(),
+            )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "unsupported_command")
+        self.assertEqual(payload["command"], "future-command")
 
 if __name__ == "__main__":
     unittest.main()

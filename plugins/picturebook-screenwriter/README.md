@@ -14,7 +14,7 @@
 - `illustration-export`：资产登记、本地 HTML 预览与显式图片内嵌
 - `session-export`：仅在用户明确要求时导出会话证据，且必须使用用户提供的绝对输出目录
 - `knowledge-loader`：只读检索多人协作飞书权威知识库
-- `feishu-knowledge-store`：人工优先合并、冲突队列与远端租约
+- `feishu-knowledge-store`：正文内容权威、写后回读与远端租约
 - `lexile-check`：仅使用用户提供的实测结果
 
 ## 暂不支持
@@ -27,7 +27,7 @@
 
 ## 飞书知识库
 
-本插件不得编辑原始资料库，只能从它读取候选内容。多人同步时，目标飞书 Wiki 是唯一共享权威；人工修改优先于 AI 内容。若目标 Wiki 不可用，只能使用最后确认的本地缓存，且必须在提示中说明“离线”和“非权威”。
+本插件不得编辑原始资料库，只能从它读取候选内容。多人同步时，目标飞书 Wiki 是唯一共享权威；其页面内容以候选正文为权威——只比较候选与当前页正文且仅忽略纯排版标记，正文不同即覆盖目标页；例外是页面含资源、评论或未知块时本轮不做比较也不写入，标记 `needs_review` 待复核。成功覆盖人工编辑时必须在同步报告的 `overwritten_human_edits` 中披露对应逻辑键。若目标 Wiki 不可用，只能使用最后确认的本地缓存，且必须在提示中说明“离线”和“非权威”。
 
 ### Configuration discovery
 
@@ -53,9 +53,9 @@ Target Wiki roots support two modes. Use `target.root_mode: "space"` when the fo
 python .\skills\feishu-knowledge-store\scripts\lark_cli_bootstrap.py
 python .\skills\feishu-knowledge-store\scripts\store_cli.py config-status --workspace <workspace>
 python .\skills\knowledge-loader\scripts\authority_cli.py load --workspace <workspace> --project-id <project_id> --series-id <series_id> --page-types worldview,characters,content_spec
-python .\skills\feishu-knowledge-store\scripts\sync_runner.py prepare --config <config> --run-dir <run_dir>
-python .\skills\feishu-knowledge-store\scripts\sync_runner.py publish --config <config> --run-dir <run_dir>
-python .\skills\feishu-knowledge-store\scripts\sync_runner.py verify --config <config> --run-dir <run_dir>
+python .\skills\feishu-knowledge-store\scripts\store_cli.py prepare --config <config> --run-dir <run_dir>
+python .\skills\feishu-knowledge-store\scripts\store_cli.py publish --config <config> --run-dir <run_dir>
+python .\skills\feishu-knowledge-store\scripts\store_cli.py verify --config <config> --run-dir <run_dir>
 ```
 
 `authority_cli.py` 只做只读检索。页面 revision 落后于远端索引时读取失败；页面前移但索引尚未同步时输出 `index_synced=false` 和警告，且不得覆盖最后确认缓存。离线缓存不是权威版本，只有在用户显式批准后加 `--allow-offline-cache` 使用，输出必须继续说明“非权威”。

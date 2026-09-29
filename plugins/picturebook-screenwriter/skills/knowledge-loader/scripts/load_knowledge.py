@@ -108,7 +108,7 @@ class KnowledgeLoader:
                     continue
                 items.append((score, entry, page, document, index_synced))
                 if entry.status == "needs_review":
-                    warnings.append(f"{entry.key} 存在待处理冲突")
+                    warnings.append(f"{entry.key} 同步未完成，待下一轮复核")
             except PageCodecError:
                 warnings.append(f"{entry.key} 的系统元数据无效")
 

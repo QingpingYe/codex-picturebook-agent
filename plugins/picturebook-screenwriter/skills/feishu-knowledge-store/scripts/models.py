@@ -37,3 +37,4 @@ class IndexEntry:
     last_ai_revision_id: int
     last_seen_revision_id: int
     status: Literal["published", "needs_review", "archived"]
+    source_edit_times: dict[str, int] | None = None

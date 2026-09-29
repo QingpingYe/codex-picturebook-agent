@@ -73,7 +73,7 @@ class KnowledgeLoaderTests(unittest.TestCase):
     def test_loader_includes_needs_review_warning(self):
         loader = KnowledgeLoader(FakePlane(), FakeCli())
         bundle = loader.load(KnowledgeQuery(project_id="小老鼠迈尔斯", terms=("角色", "铃铛")))
-        self.assertTrue(any("存在待处理冲突" in warning for warning in bundle.warnings))
+        self.assertTrue(any("同步未完成" in warning for warning in bundle.warnings))
 
     def test_loader_can_fall_back_to_cached_bundle_with_offline_warning(self):
         cached = KnowledgeEvidenceBundle(

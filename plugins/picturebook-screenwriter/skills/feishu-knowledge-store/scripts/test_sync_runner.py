@@ -3,445 +3,318 @@ import sys
 import tempfile
 import unittest
 from dataclasses import replace
-from control_plane import ControlPlaneCorrupt
 from pathlib import Path
 
 SCRIPTS = Path(__file__).parent
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
+sys.path.insert(0, str(SCRIPTS))
 from models import IndexEntry
-from runner_status import BootstrapState
-from sync_runner import SyncRunner
-from page_codec import render_remote_page
-from publisher import NeedsReview
+from page_codec import parse_remote_page, render_remote_page
+from publisher import NeedsReview, Publisher
+from lark_cli import RevisionConflict
+from control_plane import IndexOutcomeUnknown
+from sync_runner import SyncRunner, SyncRunnerError
 
+KEY = 's/p/worldview'
 
-class FakeControlPlane:
-    def __init__(self):
-        self.acquired = 0
+def entry(**changes):
+    return replace(IndexEntry(KEY, 'doc', 'node', {'src': '1'}, 4, 4, 'published'), **changes)
+
+class Plane:
+    def __init__(self, indexed=True):
+        self.index = {KEY: entry()} if indexed else {}
+        self.fail = False
         self.released = 0
-        self.refreshed = 0
-
-    def acquire_lock(self, holder, now):
-        self.acquired += 1
-        return object()
-
-    def release_lock(self, lease):
-        self.released += 1
-
-    def refresh_lock(self, lease, now):
-        self.refreshed += 1
-        return object()
-
-    def read_index(self):
-        return {}
-
+    def acquire_lock(self, *args): return 'lease'
+    def release_lock(self, *args): self.released += 1
+    def refresh_lock(self, *args): return 'lease'
+    def read_index(self): return dict(self.index)
     def update_index(self, entries):
-        return {entry.key: entry for entry in entries}
+        if self.fail: raise RuntimeError('index unavailable')
+        self.index.update({e.key: e for e in entries})
+        return dict(self.index)
 
-
-class RecordingPlane(FakeControlPlane):
-    def __init__(self):
-        super().__init__()
-        self.updated = []
-
-    def update_index(self, entries):
-        self.updated.extend(entries)
-        return {entry.key: entry for entry in self.updated}
-
-
-class FakePublisher:
-    def __init__(self):
-        self.published = []
-        self.initialized = False
-
-    def initialize(self):
-        self.initialized = True
-        return {"content": "content-root", "conflict": "conflict-doc"}
-
-    def publish_new(self, entry, body, parent):
-        self.published.append((entry.key, body, parent))
-        return entry
-
-
-class FakeCli:
-    def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
-        return [{"title": "节点", "node_token": "node-1"}]
-
-
-def indexed_entry():
-    return IndexEntry(
-        key="海外绘本/小老鼠迈尔斯/worldview",
-        doc_token="doc-world", wiki_node_token="node-world",
-        source_revisions={"node-a": "17"}, last_ai_revision_id=4,
-        last_seen_revision_id=4, status="published",
-    )
-
-
-def indexed_remote_page(source_revision="17"):
-    return render_remote_page("# 世界观\n", {
-        "schema_version": 1,
-        "key": "海外绘本/小老鼠迈尔斯/worldview",
-        "page_type": "worldview",
-        "source_node_tokens": ["node-a"],
-        "source_revisions": {"node-a": source_revision},
-        "last_ai_revision_id": 4,
-    })
-
-
-class IndexedPlane(FakeControlPlane):
-    def __init__(self):
-        super().__init__()
-        self.index = {}
-        self.updated = []
-
-    def read_index(self):
-        return self.index
-
-    def update_index(self, entries):
-        for item in entries:
-            self.index[item.key] = item
-            self.updated.append(item)
-        return self.index
-
-
-class RoutingPublisher(FakePublisher):
-    def __init__(self):
-        super().__init__()
-        self.updated = []
-        self.conflicts = []
-        self.current = {"revision_id": 4, "content": indexed_remote_page()}
-        self.history = {"revision_id": 4, "content": indexed_remote_page()}
-
-    def fetch_current(self, doc_token):
-        return self.current
-
-    def fetch_revision(self, doc_token, revision_id):
-        return self.history
-
-    def conditional_update(self, entry, current, merged_markdown, source_revisions):
-        self.updated.append((entry.key, merged_markdown, source_revisions))
-        return replace(entry, source_revisions=dict(source_revisions),
-                       last_ai_revision_id=current["revision_id"] + 2,
-                       last_seen_revision_id=current["revision_id"] + 2)
-
-    def append_conflict(self, parent, record):
-        self.conflicts.append((parent, record))
-
+class Pages:
+    def __init__(self, body='old', indexed=None):
+        self.indexed = indexed or entry()
+        self.current = {'revision_id': 4, 'content': render_remote_page(body, Publisher._metadata(self.indexed))}
+        self.writes = 0
+        self.reads = 0
+        self.conflict = False
+        self.orphan = False
+    def initialize(self): return {'content': 'root'}
+    def fetch_current(self, token):
+        self.reads += 1
+        return dict(self.current)
+    def conditional_update(self, indexed, current, markdown, source_revisions, source_edit_times=None):
+        if self.conflict:
+            self.conflict = False
+            self.current['revision_id'] += 1
+            raise RevisionConflict('changed')
+        self.writes += 1
+        result = replace(indexed, source_revisions=source_revisions, source_edit_times=source_edit_times,
+                         last_ai_revision_id=current['revision_id'] + 2,
+                         last_seen_revision_id=current['revision_id'] + 3, status='published')
+        self.current = {'revision_id': result.last_seen_revision_id,
+                        'content': render_remote_page(parse_remote_page(markdown).body, Publisher._metadata(result))}
+        return result
+    def publish_new(self, candidate, body, parent):
+        if self.orphan: raise NeedsReview('logical key page already exists')
+        return self.conditional_update(candidate, {'revision_id': 0},
+            render_remote_page(body, Publisher._metadata(candidate)), candidate.source_revisions, candidate.source_edit_times)
 
 class SyncRunnerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.run_dir = Path(self.tmp.name) / "runs" / "run-1"
-        self.config_path = Path(self.tmp.name) / "config.json"
-        self.config_path.write_text(json.dumps({
-            "schema_version": 2,
-            "source": {
-                "space_id": "7682720271706361023",
-                "root_mode": "space",
-                "wiki_url": "https://example.feishu.cn/wiki/source",
-            },
-            "target": {
-                "space_id": "7686313522543774944",
-            "root_token": "root-token",
-            },
-            "identity": "user",
-            "lock_ttl_minutes": 45
-        }), encoding="utf-8")
+        self.addCleanup(self.tmp.cleanup)
+        self.run = Path(self.tmp.name)
+        self.plane, self.pages = Plane(), Pages()
+    def candidate(self, body='new', revision='1', times=None, token='src', key=KEY):
+        staging = self.run / 'wiki_staging'
+        staging.mkdir(exist_ok=True)
+        time_field = '' if times is None else f'source_edit_time_parts:\n  - {times}\n'
+        text = ('---\ntitle: test\nseries_id: s\nproject_id: p\npage_type: worldview\n'
+                f'source_node_tokens:\n  - {token}\nsource_revision_parts:\n  - "{revision}"\n{time_field}---\n{body}\n')
+        (staging / 'page.md').write_text(text, encoding='utf-8')
+        (staging / '_manifest.json').write_text(json.dumps({'entries': [{'key': key, 'path': 'page.md'}]}), encoding='utf-8')
+    def publish(self):
+        return SyncRunner(None, None, self.pages, self.plane).publish(self.run)
+    def failure(self):
+        with self.assertRaises(SyncRunnerError): self.publish()
+        return json.loads((self.run / 'sync_report.json').read_text(encoding='utf-8'))
+    def test_same_source_changed_body_publishes(self):
+        self.candidate()
+        self.assertEqual(self.publish()['published'], 1)
+        self.assertEqual(self.pages.writes, 1)
+    def test_format_only_and_changed_source_preserve(self):
+        self.pages = Pages('# **same**')
+        self.candidate('same', revision='2')
+        result = self.publish()
+        self.assertEqual(result['preserved'], 1)
+        self.assertEqual(self.pages.writes, 0)
+        self.assertEqual(self.plane.index[KEY].source_revisions, {'src': '1'})
+    def test_literal_code_url_and_punctuation_changes_publish(self):
+        for old, new in [('a*b', 'ab'), ('`a_b`', '`ab`'), ('[x](https://a)', '[x](https://b)'), ('hello!', 'hello?')]:
+            with self.subTest(old=old):
+                self.plane, self.pages = Plane(), Pages(old)
+                self.candidate(new)
+                self.assertEqual(self.publish()['published'], 1)
+    def test_new_page_and_orphan(self):
+        self.plane = Plane(False)
+        self.candidate()
+        self.assertEqual(self.publish()['published'], 1)
+        self.plane = Plane(False)
+        self.pages.orphan = True
+        self.assertEqual(self.failure()['failed'], 1)
+    def test_archived_is_not_changed(self):
+        self.plane.index[KEY] = entry(status='archived')
+        self.candidate()
+        self.failure()
+        self.assertEqual(self.plane.index[KEY].status, 'archived')
+        self.assertEqual(self.pages.writes, 0)
+    def test_report_and_disclosure(self):
+        self.pages.current['revision_id'] = 8
+        self.candidate()
+        report = self.publish()
+        self.assertEqual(report['overwritten_human_edits'], [KEY])
+        self.assertFalse({'queued', 'conflicts', 'third_party_edits'} & report.keys())
+        self.assertEqual(set(report['pages'][0]), {'key', 'action', 'reason', 'before_revision', 'after_revision', 'page_overwritten', 'index_committed'})
+        self.assertEqual(report['pages'][0]['after_revision'], 11)
+    def test_preserve_does_not_disclose_overwrite(self):
+        self.pages.current['revision_id'] = 8
+        self.candidate('old')
+        self.assertEqual(self.publish()['overwritten_human_edits'], [])
+    def test_revision_conflict_refetches_then_redecides(self):
+        self.pages.conflict = True
+        self.candidate()
+        report = self.publish()
+        self.assertEqual(report['retried'], 1)
+        self.assertEqual(self.pages.reads, 2)
+        self.assertEqual(report['pages'][0]['before_revision'], 5)
+    def test_index_failure_reports_then_recovers_without_page_write(self):
+        self.pages.current['revision_id'] = 8
+        self.plane.fail = True
+        self.candidate()
+        report = self.failure()
+        self.assertEqual(report['published'], 0)
+        self.assertEqual(report['overwritten_human_edits'], [KEY])
+        self.assertTrue(report['pages'][0]['page_overwritten'])
+        self.assertFalse(report['pages'][0]['index_committed'])
+        self.plane.fail = False
+        self.assertEqual(self.publish()['preserved'], 1)
+        self.assertEqual(self.pages.writes, 1)
+        self.assertEqual(self.plane.index[KEY].last_seen_revision_id, 11)
+    def test_recovery_rejects_wrong_content_or_vector(self):
+        self.pages = Pages('new', entry(last_ai_revision_id=6, source_revisions={'src': '2'}))
+        self.pages.current['revision_id'] = 7
+        self.candidate('new')
+        self.assertEqual(self.failure()['failed'], 1)
+        self.assertEqual(self.pages.writes, 0)
+    def test_needs_review_is_retryable(self):
+        self.plane.index[KEY] = entry(status='needs_review')
+        self.candidate('old')
+        self.assertEqual(self.publish()['preserved'], 1)
+        self.assertEqual(self.plane.index[KEY].status, 'published')
+    def test_preserve_refreshes_times_without_source_vector(self):
+        self.plane.index[KEY] = entry(source_edit_times={'src': 100})
+        self.candidate('old', revision='2', times=200)
+        self.publish()
+        self.assertEqual(self.plane.index[KEY].source_edit_times, {'src': 200})
+        self.assertEqual(self.plane.index[KEY].source_revisions, {'src': '1'})
+        self.assertEqual(self.pages.writes, 0)
+    def test_stale_time_blocks_preserve_and_publish(self):
+        for body in ('old', 'new'):
+            self.plane.index[KEY] = entry(source_edit_times={'src': 200})
+            self.candidate(body, times=100)
+            self.assertIn('stale', str(self.failure()))
+        self.assertEqual(self.pages.writes, 0)
+    def test_missing_times_preserves_or_downgrades_baseline(self):
+        self.plane.index[KEY] = entry(source_edit_times={'src': 100})
+        self.candidate('new')
+        self.publish()
+        self.assertEqual(self.plane.index[KEY].source_edit_times, {'src': 100})
+        self.candidate('newer', revision='2')
+        self.assertIn('baseline', str(self.publish()))
+        self.assertIsNone(self.plane.index[KEY].source_edit_times)
+    def test_changed_topology_preserve_keeps_old_baseline(self):
+        self.plane.index[KEY] = entry(source_edit_times={'src': 100})
+        self.candidate('old', times=200, token='other')
+        self.assertIn('topology', str(self.publish()))
+        self.assertEqual(self.plane.index[KEY].source_edit_times, {'src': 100})
+    def test_uncertain_write_stops_remaining_candidates(self):
+        self.candidate()
+        path = self.run / 'wiki_staging' / '_manifest.json'
+        manifest = json.loads(path.read_text())
+        manifest['entries'].append({'key': 's/other/worldview', 'path': 'page.md'})
+        path.write_text(json.dumps(manifest))
+        def uncertain(*args, **kwargs): raise NeedsReview('update outcome is uncertain')
+        self.pages.conditional_update = uncertain
+        report = self.failure()
+        self.assertIsNone(report['pages'][0]['page_overwritten'])
+        self.assertIn('s/other/worldview', str(report['errors']))
+        self.assertEqual(len(report['pages']), 1)
 
-    def tearDown(self):
-        self.tmp.cleanup()
+    def test_confirmed_write_is_disclosed_when_correction_fails(self):
+        self.pages.current['revision_id'] = 8
+        self.candidate()
 
-    def _write_manifest(self, count=1):
-        staging = self.run_dir / "wiki_staging"
-        staging.mkdir(parents=True)
-        entries = []
-        for number in range(count):
-            suffix = "" if count == 1 else f"-{number}"
-            project_id = "小老鼠迈尔斯" if count == 1 else f"小老鼠迈尔斯-{number}"
-            candidate_name = f"worldview{suffix}.md"
-            (staging / candidate_name).write_text(
-                "---\n"
-                "title: 世界观\n"
-                "series_id: 海外绘本\n"
-                f"project_id: {project_id}\n"
-                "page_type: worldview\n"
-                "source_node_tokens:\n  - node-a\n"
-                "source_revision_parts:\n  - \"17\"\n"
-                "---\n"
-                "# 世界观\n\n新增资料\n",
-                encoding="utf-8",
-            )
-            entries.append({
-                "path": candidate_name,
-                "key": f"海外绘本/{project_id}/worldview",
-                "source_revisions": {"node-a": "17"},
-                "page_type": "worldview",
-                "series_id": "海外绘本",
-                "project_id": project_id,
-            })
-        manifest = {
-            "version": 9,
-            "series": {},
-            "root": [],
-            "entries": entries,
-        }
-        (staging / "_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        def confirmed_then_failed(*args, **kwargs):
+            raise NeedsReview('confirmed page write followed by a failed metadata correction',
+                              page_written=True, after_revision=11)
 
-    def test_prepare_writes_run_dir_only(self):
-        self._write_manifest()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=FakePublisher(),
-                             control_plane=FakeControlPlane())
-        runner.prepare(self.run_dir)
-        self.assertTrue((self.run_dir / "source_nodes.json").exists())
-        self.assertTrue((self.run_dir / "wiki_staging" / "_manifest.json").exists())
+        self.pages.conditional_update = confirmed_then_failed
+        report = self.failure()
+        page = report['pages'][0]
+        self.assertTrue(page['page_overwritten'])
+        self.assertEqual(page['after_revision'], 11)
+        self.assertEqual(report['overwritten_human_edits'], [KEY])
 
-    def test_prepare_discovers_workspace_config_without_explicit_config(self):
-        self._write_manifest()
-        workspace_config = Path(self.tmp.name) / "feishu-knowledge-base.json"
-        workspace_config.write_text(
-            self.config_path.read_text(encoding="utf-8"), encoding="utf-8",
-        )
-        runner = SyncRunner(
-            None, FakeCli(), publisher=FakePublisher(),
-            control_plane=FakeControlPlane(),
-            workspace=Path(self.tmp.name), environ={},
-        )
-        runner.prepare(self.run_dir)
-        self.assertEqual(runner.config_path, workspace_config)
+    def test_unknown_index_outcome_is_reported_as_null(self):
+        class UnknownIndexPlane(Plane):
+            def __init__(self):
+                super().__init__()
+                self.committed = False
 
-    def test_node_mode_with_no_children_is_rejected(self):
-        self._write_manifest()
-        config = json.loads(self.config_path.read_text(encoding="utf-8"))
-        config["source"]["root_mode"] = "node"
-        self.config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
-
-        class EmptyCli:
-            def list_nodes(self, space_id, parent_node_token=None, page_limit=10):
-                return []
-
-        runner = SyncRunner(self.config_path, EmptyCli(), publisher=FakePublisher(),
-                             control_plane=FakeControlPlane())
-        with self.assertRaisesRegex(RuntimeError, "no child nodes"):
-            runner.prepare(self.run_dir)
-
-    def test_publish_report_includes_run_id_and_source_summary(self):
-        self._write_manifest()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=FakePublisher(),
-                             control_plane=FakeControlPlane())
-        runner.prepare(self.run_dir)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(report["run_id"], "run-1")
-        self.assertEqual(report["source"], {"document_count": 1, "container_count": 0})
-
-    def test_publish_uses_content_root_and_updates_index(self):
-        self._write_manifest()
-        plane = RecordingPlane()
-        publisher = FakePublisher()
-        publisher.initialize = lambda: {"content": "content-root"}
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(publisher.published[0][2], "content-root")
-        self.assertEqual([entry.key for entry in plane.updated], [
-            "海外绘本/小老鼠迈尔斯/worldview",
-        ])
-        self.assertEqual(report["published"], 1)
-
-    def test_publish_renews_lease_every_five_successful_pages(self):
-        self._write_manifest(5)
-        plane = RecordingPlane()
-        publisher = FakePublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(report["published"], 5)
-        self.assertEqual(plane.refreshed, 1)
-
-    def test_publish_does_not_create_bootstrap_page(self):
-        self._write_manifest()
-        publisher = FakePublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher,
-                            control_plane=FakeControlPlane())
-        runner.publish(self.run_dir)
-        self.assertFalse(any(key == "system/bootstrap" for key, *_ in publisher.published))
-
-    def test_publish_reads_remote_index_before_writing(self):
-        self._write_manifest()
-        plane = RecordingPlane()
-        plane.read_index = lambda: {}
-        publisher = FakePublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        runner.publish(self.run_dir)
-        self.assertEqual(publisher.published[0][2], "content-root")
-        self.assertEqual(plane.updated[0].key, "海外绘本/小老鼠迈尔斯/worldview")
-
-    def test_corrupt_remote_index_blocks_all_writes(self):
-        self._write_manifest()
-        publisher = FakePublisher()
-
-        class CorruptPlane(FakeControlPlane):
             def read_index(self):
-                raise ControlPlaneCorrupt("invalid index schema")
+                if self.committed:
+                    raise IndexOutcomeUnknown('index readback unavailable')
+                return dict(self.index)
 
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=CorruptPlane())
-        with self.assertRaises(ControlPlaneCorrupt):
-            runner.publish(self.run_dir)
-        self.assertEqual(publisher.published, [])
+            def update_index(self, entries):
+                result = super().update_index(entries)
+                self.committed = True
+                return result
 
-    def test_chinese_path_and_title_round_trip(self):
-        self.run_dir = Path(self.tmp.name) / "中文运行目录" / "runs" / "run-1"
-        self._write_manifest()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=FakePublisher(),
-                             control_plane=FakeControlPlane())
-        runner.prepare(self.run_dir)
-        self.assertTrue((self.run_dir / "source_nodes.json").exists())
+        self.plane = UnknownIndexPlane()
+        self.candidate()
+        report = self.failure()
+        self.assertTrue(report['pages'][0]['page_overwritten'])
+        self.assertIsNone(report['pages'][0]['index_committed'])
 
-    def test_publish_acquires_and_releases_lock(self):
-        self._write_manifest()
-        plane = FakeControlPlane()
-        publisher = FakePublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher,
-                            control_plane=plane)
-        runner.publish(self.run_dir)
-        self.assertEqual(plane.acquired, 1)
-        self.assertEqual(plane.released, 1)
-        self.assertTrue(publisher.published)
+    def test_invalid_run_input_still_writes_a_failed_report(self):
+        with self.assertRaises(SyncRunnerError):
+            self.publish()
+        report = json.loads((self.run / 'sync_report.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['status'], 'failed')
+        self.assertEqual(report['failed'], 1)
+        self.assertTrue(report['errors'])
 
-    def test_absent_index_key_is_first_published(self):
-        self._write_manifest()
-        plane = IndexedPlane()
-        publisher = RoutingPublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(publisher.published[0][0], "海外绘本/小老鼠迈尔斯/worldview")
-        self.assertEqual(report["published"], 1)
+    def test_conflict_redecides_to_preserve(self):
+        self.candidate('new')
+        def conflict(*args, **kwargs):
+            self.pages.current = {'revision_id': 5, 'content': render_remote_page('**new**', Publisher._metadata(entry()))}
+            raise RevisionConflict('changed')
+        self.pages.conditional_update = conflict
+        report = self.publish()
+        self.assertEqual(report['retried'], 1)
+        self.assertEqual(report['preserved'], 1)
+        self.assertEqual(report['overwritten_human_edits'], [])
 
-    def test_existing_key_with_same_source_vector_is_preserved(self):
-        self._write_manifest()
-        plane = IndexedPlane()
-        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
-        publisher = RoutingPublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(publisher.published, [])
-        self.assertEqual(publisher.updated, [])
-        self.assertEqual(report["preserved"], 1)
-        self.assertEqual(plane.updated[0].last_seen_revision_id, 4)
+    def test_conflict_exhaustion_is_retryable_review(self):
+        self.candidate()
+        def conflict(*args, **kwargs): raise RevisionConflict('changed')
+        self.pages.conditional_update = conflict
+        report = self.failure()
+        self.assertEqual(report['retried'], 2)
+        self.assertFalse(report['pages'][0]['page_overwritten'])
+        self.assertEqual(self.plane.index[KEY].status, 'needs_review')
+        self.assertEqual(report['overwritten_human_edits'], [])
 
-    def test_existing_key_with_changed_source_vector_is_updated(self):
-        self._write_manifest()
-        plane = IndexedPlane()
-        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = replace(
-            indexed_entry(), source_revisions={"node-a": "16"}
-        )
-        publisher = RoutingPublisher()
-        publisher.current = {"revision_id": 4, "content": indexed_remote_page("16")}
-        publisher.history = {"revision_id": 4, "content": indexed_remote_page("16")}
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(publisher.published, [])
-        self.assertEqual(publisher.updated[0][0], "海外绘本/小老鼠迈尔斯/worldview")
-        self.assertEqual(report["published"], 1)
+    def test_resource_and_metadata_drift_fail_without_write(self):
+        for body, metadata in [('old <!-- comment -->', Publisher._metadata(entry())),
+                               ('new', Publisher._metadata(entry(last_ai_revision_id=3)))]:
+            self.plane, self.pages = Plane(), Pages()
+            self.pages.current['content'] = render_remote_page(body, metadata)
+            self.candidate()
+            self.failure()
+            self.assertEqual(self.pages.writes, 0)
+            self.assertEqual(self.plane.index[KEY].status, 'needs_review')
 
-    def test_target_page_without_index_entry_is_queued(self):
-        self._write_manifest()
-        plane = IndexedPlane()
-        publisher = RoutingPublisher()
+    def test_recovery_requires_newer_ai_revision_and_matching_body(self):
+        for ai, body in [(4, 'new'), (6, 'different')]:
+            self.plane, self.pages = Plane(), Pages(body, entry(last_ai_revision_id=ai, source_revisions={'src': '2'}))
+            self.pages.current['revision_id'] = 7
+            self.candidate('new', revision='2')
+            self.failure()
+            self.assertEqual(self.pages.writes, 0)
 
-        def existing_page(*args, **kwargs):
-            raise NeedsReview("logical key page already exists")
+    def test_index_failure_stops_remaining_candidates(self):
+        self.candidate()
+        path = self.run / 'wiki_staging' / '_manifest.json'
+        manifest = json.loads(path.read_text())
+        manifest['entries'].append({'key': 's/other/worldview', 'path': 'page.md'})
+        path.write_text(json.dumps(manifest))
+        self.plane.fail = True
+        report = self.failure()
+        self.assertEqual(len(report['pages']), 1)
+        self.assertIn('s/other/worldview', str(report['errors']))
+        self.assertTrue(report['pages'][0]['page_overwritten'])
 
-        publisher.publish_new = existing_page
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(report["queued"], 1)
-        self.assertEqual(report["published"], 0)
-        self.assertEqual(publisher.conflicts[0][1]["key"], "海外绘本/小老鼠迈尔斯/worldview")
+    def test_first_create_failed_index_cannot_be_recovered(self):
+        self.plane = Plane(False)
+        self.plane.fail = True
+        self.candidate()
+        self.failure()
+        self.plane.fail = False
+        self.pages.orphan = True
+        report = self.failure()
+        self.assertEqual(report['published'], 0)
+        self.assertEqual(self.plane.index, {})
+        self.assertEqual(self.pages.writes, 1)
 
-    def test_page_success_with_index_failure_is_queued(self):
-        self._write_manifest()
-        plane = IndexedPlane()
+    def test_corrupt_index_and_lock_failure_persist_failed_report(self):
+        self.candidate()
+        for method in ('read_index', 'acquire_lock'):
+            self.plane = Plane()
+            def fail(*args): raise RuntimeError('blocked control plane')
+            setattr(self.plane, method, fail)
+            report = self.failure()
+            self.assertEqual(report['status'], 'failed')
+            self.assertEqual(self.pages.writes, 0)
 
-        def failed_update(entries):
-            raise ControlPlaneCorrupt("index readback did not match")
+    def test_verify_has_no_overwrite_or_legacy_fields(self):
+        self.candidate()
+        report = SyncRunner(None, None, self.pages, self.plane).verify(self.run)
+        self.assertFalse({'overwritten_human_edits', 'queued', 'conflicts'} & report.keys())
+        self.assertEqual(self.pages.writes, 0)
 
-        plane.update_index = failed_update
-        publisher = RoutingPublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(report["queued"], 1)
-        self.assertEqual(report["published"], 0)
-        self.assertEqual(
-            publisher.conflicts[0][1]["reason"],
-            "index_update_failed: index readback did not match",
-        )
-
-    def test_preserved_index_failure_is_queued_without_double_counting(self):
-        self._write_manifest()
-        plane = IndexedPlane()
-        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
-
-        def failed_update(entries):
-            raise ControlPlaneCorrupt("index readback did not match")
-
-        plane.update_index = failed_update
-        publisher = RoutingPublisher()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(report["queued"], 1)
-        self.assertEqual(report["preserved"], 0)
-        self.assertEqual(report["published"], 0)
-
-    def test_missing_indexed_page_is_queued(self):
-        self._write_manifest()
-        plane = IndexedPlane()
-        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
-        publisher = RoutingPublisher()
-
-        def missing_page(doc_token):
-            raise NeedsReview("missing current page")
-
-        publisher.fetch_current = missing_page
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(report["queued"], 1)
-        self.assertEqual(report["failed"], 0)
-
-    def test_page_metadata_drift_from_index_is_queued(self):
-        self._write_manifest()
-        plane = IndexedPlane()
-        plane.index["海外绘本/小老鼠迈尔斯/worldview"] = indexed_entry()
-        publisher = RoutingPublisher()
-        publisher.current = {"revision_id": 4, "content": indexed_remote_page("16")}
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher, control_plane=plane)
-        report = runner.publish(self.run_dir)
-        self.assertEqual(report["queued"], 1)
-        self.assertEqual(report["failed"], 0)
-        self.assertEqual(
-            publisher.conflicts[0][1]["reason"],
-            "remote page metadata does not match the remote index",
-        )
-
-    def test_verify_is_read_only(self):
-        self._write_manifest()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=FakePublisher(),
-                             control_plane=FakeControlPlane())
-        report = runner.verify(self.run_dir)
-        self.assertEqual(report["status"], "verified")
-        self.assertTrue((self.run_dir / "verify_report.json").exists())
-
-    def test_bootstrap_state_can_resume_after_failure(self):
-        self._write_manifest()
-        publisher = FakePublisher()
-        publisher.publish_new = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
-        plane = FakeControlPlane()
-        runner = SyncRunner(self.config_path, FakeCli(), publisher=publisher,
-                             control_plane=plane)
-        with self.assertRaises(RuntimeError):
-            runner.publish(self.run_dir)
-        self.assertEqual(plane.released, 1)
-        self.assertEqual(runner.bootstrap_state, BootstrapState.FAILED)
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == '__main__': unittest.main()

@@ -82,3 +82,17 @@ def logical_key(series_id: str, project_id: str, page_type: str) -> str:
 def _require_page_type(page_type: str) -> None:
     if page_type not in PAGE_TYPES:
         raise SchemaError(f"Unsupported page type: {page_type}")
+
+
+def validate_edit_times(tokens: Iterable[str], edit_times: Iterable[int]) -> dict[str, int]:
+    tokens = list(tokens)
+    edit_times = list(edit_times)
+    if not tokens:
+        raise SchemaError("source_node_tokens cannot be empty")
+    if len(tokens) != len(edit_times):
+        raise SchemaError("source_node_tokens and source_edit_time_parts must have equal lengths")
+    if len(set(tokens)) != len(tokens) or any(not isinstance(t, str) or not t for t in tokens):
+        raise SchemaError("source_node_tokens must be unique and non-empty")
+    if any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in edit_times):
+        raise SchemaError("source_edit_time_parts must be positive integers")
+    return dict(zip(tokens, edit_times))

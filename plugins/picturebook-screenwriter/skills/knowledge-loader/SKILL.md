@@ -19,7 +19,7 @@ description: 只读检索飞书权威知识库，为编剧工作流提供带 rev
 6. 落盘前先用 `scripts/collision.py` 的 `check_collisions()` 扫描草稿与证据中的共有术语；冲突只提示，不自动改写。
 7. 重读旧产物时，用 `parse_dependency_record()` 从 Markdown 末尾提取 `built_against`，再用 `AuthorityLoader` 重新读取当前页面，最后调用 `find_stale_dependencies(record, current_index, current_bundle)`。
 8. `find_stale_dependencies()` 的第三个参数应传当前读取的 `KnowledgeEvidenceBundle`。只传索引时结果为 `index_unverified`，不得宣称产物仍为最新。
-9. `needs_review` 条目仍可读取，但必须警告存在待处理冲突；`archived` 条目必须按陈旧处理。
+9. `needs_review` 条目仍可读取，但必须警告“同步未完成，待下一轮复核”；`archived` 条目必须按陈旧处理。
 10. `index_synced=false` 的证据可以读取，但必须报告“索引尚未同步”，不得描述为已完全对齐的权威快照，也不得用它覆盖最后确认的本地缓存。重读旧产物时，该状态必须按 `index_unsynced` 陈旧原因处理。
 11. 目标 Wiki 不可用时，只有调用方显式允许，才能使用最后确认的本地缓存。缓存不是权威版本，必须在警告中说明“离线”、“非权威”和“最后确认”。
 
