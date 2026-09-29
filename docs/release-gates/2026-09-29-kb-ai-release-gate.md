@@ -1,6 +1,6 @@
 # KB-AI 发布门
 
-> 状态：pending。真实 publish 与跨侧并发仍未授权。
+> 状态：offline complete；远端 read-only acceptance 与真实 publish 仍待授权。
 
 ## 离线条件
 
@@ -26,6 +26,7 @@
 - [x] wiki-ingest：92 项通过。
 - [x] knowledge-loader：38 项通过。
 - [x] KB-AI 契约与文档一致性：25 项通过。
+- [x] picturebook-screenwriter 插件级测试：188 项通过，1 项跳过。
 - [x] `source_baseline.py` 无 update/create/lock 写调用。
 - [ ] 远端 read-only acceptance。
 - [ ] WorkBuddy/Codex 跨侧确认。
