@@ -62,6 +62,15 @@ def index_entry():
                       last_seen_revision_id=1, status="published")
 
 
+class ReadIndexRevisionTests(unittest.TestCase):
+
+    def test_read_index_with_revision_returns_document_revision(self):
+        plane = ControlPlane(FakeCli(index_content=index_content([])), control_tokens())
+        revision, entries = plane.read_index_with_revision()
+        self.assertEqual(revision, 2)
+        self.assertEqual(entries, {})
+
+
 class IndexOutcomeTests(unittest.TestCase):
     def test_malformed_index_readback_after_write_is_unknown(self):
         cli = FakeCli()

@@ -34,14 +34,14 @@
 `check_delta.py` 的每次 plan 输出必须包含一行：
 
 ```text
-NEW_SOURCES: <count> tokens=<token1,token2,...>
+NEW_SOURCES: <count>（<token>=<父token>/<标题>； ...）
 ```
 
 规则：
 
 - `count` 只统计本轮需要处理的**内容节点**中判为 `new` 的数量，不包括容器。
 - `first_run` 是否计入 `count`：不计入 `new`；首次运行仍按 `first_run` 单独报告。
-- token 按字典序升序排列、去重，逗号后不加空格。
+- 条目按 token 字典序升序排列、去重；每项格式为 `token=父token/标题`，父 token 缺失时用 `(空间根)`。
 - 零个 `new` 时固定输出：
 
 ```text

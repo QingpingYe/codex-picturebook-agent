@@ -15,6 +15,18 @@ import json
 import os
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+STORE_SCRIPTS = Path(__file__).resolve().parents[2] / "feishu-knowledge-store" / "scripts"
+if str(STORE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(STORE_SCRIPTS))
+
+from source_admission import (  # noqa: E402
+    DanglingAncestryError,
+    SourceAdmissionError,
+    parse_admission_snapshot,
+    resolve_source_admission,
+)
 
 DOC_TYPES = ("docx", "wiki")
 VALID_VERDICTS = ("first_run", "new", "changed", "unchanged", "deleted", "unknown")
@@ -140,7 +152,7 @@ def is_container(node):
     return isinstance(node, dict) and node.get("has_child") is True
 
 
-def _summarize(verdicts, first_run, containers=0):
+def _summarize(verdicts, first_run, containers=0, excluded=0):
     counts = defaultdict(int)
     for value in verdicts.values():
         counts[value["verdict"]] += 1
@@ -157,6 +169,7 @@ def _summarize(verdicts, first_run, containers=0):
         "unknown": unknown,
         "first_run": first_run,
         "containers": containers,
+        "excluded": excluded,
     }
 
 
@@ -164,6 +177,8 @@ def build_summary_line(summary):
     line = ("DELTA: {total} nodes → skip {skip} / process {process} / new {new} "
             "/ deleted {deleted} / unknown {unknown}").format(**summary)
     line += f" / containers {summary.get('containers', 0)}"
+    if summary.get("excluded"):
+        line += f" / excluded {summary['excluded']}"
     if summary.get("first_run"):
         line += " / first_run"
     return line
@@ -178,15 +193,24 @@ def new_source_tokens(result):
     )
 
 
-def build_new_sources_line(result):
+def build_new_sources_line(result, snapshot=None):
     tokens = new_source_tokens(result)
     if not tokens:
         return "NEW_SOURCES: 0"
-    return f"NEW_SOURCES: {len(tokens)} tokens={','.join(tokens)}"
+    if snapshot is None:
+        return f"NEW_SOURCES: {len(tokens)} tokens={','.join(tokens)}"
+    nodes = (snapshot or {}).get("nodes") or {}
+    parts = []
+    for token in tokens:
+        node = nodes.get(token) or {}
+        parent = node.get("parent_node_token") or "(空间根)"
+        title = node.get("title") or token
+        parts.append(f"{token}={parent}/{title}")
+    return f"NEW_SOURCES: {len(parts)}（{'； '.join(sorted(parts))}）"
 
 
 def classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=None):
-    """按远端 source baseline 判定快照节点；cache_dir 保留为兼容参数但不决定 verdict。"""
+    """按远端 source baseline 与准入闭包判定快照节点。"""
     del cache_dir
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("nodes"), dict):
         raise ValueError("snapshot malformed: nodes must be a dict")
@@ -200,6 +224,10 @@ def classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=N
         if not only_set & set(snapshot["nodes"].keys()):
             raise ValueError("--only 与快照无交集")
 
+    source_baseline = source_baseline or {}
+    admission = parse_admission_snapshot(source_baseline.get("admission"))
+    admission_result = resolve_source_admission(admission, snapshot)
+    excluded = admission_result.excluded_tokens
     baseline = build_token_baseline(source_baseline)
     first_run = not baseline
     all_nodes = snapshot["nodes"]
@@ -212,10 +240,17 @@ def classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=N
     tokens = content_nodes
     if only is not None:
         only_set = set(only)
-        tokens = {t: content_nodes[t] for t in only_set & set(content_nodes.keys())}
+        tokens = {t: all_nodes[t] for t in only_set & set(all_nodes.keys())}
 
     for token, node in tokens.items():
-        if first_run:
+        if token in excluded:
+            verdicts[token] = {
+                "verdict": "excluded",
+                "reason": "在 AI_KB_SOURCE_ADMISSION_V1 中（自身或祖先）裁定为 exclude",
+            }
+        elif is_container(node):
+            continue
+        elif first_run:
             verdicts[token] = {
                 "verdict": "first_run",
                 "reason": "source baseline missing or empty (bootstrap)",
@@ -223,18 +258,28 @@ def classify(snapshot, source_baseline, cache_dir=None, force_full=False, only=N
         else:
             verdicts[token] = _classify_node(token, node, baseline.get(token),
                                              force_full)
-    if only is None and not first_run:
-        for token in baseline:
-            if token not in snapshot["nodes"]:
+    if only is None:
+        for token in container_tokens:
+            if token in excluded:
                 verdicts[token] = {
-                    "verdict": "deleted",
-                    "reason": "in remote index but not in snapshot",
+                    "verdict": "excluded",
+                    "reason": "在 AI_KB_SOURCE_ADMISSION_V1 中（自身或祖先）裁定为 exclude",
                 }
-
+        if not first_run:
+            for token in baseline:
+                if token not in snapshot["nodes"]:
+                    verdicts[token] = {
+                        "verdict": "deleted",
+                        "reason": "in remote index but not in snapshot",
+                    }
     result = {
         "first_run": first_run,
         "verdicts": verdicts,
-        "summary": _summarize(verdicts, first_run, len(container_tokens)),
+        "summary": _summarize(
+            verdicts, first_run, len(container_tokens),
+            excluded=sum(1 for value in verdicts.values()
+                         if value.get("verdict") == "excluded"),
+        ),
     }
     if warnings:
         result["warnings"] = warnings
@@ -264,13 +309,33 @@ def main(argv=None):
         source_baseline = load_source_baseline(args.source_baseline)
         result = classify(snapshot, source_baseline, args.cache_dir,
                           args.force_full, only=only)
+        excluded_only = [
+            token for token in (only or [])
+            if (result["verdicts"].get(token) or {}).get("verdict") == "excluded"
+        ]
+        if excluded_only:
+            for token in excluded_only:
+                print(f"ERROR: --only 目标 {token} 已被排除，不得借 --only 绕过排除裁定",
+                      file=sys.stderr)
+            print("STOP: 定点重摄被拒绝；先以 admit 撤销排除再重跑", file=sys.stderr)
+            return 3
         if args.out:
             write_atomic(args.out, result)
         print(build_summary_line(result["summary"]))
-        print(build_new_sources_line(result))
+        print(build_new_sources_line(result, snapshot))
         for warning in result.get("warnings") or []:
             print(f"WARN: {warning}", file=sys.stderr)
         return 0
+    except DanglingAncestryError as error:
+        print("ERROR: 祖先链走不到顶层（排除判据不可用）", file=sys.stderr)
+        for token in error.tokens:
+            print(f"  {token}", file=sys.stderr)
+        print("STOP: 停止本轮判定与写入", file=sys.stderr)
+        return 2
+    except SourceAdmissionError as error:
+        print(f"ERROR: 准入裁定快照不可用：{error}", file=sys.stderr)
+        print("STOP: 读不懂的准入集合不得当成没有限制", file=sys.stderr)
+        return 1
     except Exception as error:
         print(f"ERROR: check_delta failed: {error}", file=sys.stderr)
         print("DELTA: 0 nodes → skip 0 / process 0 / new 0 / deleted 0 / unknown 0 / containers 0")

@@ -42,6 +42,26 @@ def baseline(entries=None, admission=None):
     }
 
 
+def admission(entries):
+    return {
+        "schema_version": 1,
+        "revision_id": 3,
+        "page_present": True,
+        "entries": entries,
+    }
+
+
+def admission_entry(token, decision):
+    return {
+        "token": token,
+        "title": token,
+        "decision": decision,
+        "decided_by": "user",
+        "decided_at": "2026-09-23T10:00:00+08:00",
+        "reason": "test",
+    }
+
+
 class TestBaseline(unittest.TestCase):
 
     def test_missing_baseline_is_first_run(self):
@@ -239,6 +259,80 @@ class TestNewSourcesAudit(unittest.TestCase):
             rc = cd.main(["--nodes", "missing.json"])
         self.assertEqual(rc, 1)
         self.assertIn("NEW_SOURCES: 0", stdout.getvalue())
+
+
+class TestAdmissionIntegration(unittest.TestCase):
+
+    def test_excluded_leaf_is_not_processed(self):
+        result = cd.classify(
+            {"nodes": {
+                "root": {"parent_node_token": "", **snap_node("root")},
+                "excluded": {"parent_node_token": "root"},
+            }},
+            baseline(
+                [entry("root"), entry("excluded")],
+                admission([admission_entry("excluded", "exclude")]),
+            ),
+        )
+        self.assertEqual(result["verdicts"]["excluded"]["verdict"], "excluded")
+        self.assertEqual(result["summary"]["process"], 0)
+        self.assertEqual(result["summary"]["excluded"], 1)
+
+    def test_excluded_container_and_descendants_are_not_processed(self):
+        result = cd.classify(
+            {"nodes": {
+                "root": {"parent_node_token": "", **snap_node("root")},
+                "container": {"parent_node_token": "root", "has_child": True},
+                "child": {"parent_node_token": "container"},
+            }},
+            baseline(
+                [entry("child")],
+                admission([admission_entry("container", "exclude")]),
+            ),
+        )
+        self.assertEqual(result["verdicts"]["container"]["verdict"], "excluded")
+        self.assertEqual(result["verdicts"]["child"]["verdict"], "excluded")
+        self.assertEqual(result["summary"]["containers"], 1)
+        self.assertEqual(result["summary"]["excluded"], 2)
+
+    def test_future_child_inherits_excluded_ancestor(self):
+        result = cd.classify(
+            {"nodes": {
+                "root": {"parent_node_token": "", **snap_node("root")},
+                "container": {"parent_node_token": "root", "has_child": True},
+                "future": {"parent_node_token": "container"},
+            }},
+            baseline(
+                [],
+                admission([admission_entry("container", "exclude")]),
+            ),
+        )
+        self.assertEqual(result["verdicts"]["future"]["verdict"], "excluded")
+
+    def test_only_on_excluded_token_exits_3(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nodes = Path(tmp) / "nodes.json"
+            source = Path(tmp) / "baseline.json"
+            nodes.write_text(json.dumps({"nodes": {
+                "excluded": {"parent_node_token": ""},
+            }}), encoding="utf-8")
+            source.write_text(json.dumps(baseline(
+                [], admission([admission_entry("excluded", "exclude")])
+            )), encoding="utf-8")
+            rc = cd.main(["--nodes", str(nodes), "--source-baseline", str(source),
+                          "--only", "excluded"])
+        self.assertEqual(rc, 3)
+
+    def test_corrupt_admission_baseline_stops_ingest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nodes = Path(tmp) / "nodes.json"
+            source = Path(tmp) / "baseline.json"
+            nodes.write_text(json.dumps({"nodes": {"tok": snap_node("tok")}}), encoding="utf-8")
+            source.write_text(json.dumps(baseline(
+                [], {"schema_version": 1, "entries": [{"token": "tok"}]}
+            )), encoding="utf-8")
+            rc = cd.main(["--nodes", str(nodes), "--source-baseline", str(source)])
+        self.assertEqual(rc, 1)
 
 
 class TestRetirement(unittest.TestCase):

@@ -59,8 +59,9 @@ class FakeCli:
         content_by_token = {
             "index-doc": "# AI_KB_INDEX_V1\n```json\n{\"schema_version\":1,\"entries\":[]}\n```\n",
             "page-doc": "# 世界观\n\n正文\n",
+            "admission-doc": "# AI_KB_SOURCE_ADMISSION_V1\n```json\n{\"schema_version\":1,\"entries\":[]}\n```\n",
         }
-        revision_by_token = {"index-doc": 2, "page-doc": 4}
+        revision_by_token = {"index-doc": 2, "page-doc": 4, "admission-doc": 3}
         return {"data": {"document": {
             "revision_id": revision_by_token[doc_token],
             "content": content_by_token[doc_token],
@@ -157,6 +158,39 @@ class StoreCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["identity"], "user")
         self.assertEqual(payload["root"], "root-token")
+
+    def test_source_baseline_is_read_only_and_writes_projection(self):
+        class FakeControlPlaneWithRevision(FakeControlPlane):
+            def read_index_with_revision(self):
+                return 7, self.read_index()
+
+        class FakePublisherWithAdmission(FakePublisher):
+            def resolve_control_plane(self, require_admission=False):
+                return {
+                    "index": "index-doc",
+                    "lock": "lock-doc",
+                    "admission": "admission-doc",
+                }
+
+        def factory(config_path, environ=None, workspace=None):
+            return SimpleNamespace(
+                config=config(Path(config_path)), cli=FakeCli(),
+                config_path=Path(config_path),
+                publisher=FakePublisherWithAdmission(),
+                control_plane=FakeControlPlaneWithRevision(),
+            )
+
+        out = Path(self.tmp.name) / "source_baseline.json"
+        stdout = StringIO()
+        exit_code = store_cli.main([
+            "source-baseline", "--config", str(self.config_path), "--out", str(out),
+        ], stdout=stdout, components_factory=factory)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["index_revision_id"], 7)
+        self.assertTrue(payload["admission_page_present"])
+        projected = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(projected["admission"]["entries"], [])
 
     def test_lock_status_reads_public_lock_reader(self):
         stdout = StringIO()
@@ -332,7 +366,7 @@ class StoreCliTests(unittest.TestCase):
         repo_root = Path(__file__).parents[5]
         for relative in ("README.md", "plugins/picturebook-screenwriter/README.md"):
             text = (repo_root / relative).read_text(encoding="utf-8")
-            for command in ("prepare", "publish", "verify"):
+            for command in ("source-baseline", "prepare", "publish", "verify"):
                 self.assertNotIn(f"sync_runner.py {command}", text)
                 self.assertIn(f"store_cli.py {command}", text)
 

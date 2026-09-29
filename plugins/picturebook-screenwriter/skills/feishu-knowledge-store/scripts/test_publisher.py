@@ -188,6 +188,7 @@ class PublisherTests(unittest.TestCase):
         cli.nodes["node-99"] = [
             {"title": "AI_KB_INDEX_V1", "node_token": "node-index"},
             {"title": "AI_KB_LOCK_V1", "node_token": "node-lock"},
+            {"title": "AI_KB_SOURCE_ADMISSION_V1", "node_token": "node-admission"},
             {"title": "AI_KB_CONFLICT_QUEUE_V1", "node_token": "node-conflict"},
         ]
         publisher = Publisher(cli, "ignored", "target-space", root_mode="space")
@@ -195,8 +196,31 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(tokens["00_使用说明"], "node-00")
         self.assertEqual(tokens["content"], "node-01")
         self.assertEqual(tokens["99_系统控制台"], "node-99")
+        self.assertEqual(tokens["admission"], "node-admission")
         self.assertNotIn("conflict", tokens)
         self.assertTrue(any(call[1] is None for call in cli.list_node_calls))
+
+    def test_resolve_control_plane_keeps_admission_optional(self):
+        cli = SpaceAwareCli()
+        cli.nodes[None] = [
+            {"title": "00_使用说明", "node_token": "node-00"},
+            {"title": "01_知识内容", "node_token": "node-01"},
+            {"title": "02_导航与日志", "node_token": "node-02"},
+            {"title": "99_系统控制台", "node_token": "node-99"},
+        ]
+        cli.nodes["node-00"] = [{"title": "AI知识库编辑说明", "node_token": "node-guide"}]
+        cli.nodes["node-02"] = [
+            {"title": "知识导航索引", "node_token": "node-nav"},
+            {"title": "同步日志", "node_token": "node-log"},
+        ]
+        cli.nodes["node-99"] = [
+            {"title": "AI_KB_INDEX_V1", "node_token": "node-index"},
+            {"title": "AI_KB_LOCK_V1", "node_token": "node-lock"},
+        ]
+        publisher = Publisher(cli, "ignored", "target-space", root_mode="space")
+        self.assertNotIn("admission", publisher.resolve_control_plane())
+        with self.assertRaises(NeedsReview):
+            publisher.resolve_control_plane(require_admission=True)
 
     def test_initialize_creates_space_root_system_tree(self):
         cli = SpaceInitializeCli()

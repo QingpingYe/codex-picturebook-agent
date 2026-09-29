@@ -155,7 +155,7 @@ resolve_source_admission(policy, snapshot) -> AdmissionResult
 - 被排除 token 自身、全部后代和后代容器都判 `excluded`，不得下载正文、扫描外链、生成候选或发布。
 - 排除集合为空时，不要求祖先链完整。
 - 排除集合非空且祖先链缺父节点、父节点不在快照中或形成环时，整轮停止并逐行列出问题 token。
-- `--only` 命中 `excluded` token 时拒绝执行；未裁定 token 不拒绝。
+- `--only` 命中 `excluded` token 时以退出码 3 硬停止，并逐行列出 token；未裁定 token 不拒绝。
 - 远端准入页缺失等同空排除；页面存在但标题、`schema_version`、六字段结构、非空字符串值、决策枚举或重复 token 无效时硬失败。
 - 不创建、不修改、不删除远端准入页。
 
@@ -180,7 +180,7 @@ resolve_source_admission(policy, snapshot) -> AdmissionResult
 | 排除祖先链断裂或成环 | 停止整轮，逐行列出 token |
 | 本地缓存缺失/损坏 | 不作为 skip 证据；只要远端时间/revision 证据完整仍可判 `unchanged` |
 | 候选时间与快照不一致 | 机械校验 `FAIL`，不得发布 |
-| `--only` 命中排除 token | 拒绝执行并列出 token |
+| `--only` 命中排除 token | 退出码 3，拒绝执行并列出 token |
 | 目标页发布失败 | 交由第一批 `needs_review` 和报告语义处理，不写入准入页 |
 
 ## 6. 跨批接口

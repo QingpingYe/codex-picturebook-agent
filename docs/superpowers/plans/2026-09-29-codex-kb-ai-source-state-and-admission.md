@@ -269,7 +269,7 @@
   - `test_excluded_leaf_is_not_downloaded`
   - `test_excluded_container_and_descendants_are_not_processed`
   - `test_future_child_inherits_excluded_ancestor`
-  - `test_only_on_excluded_token_exits_2`
+  - `test_only_on_excluded_token_exits_3`
   - `test_corrupt_admission_baseline_stops_ingest`
 
 - [ ] **Step 2: Run the tests to verify failure**

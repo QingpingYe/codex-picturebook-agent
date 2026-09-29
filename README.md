@@ -89,6 +89,7 @@ The end-to-end runtime commands are:
 
 ```powershell
 $run_dir = "$PWD\.picturebook-screenwriter\runs\$(Get-Date -Format yyyyMMdd-HHmmss)"
+python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py source-baseline --config $env:PICTUREBOOK_KB_CONFIG --out "$run_dir\source_baseline.json"
 python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py prepare --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
 python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py publish --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir
 python .\plugins\picturebook-screenwriter\skills\feishu-knowledge-store\scripts\store_cli.py verify --config $env:PICTUREBOOK_KB_CONFIG --run-dir $run_dir

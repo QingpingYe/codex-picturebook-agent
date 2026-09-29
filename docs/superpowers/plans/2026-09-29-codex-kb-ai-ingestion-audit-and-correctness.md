@@ -50,7 +50,7 @@
   - `test_excluded_nodes_are_not_new_sources`
   - `test_new_sources_line_is_emitted_on_fallback`
 
-  `build_new_sources_line()` must return exactly `NEW_SOURCES: 0` when no content token has verdict `new`, otherwise `NEW_SOURCES: N tokens=token1,token2`.
+  `build_new_sources_line()` must return exactly `NEW_SOURCES: 0` when no content token has verdict `new`; otherwise each item is `token=parent-token/title`, sorted by token.
 
 - [ ] **Step 2: Run the tests to verify failure**
 

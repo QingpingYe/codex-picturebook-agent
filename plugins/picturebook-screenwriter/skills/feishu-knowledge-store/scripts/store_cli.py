@@ -13,6 +13,8 @@ from control_plane import ControlPlane
 from lark_cli import LarkCli
 from lark_cli_bootstrap import ensure_lark_cli
 from publisher import Publisher
+from source_admission import empty_admission_policy
+from source_baseline import build_source_baseline, read_source_admission, write_source_baseline
 from sync_runner import SyncRunner
 
 
@@ -54,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--config")
         command.add_argument("--workspace")
         command.add_argument("--run-dir", required=True)
+    source_baseline = commands.add_parser("source-baseline")
+    source_baseline.add_argument("--config")
+    source_baseline.add_argument("--workspace")
+    source_baseline.add_argument("--out", required=True)
     fixture = commands.add_parser("lint-fixture")
     fixture.add_argument("--config")
     fixture.add_argument("--workspace")
@@ -189,6 +195,20 @@ def main(argv=None, stdout=None, components_factory=None) -> int:
                 components.control_plane, config=components.config,
             )
             payload = runner.verify(args.run_dir)
+        elif args.command == "source-baseline":
+            tokens = components.publisher.resolve_control_plane()
+            revision, index = components.control_plane.read_index_with_revision()
+            if tokens.get("admission"):
+                admission = read_source_admission(components.cli, tokens["admission"])
+            else:
+                admission = empty_admission_policy(page_present=False)
+            payload = build_source_baseline(revision, index, admission)
+            write_source_baseline(args.out, payload)
+            payload = {
+                "out": str(args.out),
+                "index_revision_id": revision,
+                "admission_page_present": admission.page_present,
+            }
         elif args.command == "lint-fixture":
             payload = {"out": str(export_lint_fixture(components, args.out))}
         else:

@@ -78,7 +78,7 @@ class Publisher:
         finally:
             control_plane.release_lock(lease)
 
-    def resolve_control_plane(self) -> dict[str, str]:
+    def resolve_control_plane(self, require_admission: bool = False) -> dict[str, str]:
         tokens: dict[str, str] = {}
         for title in TREE_ORDER:
             token = self._existing_root_token(title)
@@ -91,15 +91,20 @@ class Publisher:
             ("99_系统控制台", (
                 "AI_KB_INDEX_V1",
                 "AI_KB_LOCK_V1",
+                "AI_KB_SOURCE_ADMISSION_V1",
             )),
         ):
             for child in children:
                 token = self._existing_token(tokens[parent_key], child)
                 if token is None:
+                    if child == "AI_KB_SOURCE_ADMISSION_V1" and not require_admission:
+                        continue
                     raise NeedsReview(f"missing system page: {child}")
                 tokens[child] = token
         tokens["index"] = tokens["AI_KB_INDEX_V1"]
         tokens["lock"] = tokens["AI_KB_LOCK_V1"]
+        if "AI_KB_SOURCE_ADMISSION_V1" in tokens:
+            tokens["admission"] = tokens["AI_KB_SOURCE_ADMISSION_V1"]
         tokens["content"] = tokens["01_知识内容"]
         return tokens
 

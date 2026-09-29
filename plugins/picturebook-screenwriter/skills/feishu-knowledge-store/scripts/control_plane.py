@@ -47,8 +47,8 @@ class ControlPlane:
 
         self.ttl = timedelta(minutes=lock_ttl_minutes)
 
-    def read_index(self) -> dict[str, IndexEntry]:
-        _revision, content = self._fetch(self.control_tokens["index"])
+    def read_index_with_revision(self) -> tuple[int, dict[str, IndexEntry]]:
+        revision, content = self._fetch(self.control_tokens["index"])
         payload = _parse_control(content, "# AI_KB_INDEX_V1")
         if set(payload) != {"schema_version", "entries"} or payload.get("schema_version") != 1 or not isinstance(payload.get("entries"), list):
             raise ControlPlaneCorrupt("invalid index schema")
@@ -58,7 +58,10 @@ class ControlPlane:
             if entry.key in result:
                 raise ControlPlaneCorrupt("duplicate index key")
             result[entry.key] = entry
-        return result
+        return revision, result
+
+    def read_index(self) -> dict[str, IndexEntry]:
+        return self.read_index_with_revision()[1]
 
     def read_lock(self) -> tuple[int, dict[str, Any]]:
         return self._read_lock()

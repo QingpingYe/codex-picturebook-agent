@@ -86,12 +86,17 @@ lark-cli wiki +node-get --node-token <source_root_token> --as user --format json
 先由 `feishu-knowledge-store` 的只读 `source-baseline` 投影生成 `<run_id>/source_baseline.json`，再运行：
 
 ```bash
+python plugins/picturebook-screenwriter/skills/feishu-knowledge-store/scripts/store_cli.py \
+  source-baseline --config <config> --out <run_id>/source_baseline.json
+
 python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/check_delta.py \
   --nodes <run_id>/nodes_snapshot.json \
   --source-baseline <run_id>/source_baseline.json \
   --cache-dir <run_id>/cache \
   --out <run_id>/delta_plan.json
 ```
+
+`source-baseline` 是只读命令：它不取锁、不写远端；缺准入页时投影 `page_present: false` 和空排除，准入页存在但读不懂则硬失败。`--only` 命中排除闭包时 `check_delta` 以退出码 3 停止。
 
 没有远端 baseline 时按首次运行处理。每轮同时输出 `DELTA` 与 `NEW_SOURCES` 审计行；零新增固定输出 `NEW_SOURCES: 0`，降级路径也不得省略。
 

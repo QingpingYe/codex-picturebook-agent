@@ -53,6 +53,7 @@ Target Wiki roots support two modes. Use `target.root_mode: "space"` when the fo
 python .\skills\feishu-knowledge-store\scripts\lark_cli_bootstrap.py
 python .\skills\feishu-knowledge-store\scripts\store_cli.py config-status --workspace <workspace>
 python .\skills\knowledge-loader\scripts\authority_cli.py load --workspace <workspace> --project-id <project_id> --series-id <series_id> --page-types worldview,characters,content_spec
+python .\skills\feishu-knowledge-store\scripts\store_cli.py source-baseline --config <config> --out <run_dir>\source_baseline.json
 python .\skills\feishu-knowledge-store\scripts\store_cli.py prepare --config <config> --run-dir <run_dir>
 python .\skills\feishu-knowledge-store\scripts\store_cli.py publish --config <config> --run-dir <run_dir>
 python .\skills\feishu-knowledge-store\scripts\store_cli.py verify --config <config> --run-dir <run_dir>
