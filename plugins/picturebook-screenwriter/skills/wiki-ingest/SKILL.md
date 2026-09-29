@@ -121,7 +121,8 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/scan_external
 - 按 `series_id`、`project_id`、`page_type` 归属到一个逻辑键。
 - 在正文的重要事实旁写中文来源引用。
 - 在 `source_node_tokens` 中列出来源节点 token。
-- 在 `source_revision_parts` 中按相同顺序列出来源修订号，两个列表必须一一对应。
+- 在 `source_revision_parts` 中按相同顺序列出来源修订号，三个来源列表必须一一对应。
+- 在 `source_edit_time_parts` 中按相同顺序写出源节点的正整数毫秒 `edit_time_ms`。
 - 保留 `source_feishu_url` 和 `revision_id` 作为人读审计字段。
 - 保留 XLSX Preservation 标记和机器可读 YAML 块。
 
@@ -133,6 +134,12 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/scan_external
 
 ```bash
 python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/generate_entries.py \
+  --validate-only \
+  --nodes <run_id>/nodes_snapshot.json \
+  --staging-dir <run_id>/wiki_staging
+
+python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/generate_entries.py \
+  --nodes <run_id>/nodes_snapshot.json \
   --staging-dir <run_id>/wiki_staging
 ```
 
@@ -142,8 +149,9 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/generate_entr
 2. 页面类型合法。
 3. 来源节点 token 无重复、无空值。
 4. 来源修订列表长度一致且无空值。
-5. 台账机器数据块存在。
-6. 逻辑键全局唯一，显示标题重复本身不是错误。
+5. 来源编辑时间列表长度一致、为正整数毫秒，并与本轮节点快照一致。
+6. 台账机器数据块存在。
+7. 逻辑键全局唯一，显示标题重复本身不是错误。
 
 校验通过后，`wiki_staging/_manifest.json` 必须同时包含原有 `root/series` 层级结构和确定性的 `entries` 扁平列表。每条 `entries` 记录至少包含：
 
@@ -157,6 +165,10 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/generate_entr
   "source_revisions": {
     "node-a": "17",
     "node-b": "28"
+  },
+  "source_edit_times": {
+    "node-a": 1756572300000,
+    "node-b": 1756572300100
   }
 }
 ```
@@ -168,7 +180,7 @@ python plugins/picturebook-screenwriter/skills/wiki-ingest/scripts/generate_entr
 - 运行目录位置
 - 候选数量
 - 逻辑键清单
-- 每个候选的来源版本向量
+- 每个候选的来源版本与编辑时间向量
 - 外链扫描与降级摘要
 
 `prepare` 完成或用户明确不需要继续后，删除整个 `<run_id>` 目录。删除前报告将删除的根路径；不得删除任何通配路径或工作区其他目录。

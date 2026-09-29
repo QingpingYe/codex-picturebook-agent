@@ -196,13 +196,16 @@ source_node_tokens:
   - "node-token-a"
 source_revision_parts:
   - "42"
+source_edit_time_parts:
+  - 1756572300000
 ```
 
 规则：
 
-- `source_node_tokens` 与 `source_revision_parts` 长度和顺序一致。
+- `source_node_tokens`、`source_revision_parts` 与 `source_edit_time_parts` 长度和顺序一致。
 - token 不得重复、不得为空。
 - 修订号不得为空，不得使用 `N/A`。
+- 编辑时间必须是正整数毫秒时间戳，并与本轮 `nodes_snapshot.json` 的 `edit_time_ms` 一致。
 - 正文中的事实声明必须写中文来源引用。
 - 冲突内容写入 `corrections.md` 候选，不得自行裁决。
 

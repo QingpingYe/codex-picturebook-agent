@@ -21,10 +21,12 @@ source_node_tokens:                      # 必填：来源 Wiki 节点 token 列
   - "node-token-a"
 source_revision_parts:                   # 必填：与来源节点 token 一一对应的修订号
   - "42"
+source_edit_time_parts:                  # 必填：与来源节点 token 一一对应的编辑时间（毫秒）
+  - 1756572300000
 # 可选：source / source_web / web_digest / obsolete
 ```
 
-`source_node_tokens` 与 `source_revision_parts` 必须长度一致、顺序一致，且都不得为空。它们是同步阶段的来源版本向量；显示标题可以变化，但 `series_id/project_id/page_type` 构成的逻辑键保持稳定。
+`source_node_tokens`、`source_revision_parts` 与 `source_edit_time_parts` 必须长度一致、顺序一致，且都不得为空。`source_edit_time_parts` 的每一项必须是正整数毫秒时间戳。三者共同构成候选来源版本证据；显示标题可以变化，但 `series_id/project_id/page_type` 构成的逻辑键保持稳定。
 
 ## Manifest 契约
 
@@ -39,6 +41,9 @@ source_revision_parts:                   # 必填：与来源节点 token 一一
   "project_id": "小老鼠迈尔斯",
   "source_revisions": {
     "node-token-a": "42"
+  },
+  "source_edit_times": {
+    "node-token-a": 1756572300000
   }
 }
 ```

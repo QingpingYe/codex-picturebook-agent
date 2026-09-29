@@ -11,7 +11,8 @@ import generate_entries as ge  # noqa: E402
 
 
 def _file(d, rel, title="", page_type="", project="", revision="r1",
-          source_node_tokens=("node-a",), source_revision_parts=("17",)):
+          source_node_tokens=("node-a",), source_revision_parts=("17",),
+          source_edit_time_parts=(1756572300000,)):
     p = os.path.join(d, rel)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:
@@ -26,6 +27,9 @@ def _file(d, rel, title="", page_type="", project="", revision="r1",
         f.write("source_revision_parts:\n")
         for part in source_revision_parts:
             f.write(f'  - "{part}"\n')
+        f.write("source_edit_time_parts:\n")
+        for part in source_edit_time_parts:
+            f.write(f"  - {part}\n")
         f.write("---\n\n正文内容。\n")
     return p
 
@@ -82,7 +86,10 @@ class TestCrossFileDup(unittest.TestCase):
               project="common")
         _file(self.d, "common/b.md", "[common/creation-standards] 创作规范与标准",
               "creation-standards", project="common")
-        rc = ge.main(["--validate-only", "--staging-dir", self.d])
+        nodes = os.path.join(self.d, "nodes.json")
+        with open(nodes, "w", encoding="utf-8") as f:
+            f.write('{"nodes":{"node-a":{"edit_time_ms":1756572300000}}}')
+        rc = ge.main(["--validate-only", "--nodes", nodes, "--staging-dir", self.d])
         self.assertEqual(rc, 1)
 
     def test_missing_project_id_fails_during_validation(self):
@@ -122,7 +129,8 @@ class TestManifest(unittest.TestCase):
                           page_type="worldview",
                           project="小老鼠迈尔斯",
                           source_node_tokens=["node-a", "node-b"],
-                          source_revision_parts=["17", "28"])
+                          source_revision_parts=["17", "28"],
+                          source_edit_time_parts=[1756572300000, 1756572300100])
         manifest = ge.build_manifest(self.d, {candidate: []})
         entry = manifest["entries"][0]
         self.assertEqual(entry["key"], "海外绘本/小老鼠迈尔斯/worldview")
@@ -173,6 +181,93 @@ class TestSourceRevisionVector(unittest.TestCase):
                 "source_node_tokens": ["node-a"],
                 "source_revision_parts": [""],
             })
+
+
+class TestSourceEditTimeVector(unittest.TestCase):
+
+    def test_valid_edit_time_vector_pairs_tokens(self):
+        vector = ge.source_edit_time_vector({
+            "source_node_tokens": ["node-a", "node-b"],
+            "source_edit_time_parts": ["1756572300000", "1756572300100"],
+        })
+        self.assertEqual(vector, {
+            "node-a": 1756572300000,
+            "node-b": 1756572300100,
+        })
+
+    def test_edit_time_length_mismatch_fails(self):
+        with self.assertRaisesRegex(ValueError, "equal lengths"):
+            ge.source_edit_time_vector({
+                "source_node_tokens": ["node-a", "node-b"],
+                "source_edit_time_parts": ["1756572300000"],
+            })
+
+    def test_edit_time_must_be_positive_integer(self):
+        for value in ("0", "-1", "true", "not-a-number"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "positive integers"):
+                    ge.source_edit_time_vector({
+                        "source_node_tokens": ["node-a"],
+                        "source_edit_time_parts": [value],
+                    })
+
+
+class TestCandidateFreshness(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _snapshot(self, token="node-a", edit_time_ms=1756572300000):
+        return {"nodes": {token: {"edit_time_ms": edit_time_ms}}}
+
+    def test_validate_only_requires_nodes_argument(self):
+        _file(self.d, "worldview.md", "世界观", "worldview",
+              project="project-a")
+        rc = ge.main(["--validate-only", "--staging-dir", self.d])
+        self.assertEqual(rc, 2)
+
+    def test_validate_only_exit_2_when_nodes_unreadable(self):
+        _file(self.d, "worldview.md", "世界观", "worldview",
+              project="project-a")
+        rc = ge.main([
+            "--validate-only", "--staging-dir", self.d,
+            "--nodes", os.path.join(self.d, "missing.json"),
+        ])
+        self.assertEqual(rc, 2)
+
+    def test_candidate_time_mismatch_fails(self):
+        candidate = _file(self.d, "worldview.md", "世界观", "worldview",
+                          project="project-a",
+                          source_edit_time_parts=(1756572300001,))
+        issues = ge.validate_file(candidate, self._snapshot())
+        self.assertTrue(any(
+            level == "FAIL" and "source_edit_time" in reason
+            for level, reason in issues
+        ))
+
+    def test_missing_snapshot_time_warns(self):
+        candidate = _file(self.d, "worldview.md", "世界观", "worldview",
+                          project="project-a")
+        issues = ge.validate_file(candidate, {
+            "nodes": {"node-a": {"title": "世界观"}},
+        })
+        self.assertTrue(any(
+            level == "WARN" and "edit_time_ms" in reason
+            for level, reason in issues
+        ))
+
+    def test_manifest_entry_contains_source_edit_times(self):
+        candidate = _file(self.d, "worldview.md", "世界观", "worldview",
+                          project="project-a",
+                          source_node_tokens=("node-a",))
+        manifest = ge.build_manifest(self.d, {candidate: []})
+        entry = manifest["entries"][0]
+        self.assertEqual(entry["source_edit_times"],
+                         {"node-a": 1756572300000})
 
 
 if __name__ == "__main__":

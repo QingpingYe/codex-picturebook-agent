@@ -33,6 +33,7 @@ from shared_schema import (
     logical_key,
     normalize_project_id,
     normalize_series_id,
+    validate_edit_times,
 )
 
 # --- Config ---
@@ -43,7 +44,7 @@ CST = timezone(timedelta(hours=8))
 REQUIRED_FIELDS = [
     "title", "series_id", "page_type", "source_feishu_url",
     "revision_id", "extracted_at", "source_node_tokens",
-    "source_revision_parts",
+    "source_revision_parts", "source_edit_time_parts",
 ]
 
 VALID_PAGE_TYPES = [
@@ -68,6 +69,27 @@ def _string_list(value: object) -> list[str]:
     return [str(item) for item in value]
 
 
+def _int_list(value: object) -> list[object]:
+    if not isinstance(value, list):
+        return []
+    result: list[object] = []
+    for item in value:
+        if isinstance(item, str) and re.fullmatch(r"[0-9]+", item.strip()):
+            result.append(int(item.strip()))
+        else:
+            result.append(item)
+    return result
+
+
+def source_edit_time_vector(frontmatter: dict[str, object]) -> dict[str, int]:
+    """Pair source node tokens with positive millisecond edit times."""
+    tokens = _string_list(frontmatter.get("source_node_tokens"))
+    edit_times = frontmatter.get("source_edit_time_parts")
+    if not isinstance(edit_times, list):
+        raise ValueError("source_edit_time_parts must be a non-empty list")
+    return validate_edit_times(tokens, _int_list(edit_times))
+
+
 def source_revision_vector(frontmatter: dict[str, object]) -> dict[str, str]:
     """Pair source node tokens with their revisions and validate the pairing."""
     tokens = _string_list(frontmatter.get("source_node_tokens"))
@@ -85,6 +107,49 @@ def source_revision_vector(frontmatter: dict[str, object]) -> dict[str, str]:
         raise ValueError("source_revision_parts cannot contain blank values")
 
     return dict(zip(tokens, revisions))
+
+
+def validate_candidate_times(frontmatter, snapshot) -> list[tuple[str, str]]:
+    """Return FAIL/WARN issues comparing candidate times to the run snapshot."""
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("nodes"), dict):
+        return [("FAIL", "nodes snapshot malformed: nodes must be a dict")]
+    try:
+        edit_times = source_edit_time_vector(frontmatter)
+    except ValueError as exc:
+        return [("FAIL", f"Invalid source edit time vector: {exc}")]
+
+    issues: list[tuple[str, str]] = []
+    nodes = snapshot.get("nodes") or {}
+    for token, expected in edit_times.items():
+        node = nodes.get(token)
+        if not isinstance(node, dict):
+            issues.append((
+                "WARN",
+                f"source token '{token}' not found in nodes snapshot; "
+                "edit_time_ms cannot be verified",
+            ))
+            continue
+        actual = node.get("edit_time_ms")
+        if actual is None:
+            issues.append((
+                "WARN",
+                f"edit_time_ms missing for source token '{token}'; "
+                "candidate freshness cannot be verified",
+            ))
+            continue
+        if isinstance(actual, bool) or not isinstance(actual, int) or actual <= 0:
+            issues.append((
+                "WARN",
+                f"edit_time_ms invalid for source token '{token}'",
+            ))
+            continue
+        if actual != expected:
+            issues.append((
+                "FAIL",
+                f"source_edit_time mismatch for token '{token}': "
+                f"candidate={expected} snapshot={actual}",
+            ))
+    return issues
 
 
 def extract_frontmatter(content):
@@ -155,7 +220,7 @@ def parse_page_type(fm):
     return fm.get("page_type", "")
 
 
-def validate_file(filepath):
+def validate_file(filepath, snapshot=None):
     """Validate a single staging file. Returns list of (level, message) tuples."""
     issues = []
 
@@ -188,6 +253,14 @@ def validate_file(filepath):
         source_revision_vector(fm)
     except ValueError as exc:
         issues.append(("FAIL", f"Invalid source revision vector: {exc}"))
+
+    try:
+        source_edit_time_vector(fm)
+    except ValueError as exc:
+        issues.append(("FAIL", f"Invalid source edit time vector: {exc}"))
+
+    if snapshot is not None:
+        issues.extend(validate_candidate_times(fm, snapshot))
 
     if pt in PROJECT_TYPES or pt in DUAL_SCOPE_TYPES:
         pid = fm.get("project_id", "")
@@ -273,6 +346,7 @@ def build_manifest(staging_dir, file_issues):
                 fm, _ = extract_frontmatter(f.read())
             key = candidate_key(fm)
             source_revisions = source_revision_vector(fm)
+            source_edit_times = source_edit_time_vector(fm)
         except (OSError, KeyError, ValueError) as exc:
             issues.append(("FAIL", f"Cannot build manifest entry: {exc}"))
             continue
@@ -285,6 +359,7 @@ def build_manifest(staging_dir, file_issues):
             "path": rel_path,
             "key": key,
             "source_revisions": source_revisions,
+            "source_edit_times": source_edit_times,
             "page_type": page_name,
             "series_id": series_id,
             "project_id": project_id,
@@ -358,7 +433,27 @@ def main(argv=None):
                         help="Only validate, don't generate manifest")
     parser.add_argument("--staging-dir", default=STAGING_DIR,
                         help=f"Staging directory (default: {STAGING_DIR})")
+    parser.add_argument("--nodes", help="Nodes snapshot used to verify candidate edit times")
     args = parser.parse_args(argv)
+
+    if args.validate_only and not args.nodes:
+        print("ERROR: --nodes is required with --validate-only.")
+        return 2
+
+    snapshot = None
+    if args.nodes:
+        if not os.path.isfile(args.nodes):
+            print(f"ERROR: Nodes snapshot '{args.nodes}' not found.")
+            return 2
+        try:
+            with open(args.nodes, "r", encoding="utf-8") as f:
+                snapshot = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"ERROR: Cannot read nodes snapshot '{args.nodes}': {exc}")
+            return 2
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("nodes"), dict):
+            print("ERROR: nodes snapshot malformed: nodes must be a dict.")
+            return 2
 
     staging_dir = args.staging_dir
     if not os.path.isdir(staging_dir):
@@ -376,7 +471,7 @@ def main(argv=None):
 
     for fpath in files:
         rel_path = os.path.relpath(fpath, staging_dir)
-        issues = validate_file(fpath)
+        issues = validate_file(fpath, snapshot)
 
         file_issues[fpath] = issues
         fails = [i for i in issues if i[0] == "FAIL"]
