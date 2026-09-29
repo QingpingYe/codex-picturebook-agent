@@ -426,3 +426,14 @@
   `git add docs/superpowers/plans/2026-09-29-codex-kb-ai-source-state-and-admission.md`
 
   `git commit -m "test: verify source state and admission batch"`
+## Implementation Record
+
+- Status: second batch complete for offline implementation; remote read-only acceptance still pending.
+- Commits: `3defdf0`, `bf75779`, `cbd895f`, `8585f20`, plus the end-to-end test commit containing this record.
+- Verification: Feishu store 218 tests passed; wiki-ingest 92 tests passed; KB-AI ingest docs 13 tests passed.
+- Ruling: local cache/hash does not decide cross-run `unchanged`; the remote edit time plus applicable revision is the only skip evidence because the remote index has no content hash.
+- Ruling: local state/finalize retirement was completed with the remote-baseline classifier to avoid retaining a dead second path.
+- Verified admission schema: exact fields are `token`, `title`, `decision`, `decided_by`, `decided_at`, `reason`; duplicates are corrupt, `admit` has no admission effect, and `exclude` expands over descendants and containers.
+- `--only` hitting the excluded closure returns exit code 3; missing admission page projects an empty exclusion policy.
+- `source-baseline` uses only reads and writes the local projection atomically; the no-write scan found no update/create/lock calls.
+- No remote writes and no concurrency-gate change were performed.
