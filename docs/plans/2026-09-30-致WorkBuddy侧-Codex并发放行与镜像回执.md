@@ -13,7 +13,7 @@
 3. revision 冲突时重新读取当前页面和索引后判定，不沿用旧 revision 盲目重试。
 4. 读取 `AI_KB_SOURCE_ADMISSION_V1`：页缺失=空排除；页损坏=硬失败；未裁定默认纳入；仅 `exclude` 生效，并作用于自身、全部后代和后代容器。
 5. 来源增量只使用远端 `AI_KB_INDEX_V1.source_edit_times`；不得把跨轮本地 state/cache 当共享基线。
-6. 资源、评论、未知块、partial/warnings、回读不一致时必须停止并进入可重试的 `needs_review`。
+6. 资源、评论、未知块、页级 partial/warnings 或页级回读不一致时标记 `needs_review`；控制面索引写后回读不一致时停止本轮，不把控制面失败伪装成页级状态。
 
 ## 二、Codex 侧镜像范围
 

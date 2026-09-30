@@ -314,7 +314,8 @@ WorkBuddy 每次写入 AI 知识库必须按以下顺序执行：
 | 忽略纯排版标记后候选正文与当前页相同 | 保留当前目标页；可只刷新索引的观察 revision 与同集合来源时间，目标页零写入 |
 | 候选正文与当前页不同，页面可安全往返 | 按当前 revision 条件更新为候选正文；写后回读确认再更新索引 |
 | 页含资源、评论或未知块 | 不写入，标记 `needs_review` 并报告 |
-| 更新 partial、有 warnings、结果不完整或无法回读 | 不写入成功状态，标记 `needs_review` 并报告 |
+| 页级更新 partial、有 warnings、结果不完整或页面回读不一致 | 不写入成功状态，标记页面 `needs_review` 并报告 |
+| 控制面（索引/锁/导航/日志）写入后回读不一致 | `IndexOutcomeUnknown`/控制面损坏：停止本轮后续写入，不把控制面错误伪装成页级 `needs_review` |
 | 条件更新遇到 revision 竞态 | 重读最新目标页并重新判定，限次重试；耗尽则本轮失败并标记 `needs_review`，下一轮可自然重试 |
 
 约束：
@@ -390,8 +391,8 @@ docs +create --as user --parent-token {wiki_node_token} --title {title} --doc-fo
 - [ ] 首次发布页面的页尾 `last_ai_revision_id` 经修正闭环后等于最终写入的真实 revision，不得写 `0`。
 - [ ] 同步索引是唯一状态来源，且字段集合完全一致。
 - [ ] 成功写入同时更新页面元数据与索引状态。
-- [ ] 索引写入后回读比对，结果不一致时停止并进入 `needs_review`。
-- [ ] 比较候选与当前页正文时忽略纯排版标记；正文变化即发布，partial、warning、索引失败时设置 `needs_review` 并报告。
+- [ ] 页级回读不一致标记 `needs_review`；控制面索引写后回读不一致时停止本轮，不把控制面失败伪装成页级 `needs_review`。
+- [ ] 比较候选与当前页正文时忽略纯排版标记；正文变化即发布，页级 partial/warning 标记 `needs_review`，控制面回读失败停止本轮并报告。
 - [ ] 不读取、不追加、不创建 `AI_KB_CONFLICT_QUEUE_V1`；`needs_review` 只表示本轮未安全发布，下一轮可重试。
 - [ ] 读取并严格校验 `AI_KB_SOURCE_ADMISSION_V1`：页缺失为空排除，未裁定默认纳入，`exclude` 作用于自身和全部后代及容器。
 - [ ] 覆盖人工编辑过的页面时，报告列出 `overwritten_human_edits`。
