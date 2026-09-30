@@ -1,9 +1,11 @@
 import json
+import os
 import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from authority_cli import main
 from page_codec import render_remote_page
@@ -93,10 +95,12 @@ class AuthorityCliTests(unittest.TestCase):
             empty_workspace = Path(empty_root) / "workspace"
             empty_workspace.mkdir()
             stdout = StringIO()
-            exit_code = main([
-                "load", "--project-id", "p", "--series-id", "s",
-                "--page-types", "worldview", "--workspace", str(empty_workspace),
-            ], stdout=stdout, components_factory=lambda *args, **kwargs: None)
+            missing = empty_workspace / "missing.json"
+            with patch.dict(os.environ, {"PICTUREBOOK_KB_CONFIG": str(missing)}):
+                exit_code = main([
+                    "load", "--project-id", "p", "--series-id", "s",
+                    "--page-types", "worldview", "--workspace", str(empty_workspace),
+                ], stdout=stdout, components_factory=lambda *args, **kwargs: None)
             payload = json.loads(stdout.getvalue())
             self.assertEqual(exit_code, 1)
             self.assertEqual(payload["status"], "missing_config")
