@@ -43,14 +43,14 @@ class ResolverTests(unittest.TestCase):
         workspace = self.write(self.workspace / "feishu-knowledge-base.json")
         user = self.write(self.root / ".picturebook-screenwriter" / "feishu-knowledge-base.json")
         resolved = resolve_config_path(None, self.workspace, {}, home=self.root)
-        self.assertEqual(resolved.path, workspace)
+        self.assertEqual(resolved.path, workspace.resolve())
         self.assertEqual(resolved.origin, "workspace")
         self.assertNotIn(user, resolved.searched)
 
     def test_workspace_success_lists_only_checked_candidates(self):
         workspace = self.write(self.workspace / "feishu-knowledge-base.json")
         resolved = resolve_config_path(None, self.workspace, {}, home=self.root / "home")
-        self.assertEqual(resolved.searched, (workspace,))
+        self.assertEqual(resolved.searched, (workspace.resolve(),))
 
     def test_missing_direct_path_does_not_fall_back(self):
         self.write(self.workspace / "feishu-knowledge-base.json")
@@ -65,7 +65,8 @@ class ResolverTests(unittest.TestCase):
         user = self.root / "home" / ".picturebook-screenwriter" / "feishu-knowledge-base.json"
         with self.assertRaises(ConfigResolutionError) as caught:
             resolve_config_path(None, self.workspace, {}, home=self.root / "home")
-        self.assertIn(self.workspace / "feishu-knowledge-base.json", caught.exception.searched)
+        self.assertIn((self.workspace / "feishu-knowledge-base.json").resolve(),
+                      caught.exception.searched)
         self.assertIn(user, caught.exception.searched)
 
     def test_nearest_ancestor_config_wins(self):
@@ -73,7 +74,7 @@ class ResolverTests(unittest.TestCase):
         nested = self.root / "shared" / "project"
         nested.mkdir(parents=True)
         resolved = resolve_config_path(None, nested, {}, home=self.root / "home")
-        self.assertEqual(resolved.path, root_config)
+        self.assertEqual(resolved.path, root_config.resolve())
         self.assertEqual(resolved.origin, "ancestor")
 
     def test_nearest_ancestor_beats_higher_ancestor(self):
@@ -84,7 +85,7 @@ class ResolverTests(unittest.TestCase):
         resolved = resolve_config_path(
             None, shared / "project", {}, home=self.root / "home",
         )
-        self.assertEqual(resolved.path, shared_config)
+        self.assertEqual(resolved.path, shared_config.resolve())
 
     def test_deeper_child_config_is_not_discovered(self):
         nested = self.workspace / "project"

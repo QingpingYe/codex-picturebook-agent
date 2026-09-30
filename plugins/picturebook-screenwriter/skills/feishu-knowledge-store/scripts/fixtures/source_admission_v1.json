@@ -2,7 +2,7 @@
   "schema_version": 1,
   "entries": [
     {
-      "token": "tok-admit",
+      "token": "REPLACE_WITH_SOURCE_TOKEN_ADMIT",
       "title": "普通源",
       "decision": "admit",
       "decided_by": "user",
@@ -10,7 +10,7 @@
       "reason": "保留默认纳入记录"
     },
     {
-      "token": "container-excluded",
+      "token": "REPLACE_WITH_SOURCE_TOKEN_EXCLUDED",
       "title": "排除容器",
       "decision": "exclude",
       "decided_by": "user",

@@ -18,6 +18,7 @@ class CiWorkflowTests(unittest.TestCase):
             'python-version: "3.12"',
             "actions/setup-node@v4",
             'node-version: "22"',
+            "PYTHONIOENCODING: utf-8",
             "python scripts/run_plugin_tests.py",
         ):
             with self.subTest(value=value):
