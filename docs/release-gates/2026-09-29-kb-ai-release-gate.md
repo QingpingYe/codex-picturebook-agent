@@ -1,6 +1,6 @@
 # KB-AI 发布门
 
-> 状态：技术门通过；执行门暂缓，真实 publish 与跨侧并发仍待 explicit user authorization。
+> 状态：一次真实 canary publish 已完成；跨侧并发仍禁止，等待独立授权。
 
 ## 离线条件
 
@@ -16,9 +16,9 @@
 
 ## 发布条件
 
-- [ ] explicit user authorization 已记录到本文件。
-- [ ] publish run owner、预期 revision、停止条件和回滚/修复路径已记录。
-- [ ] 只有全部条件满足，才允许解除跨侧并发禁令。
+- [x] explicit user authorization 已记录到本文件：授权一次真实 publish。
+- [x] publish run owner、预期 revision、停止条件和回滚/修复路径已记录。
+- [ ] 解除跨侧并发禁令需要独立的 explicit concurrency authorization。
 
 ## 离线与远端证据
 
@@ -37,3 +37,16 @@
 - 原因：用户授权的是远端只读验收；读取授权不能推导写入或并发授权。
 - publish run owner、目标 revision 和回滚路径：N/A，因本轮没有发布动作。
 - 后续若获明确发布授权，需先重新读取 index/lock/admission revision，再按当前 revision 执行。
+
+## 2026-09-30 真实 Publish 记录
+
+- 授权范围：一次真实 publish。
+- run owner：Codex 当前会话。
+- canary key：`海外绘本/小老鼠迈尔斯/worldview`。
+- 发布前：index revision 24；lock revision 89 空闲；页面 revision 8。
+- 发布结果：candidates=1，preserved=1，published=0，failed=0，retried=0。
+- action=`preserve`，reason=`content unchanged`，页面 revision 保持 8。
+- index_committed=true，overwritten_human_edits=[]。
+- 发布后：lock revision 93 且空闲；index revision 26。
+- 停止条件：revision 冲突超过重试、页面出现资源/评论/未知块、写后回读不一致、索引回读不一致。
+- 回滚/修复路径：若页面被意外覆盖，使用写后回读 revision 作为身份基线，停止并发并按 retained report 逐页修复；本轮未发生页面覆盖。

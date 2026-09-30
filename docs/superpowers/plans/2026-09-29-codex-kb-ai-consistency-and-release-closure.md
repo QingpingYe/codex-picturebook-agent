@@ -276,7 +276,7 @@
 
 ## Implementation Record
 
-- Status: Tasks 1-4 offline complete; Tasks 5-6 are pending explicit remote-read and publish authorization.
+- Status: Tasks 1-5 complete; one authorized real preserve publish completed. Task 6 remains open only for explicit concurrency authorization.
 - Offline evidence: Feishu store 218, wiki-ingest 92, knowledge-loader 38, KB-AI contract/docs 25, plugin suite 188 (1 skipped).
 - `source_baseline.py` static scan confirms no remote write or lock call.
 - Release gate and read-only acceptance templates were committed; no remote request, token collection, publish, or concurrency release was performed.
