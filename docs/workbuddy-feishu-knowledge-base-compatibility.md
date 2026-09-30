@@ -1,6 +1,6 @@
 # WorkBuddy 飞书知识库兼容协议
 
-**协议版本：** 1.4.0（2026-09-29 变更：KB-AI 页面内容以同步方候选正文为准，比较时忽略纯排版标记；退役人工优先三方合并、冲突队列读写与 `queued` 报告口径；Codex 已接入远端 `source_edit_times` 来源基线和 `AI_KB_SOURCE_ADMISSION_V1` 子树排除。远端只读验收与跨侧版本确认仍待完成）
+**协议版本：** 1.4.0（2026-09-30 双方确认。变更包括：KB-AI 页面内容以同步方候选正文为准，比较时忽略纯排版标记；退役人工优先三方合并、冲突队列读写与 `queued` 报告口径；接入远端 `source_edit_times` 来源基线和 `AI_KB_SOURCE_ADMISSION_V1` 子树排除；删除语义为不自动退役，revision 推进量实测自适应，控制面/页级回读失败分层处理）
 **适用对象：** WorkBuddy 专家团及后续所有直接读写「绘本创作知识库（AI）」的自动化系统  
 **兼容基准：** `picturebook-screenwriter` 插件的 `wiki-ingest`、`feishu-knowledge-store`、`knowledge-loader` 实现  
 **生效原则：** 本文档描述的是远端契约。任何实现只要遵守这些格式、状态和并发规则，就可以与 Codex 插件互通；具体使用 lark-cli 还是其他 Feishu API 客户端不是兼容性的必要条件。
@@ -403,15 +403,15 @@ docs +create --as user --parent-token {wiki_node_token} --title {title} --doc-fo
 
 | 契约点 | Codex 当前行为 | 证据 | 状态 |
 | --- | --- | --- | --- |
-| 控制页集合 | `index`、`lock`；`admission` 可选 | `source_admission.py`、`source_baseline.py` | Codex 已实现，待跨侧确认 |
-| 来源版本 | `source_edit_times` + 适用 revision 判定来源是否变化 | `check_delta.py`、来源状态测试 | Codex 已实现，待只读验收 |
+| 控制页集合 | `index`、`lock`；`admission` 可选 | `source_admission.py`、`source_baseline.py` | 双方确认 |
+| 来源版本 | `source_edit_times` + 适用 revision 判定来源是否变化 | `check_delta.py`、来源状态测试 | 双方确认 |
 | 候选时间 | `source_edit_time_parts` 与 token/revision 顺序一致 | `generate_entries.py`、模板契约测试 | Codex 已实现 |
-| 准入语义 | 未裁定默认纳入；`exclude` 展开自身、后代和容器；重复 token/坏 schema 硬失败 | `source_admission.py`、准入测试 | Codex 已实现，待只读验收 |
-| 正文权威 | 只比较正文内容，纯排版差异保留 | `sync_runner.py`、第一批测试 | Codex 已实现 |
-| 失败状态 | `needs_review` 可重试，不读取冲突队列 | `SyncRunner`、报告测试 | Codex 已实现 |
-| 删除语义 | 远端索引有来源、当前快照无来源时报告 `deleted`，不自动归档 | `check_delta.py` | Codex 已实现 |
+| 准入语义 | 未裁定默认纳入；`exclude` 展开自身、后代和容器；重复 token/坏 schema 硬失败 | `source_admission.py`、准入测试 | 双方确认 |
+| 正文权威 | 只比较正文内容，纯排版差异保留 | `sync_runner.py`、第一批测试 | 双方确认 |
+| 失败状态 | `needs_review` 可重试，不读取冲突队列；控制面回读失败停止本轮，页级回读失败进入 `needs_review` | `SyncRunner`、报告测试 | 双方确认 |
+| 删除语义 | 远端索引有来源、当前快照无来源时报告 `deleted`，不自动删除、不自动归档，墓碑/移除待独立治理 | `check_delta.py` | 双方确认，自动退役无动作 |
 
-本矩阵只记录当前实现与证据；远端只读验收完成前，不把任何跨侧行为标记为最终兼容。
+本矩阵的跨侧只读契约已于 2026-09-30 由双方确认；后续新增协议层时再议版本号。
 
 ## 14. 实现依据
 

@@ -51,6 +51,13 @@
 - 停止条件：revision 冲突超过重试、页面出现资源/评论/未知块、写后回读不一致、索引回读不一致。
 - 回滚/修复路径：若页面被意外覆盖，使用写后回读 revision 作为身份基线，停止并发并按 retained report 逐页修复；本轮未发生页面覆盖。
 
+## 2026-09-30 跨侧确认回执
+
+- WorkBuddy 已接受四项答复，无异议。
+- WorkBuddy 已将 `SYSTEM.md`、`feishu-knowledge-store/SKILL.md`、`wiki-lint/SKILL.md` 更新到 1.4.0。
+- 双方确认删除语义为“不自动退役”，revision 推进量实测自适应，控制面/页级回读失败分层处理。
+- 共享协议版本确认：1.4.0。
+
 ## 2026-09-30 并发放行记录
 
 - 授权范围：Codex 与 WorkBuddy 可并发操作同一 KB-AI。

@@ -14,7 +14,7 @@
 
 ### Changed
 
-- KB-AI 同步改为内容权威：候选正文与当前页正文比较时只忽略纯排版标记，正文变化即条件覆盖目标页；成功覆盖人工编辑时在报告 `overwritten_human_edits` 中披露逻辑键。退役人工优先三方合并、冲突队列读写与 `queued`/`third_party_edits` 报告字段；`source_edit_times` 作为可选兼容字段接入索引与页尾；`needs_review` 改为可重试的安全状态。
+- KB-AI 同步改为内容权威：候选正文与当前页正文比较时只忽略纯排版标记，正文变化即条件覆盖目标页；成功覆盖人工编辑时在报告 `overwritten_human_edits` 中披露逻辑键。退役人工优先三方合并、冲突队列读写与 `queued`/`third_party_edits` 报告字段；`source_edit_times` 作为可选兼容字段接入索引与页尾；`needs_review` 改为可重试的安全状态。共享兼容协议 1.4.0 已于 2026-09-30 由 Codex/WorkBuddy 双方确认。
 - Split WorkBuddy reference material out of the Codex plugin runtime.
 - Stage workflows now represent approval and revision as exclusive outcomes.
 - Revision rounds create new runs and rerun preflight, collision, and QA checks.
