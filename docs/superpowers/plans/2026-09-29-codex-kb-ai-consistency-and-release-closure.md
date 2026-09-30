@@ -260,7 +260,7 @@
 
   Verify the all-Batches-complete item, offline tests, static scans, read-only acceptance, WorkBuddy agreement and explicit user authorization in the release gate. Any missing item means no release decision.
 
-- [ ] **Step 2: Request explicit publish/concurrency authorization**
+- [x] **Step 2: Request explicit publish/concurrency authorization**
 
   Ask the user to authorize one of: no write, a specific real publish run, or cross-side concurrent operation. Do not infer authorization from the plan or from read-only approval.
 
@@ -276,7 +276,7 @@
 
 ## Implementation Record
 
-- Status: Tasks 1-5 complete; one authorized real preserve publish completed. Task 6 remains open only for explicit concurrency authorization.
+- Status: Tasks 1-6 complete. One authorized real preserve publish completed; user explicitly authorized Codex/WorkBuddy concurrent operation on 2026-09-30.
 - Offline evidence: Feishu store 218, wiki-ingest 92, knowledge-loader 38, KB-AI contract/docs 25, plugin suite 188 (1 skipped).
 - `source_baseline.py` static scan confirms no remote write or lock call.
 - Release gate and read-only acceptance templates were committed; no remote request, token collection, publish, or concurrency release was performed.
